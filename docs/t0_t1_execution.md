@@ -57,9 +57,13 @@ Repo created and bootstrap pushed.
 
 ### PAUSE B (upcoming)
 
-After T2 stabilization, user action required:
+After T2/T3 MVP stabilization, user action required:
 
 1. Create Render web service for `backend/`
 2. Attach persistent disk at `/var/data`
 3. Set required backend env vars
 4. Keep replica count = 1
+
+Reference files prepared:
+- `render.yaml`
+- `docs/deploy-checklist.md`

@@ -55,10 +55,15 @@ cp .env.example .env
   - `CORE_MEMORY_DEMO_BENCHMARK_ROOT=/var/data/core-memory-bench`
   - `CORE_MEMORY_DEMO_ARTIFACTS_ROOT=/var/data/core-memory-artifacts`
 
+## Deployment artifacts
+
+- `render.yaml` included for backend service bootstrap
+- `docs/deploy-checklist.md` contains step-by-step Render/Vercel rollout checks
+
 ## Next pause point
 
 ### PAUSE B (you)
-When I confirm T2 code stabilization, you'll need to:
+When I call T2/T3 MVP stable, you'll need to:
 1. Create Render web service for `backend/`
 2. Attach persistent disk mounted at `/var/data`
 3. Set env vars (roots, model key, allowed origin)
