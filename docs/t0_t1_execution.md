@@ -46,8 +46,8 @@ Remaining for T2 closeout:
 
 - T2.3: Endpoint smoke tests + volume-path failure tests
 - T2.4: Benchmark/live-root contamination guard tests
-- T3.1: Port current tab UI behavior from monolith HTML into React components
-- T3.2: Wire chat + inspect + benchmark HTTP data flows in React
+- T3.1: Port current tab UI behavior from monolith HTML into React components (starter shell now active)
+- T3.2: Wire chat + inspect + benchmark HTTP data flows in React (starter wiring landed; parity polish pending)
 
 ## Pause needed from user
 

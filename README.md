@@ -8,7 +8,7 @@ Standalone deployable demo surface for Core Memory.
 - 🚧 T2 backend contract + volume hardening in progress
 
 Current structure:
-- `frontend/` → Vite + React + TypeScript shell
+- `frontend/` → Vite + React + TypeScript app with tabbed demo shell and HTTP wiring
 - `backend/` → FastAPI service with inspect/chat/flush/seed/benchmark/entity routes
 - `shared/` → shared contract placeholders
 - `docs/` → execution notes and ticket plan
