@@ -1,0 +1,18 @@
+# frontend
+frontend/node_modules/
+frontend/dist/
+
+# backend
+backend/.venv/
+backend/.pytest_cache/
+**/__pycache__/
+*.pyc
+
+# env
+.env
+frontend/.env
+backend/.env
+
+# runtime data
+var/
+*.log

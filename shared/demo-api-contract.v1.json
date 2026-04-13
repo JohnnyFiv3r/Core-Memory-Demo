@@ -1,0 +1,15 @@
+{
+  "version": "0.1.0",
+  "status": "t1-scaffold",
+  "notes": [
+    "Endpoint contract will be frozen in T2 before full frontend wiring"
+  ],
+  "endpoints": [
+    "/api/meta",
+    "/api/demo/state",
+    "/api/chat",
+    "/api/flush",
+    "/api/seed",
+    "/api/benchmark-run"
+  ]
+}
