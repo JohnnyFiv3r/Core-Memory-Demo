@@ -2,3 +2,6 @@ fastapi==0.135.3
 uvicorn==0.44.0
 pydantic-settings==2.13.1
 python-dotenv==1.2.2
+pydantic-ai==1.80.0
+# Pin to a released tag/commit before production rollout.
+core-memory @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@master

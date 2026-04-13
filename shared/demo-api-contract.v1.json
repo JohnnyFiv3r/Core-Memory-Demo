@@ -1,15 +1,36 @@
 {
-  "version": "0.1.0",
-  "status": "t1-scaffold",
+  "version": "0.2.0",
+  "status": "t2-mvp",
   "notes": [
-    "Endpoint contract will be frozen in T2 before full frontend wiring"
+    "Contract includes compatibility demo routes plus canonical inspect routes"
   ],
-  "endpoints": [
-    "/api/meta",
-    "/api/demo/state",
-    "/api/chat",
-    "/api/flush",
-    "/api/seed",
-    "/api/benchmark-run"
-  ]
+  "endpoints": {
+    "demo": [
+      "/api/meta",
+      "/api/demo/state",
+      "/api/demo/claims",
+      "/api/demo/entities",
+      "/api/demo/runtime",
+      "/api/demo/bead/{bead_id}",
+      "/api/demo/bead/{bead_id}/hydrate",
+      "/api/demo/claim-slot/{subject}/{slot}",
+      "/api/demo/turns",
+      "/api/chat",
+      "/api/flush",
+      "/api/seed",
+      "/api/benchmark-run",
+      "/api/demo/benchmark/last",
+      "/api/demo/benchmark/history",
+      "/api/demo/benchmark/compare/{left_run_id}/{right_run_id}",
+      "/api/demo/entities/merge/suggest",
+      "/api/demo/entities/merge/decide"
+    ],
+    "inspect": [
+      "/v1/memory/inspect/state",
+      "/v1/memory/inspect/beads/{bead_id}",
+      "/v1/memory/inspect/beads/{bead_id}/hydrate",
+      "/v1/memory/inspect/claim-slots/{subject}/{slot}",
+      "/v1/memory/inspect/turns"
+    ]
+  }
 }

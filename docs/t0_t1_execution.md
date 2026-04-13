@@ -25,24 +25,41 @@ core-memory-demo/
 - Backend scaffolded with FastAPI, CORS, health endpoint, runtime root checks.
 - Demo API endpoints are stubbed for next-ticket implementation.
 
+## T2 — Current progress (in branch)
+
+Implemented in-progress MVP backend contract:
+
+- inspect routes (`/v1/memory/inspect/*`)
+- demo compatibility routes (`/api/demo/*`)
+- chat/flush/seed routes
+- benchmark run/history/compare routes
+- entity merge suggest/decide routes
+- startup writable-root enforcement with separated roots
+
+Remaining for T2 closeout:
+
+- tighten benchmark report schema parity with prior monolith
+- add backend tests for endpoint smoke + root isolation assertions
+- pin Core-Memory dependency to commit SHA (currently `master`)
+
 ## Immediate next tickets (minimum viable)
 
-- T2.1: Implement backend endpoint contract using Core-Memory dependency.
-- T2.2: Add startup writable-volume enforcement and explicit root creation.
-- T3.1: Port current tab UI behavior from monolith HTML into React components.
-- T3.2: Wire chat + inspect + benchmark HTTP data flows.
+- T2.3: Endpoint smoke tests + volume-path failure tests
+- T2.4: Benchmark/live-root contamination guard tests
+- T3.1: Port current tab UI behavior from monolith HTML into React components
+- T3.2: Wire chat + inspect + benchmark HTTP data flows in React
 
 ## Pause needed from user
 
-### PAUSE A (required)
+### PAUSE A (done)
 
-Please provide:
+Repo created and bootstrap pushed.
 
-1. New GitHub repo URL for `core-memory-demo`
-2. Default branch (`main` expected)
-3. Whether repo should be public or private
+### PAUSE B (upcoming)
 
-Once provided, I will:
-- initialize git in this folder
-- commit T0/T1 bootstrap
-- push initial branch
+After T2 stabilization, user action required:
+
+1. Create Render web service for `backend/`
+2. Attach persistent disk at `/var/data`
+3. Set required backend env vars
+4. Keep replica count = 1

@@ -14,6 +14,9 @@ class Settings(BaseSettings):
     core_memory_demo_benchmark_root: str = './var/core-memory-bench'
     core_memory_demo_artifacts_root: str = './var/core-memory-artifacts'
 
+    demo_model_id: str = ''
+    demo_context_budget: int = 10000
+
     @property
     def roots(self) -> list[Path]:
         return [

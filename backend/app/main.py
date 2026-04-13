@@ -5,6 +5,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.core.config import settings
 from app.routes.health import router as health_router
 from app.routes.demo import router as demo_router
+from app.routes.inspect import router as inspect_router
 
 
 def ensure_roots_writable() -> None:
@@ -30,6 +31,7 @@ app.add_middleware(
 
 app.include_router(health_router)
 app.include_router(demo_router)
+app.include_router(inspect_router)
 
 
 @app.on_event('startup')

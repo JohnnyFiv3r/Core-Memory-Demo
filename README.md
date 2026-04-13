@@ -2,10 +2,14 @@
 
 Standalone deployable demo surface for Core Memory.
 
-## Scope (T0/T1 bootstrap)
+## Scope status
 
+- ✅ T0/T1 bootstrap complete
+- 🚧 T2 backend contract + volume hardening in progress
+
+Current structure:
 - `frontend/` → Vite + React + TypeScript shell
-- `backend/` → FastAPI service shell
+- `backend/` → FastAPI service with inspect/chat/flush/seed/benchmark/entity routes
 - `shared/` → shared contract placeholders
 - `docs/` → execution notes and ticket plan
 
@@ -20,8 +24,12 @@ cd backend
 python3 -m venv .venv
 . .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
+
+Note: requirements currently pin `core-memory` directly from GitHub `master` for MVP speed.
+Before production cut, pin to a tag/commit SHA.
 
 ### Frontend
 
@@ -46,3 +54,12 @@ cp .env.example .env
   - `CORE_MEMORY_ROOT=/var/data/core-memory`
   - `CORE_MEMORY_DEMO_BENCHMARK_ROOT=/var/data/core-memory-bench`
   - `CORE_MEMORY_DEMO_ARTIFACTS_ROOT=/var/data/core-memory-artifacts`
+
+## Next pause point
+
+### PAUSE B (you)
+When I confirm T2 code stabilization, you'll need to:
+1. Create Render web service for `backend/`
+2. Attach persistent disk mounted at `/var/data`
+3. Set env vars (roots, model key, allowed origin)
+4. Keep replicas at exactly 1
