@@ -165,16 +165,33 @@
   }
 
   .inspector-tabs {
-    display: flex; border-bottom: 1px solid var(--border); background: var(--surface2);
+    display: flex; align-items: center; gap: 8px;
+    border-bottom: 1px solid var(--border); background: var(--surface2);
+    padding: 8px 10px;
   }
 
-  .tab {
-    flex: 1; padding: 10px 0; font-size: 12px; font-weight: 500;
-    text-align: center; cursor: pointer; color: var(--text-dim);
-    border-bottom: 2px solid transparent; transition: all 0.15s;
+  .tab-selector {
+    flex: 1;
+    background: var(--bg);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 8px;
+    font-size: 12px;
+    min-height: 30px;
   }
-  .tab:hover { color: var(--text); }
-  .tab.active { color: var(--accent); border-bottom-color: var(--accent); }
+
+  .panel-controls {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 8px;
+    margin-bottom: 10px;
+    padding: 8px;
+    border: 1px solid var(--border);
+    border-radius: 8px;
+    background: var(--surface2);
+  }
 
   .inspector-body { flex: 1; overflow-y: auto; padding: 12px; }
   .tab-content { display: none; }
@@ -444,41 +461,12 @@
   <h1><span>Core Memory</span> Live Demo</h1>
   <div class="header-controls">
     <span class="session-badge" id="session-badge">session: ---</span>
-    <span class="control-label">subset</span>
-    <select id="bench-subset" class="control-select" title="Benchmark subset">
-      <option value="local" selected>local</option>
-      <option value="full">full</option>
-    </select>
-    <span class="control-label">semantic</span>
-    <select id="bench-semantic" class="control-select" title="Semantic mode">
-      <option value="required" selected>required</option>
-      <option value="degraded_allowed">degraded_allowed</option>
-    </select>
-    <span class="control-label">myelination</span>
-    <select id="bench-myelination" class="control-select" title="Myelination mode">
-      <option value="off" selected>off</option>
-      <option value="on">on</option>
-      <option value="compare">compare</option>
-    </select>
-    <span class="control-label">root</span>
-    <select id="bench-root-mode" class="control-select" title="Benchmark isolation mode">
-      <option value="snapshot" selected>snapshot</option>
-      <option value="clean">clean</option>
-    </select>
-    <span class="control-label">preload</span>
-    <input id="bench-preload-max" class="control-input" type="number" min="0" step="50" value="200" style="width:74px" title="Max demo turns to preload">
-    <label class="control-inline" title="Preload turns from demo session">
-      <input id="bench-preload-enabled" type="checkbox">
-      <span class="control-label" style="margin-right:0">from demo</span>
-    </label>
-    <button class="btn" onclick="seedMemory()">Seed</button>
-    <button class="btn" id="btn-benchmark" onclick="runBenchmark()">Run LOCOMO Test</button>
     <button class="btn btn-warn" onclick="flushSession()">Flush Session</button>
   </div>
 </header>
 
 <div class="budget-bar">
-  <div class="budget-label">Context Budget</div>
+  <div class="budget-label">Context Window</div>
   <div class="budget-track">
     <div class="budget-fill" id="budget-fill"></div>
   </div>
@@ -497,14 +485,17 @@
 
   <div class="inspector">
     <div class="inspector-tabs">
-      <div class="tab active" data-tab="beads" onclick="switchTab('beads')">Beads</div>
-      <div class="tab" data-tab="associations" onclick="switchTab('associations')">Associations</div>
-      <div class="tab" data-tab="graph" onclick="switchTab('graph')">Graph</div>
-      <div class="tab" data-tab="claims" onclick="switchTab('claims')">Claims</div>
-      <div class="tab" data-tab="entities" onclick="switchTab('entities')">Entities</div>
-      <div class="tab" data-tab="runtime" onclick="switchTab('runtime')">Runtime</div>
-      <div class="tab" data-tab="benchmark" onclick="switchTab('benchmark')">Benchmark</div>
-      <div class="tab" data-tab="rolling" onclick="switchTab('rolling')">Rolling Window</div>
+      <span class="control-label" style="margin-right:0">panel</span>
+      <select id="tab-selector" class="tab-selector" onchange="switchTab(this.value)">
+        <option value="beads" selected>Beads</option>
+        <option value="associations">Associations</option>
+        <option value="graph">Graph</option>
+        <option value="claims">Claims</option>
+        <option value="entities">Entities</option>
+        <option value="runtime">Runtime</option>
+        <option value="benchmark">Benchmark</option>
+        <option value="rolling">Rolling Window</option>
+      </select>
     </div>
     <div class="inspector-body">
       <div class="tab-content active" id="tab-beads"></div>
@@ -512,8 +503,45 @@
       <div class="tab-content" id="tab-graph"></div>
       <div class="tab-content" id="tab-claims"></div>
       <div class="tab-content" id="tab-entities"></div>
-      <div class="tab-content" id="tab-runtime"></div>
-      <div class="tab-content" id="tab-benchmark"></div>
+      <div class="tab-content" id="tab-runtime">
+        <div class="panel-controls" id="runtime-controls">
+          <span class="control-label">subset</span>
+          <select id="bench-subset" class="control-select" title="Benchmark subset">
+            <option value="local" selected>local</option>
+            <option value="full">full</option>
+          </select>
+          <span class="control-label">semantic</span>
+          <select id="bench-semantic" class="control-select" title="Semantic mode">
+            <option value="required" selected>required</option>
+            <option value="degraded_allowed">degraded_allowed</option>
+          </select>
+          <span class="control-label">myelination</span>
+          <select id="bench-myelination" class="control-select" title="Myelination mode">
+            <option value="off" selected>off</option>
+            <option value="on">on</option>
+            <option value="compare">compare</option>
+          </select>
+        </div>
+        <div id="tab-runtime-content"></div>
+      </div>
+      <div class="tab-content" id="tab-benchmark">
+        <div class="panel-controls" id="benchmark-controls">
+          <span class="control-label">root</span>
+          <select id="bench-root-mode" class="control-select" title="Benchmark isolation mode">
+            <option value="snapshot" selected>snapshot</option>
+            <option value="clean">clean</option>
+          </select>
+          <span class="control-label">preload</span>
+          <input id="bench-preload-max" class="control-input" type="number" min="0" step="50" value="200" style="width:74px" title="Max demo turns to preload">
+          <label class="control-inline" title="Preload turns from demo session">
+            <input id="bench-preload-enabled" type="checkbox" checked>
+            <span class="control-label" style="margin-right:0">from demo</span>
+          </label>
+          <button class="btn" onclick="seedMemory()">Seed</button>
+          <button class="btn" id="btn-benchmark" onclick="runBenchmark()">Run LOCOMO Test</button>
+        </div>
+        <div id="tab-benchmark-content"></div>
+      </div>
       <div class="tab-content" id="tab-rolling"></div>
     </div>
     <div class="stats-bar">
@@ -522,7 +550,7 @@
       <span>Claims: <span class="stat-val" id="stat-claims">0</span></span>
       <span>Entities: <span class="stat-val" id="stat-entities">0</span></span>
       <span>Window: <span class="stat-val" id="stat-rolling">0</span></span>
-      <span style="margin-left:auto">Ctx: <span class="stat-val" id="stat-tokens">0</span>/<span id="stat-budget">10000</span></span>
+      <span style="margin-left:auto">Window: <span class="stat-val" id="stat-tokens">0</span>/<span id="stat-budget">10000</span></span>
     </div>
   </div>
 </div>
@@ -565,6 +593,8 @@ let lastBenchmarkSummary = null;
 let lastBenchmarkHistory = [];
 let selectedClaimSlot = null;
 let claimsAsOf = '';
+const AUTO_FLUSH_THRESHOLD_PCT = 85;
+const ROLLING_INJECTION_PCT = 5;
 
 function loadClaimsStateFromUrl() {
   try {
@@ -636,7 +666,7 @@ async function sendMessage() {
     });
     const data = await res.json();
     typing.remove();
-    addMsg('assistant', data.response, data.turn_id);
+    addMsg('assistant', (data.assistant || data.response || ''), data.turn_id);
     if (data.last_answer) {
       const d = data.last_answer;
       addMsg(
@@ -648,7 +678,7 @@ async function sendMessage() {
       );
     }
     if (data.auto_flushed) {
-      addMsg('system', 'Auto-flush triggered: context budget reached 80%. Session reset, rolling window rebuilt.');
+      addMsg('system', 'Auto-flush triggered. Session reset, rolling window rebuilt.');
     }
   } catch (err) {
     typing.remove();
@@ -1241,7 +1271,7 @@ function escapeHtml(s) {
 }
 
 function renderRuntime(runtime, lastTurn) {
-  const el = document.getElementById('tab-runtime');
+  const el = document.getElementById('tab-runtime-content');
   el.textContent = '';
   const q = runtime?.queue || {};
   const qRows = Array.isArray(runtime?.queue_breakdown) ? runtime.queue_breakdown : [];
@@ -1365,7 +1395,7 @@ function renderRuntime(runtime, lastTurn) {
 }
 
 function renderBenchmark(summary, report, benchmarkMeta) {
-  const el = document.getElementById('tab-benchmark');
+  const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
   const history = Array.isArray((benchmarkMeta || {}).history) ? benchmarkMeta.history : [];
   if (!summary || !summary.cases) {
@@ -1663,15 +1693,24 @@ async function refreshMemory() {
     document.getElementById('stat-rolling').textContent = Number(statsCompat.rolling_window_size || (mem.rolling_window || []).length || 0);
     const usage = Number(sess.token_usage ?? statsCompat.token_usage ?? 0);
     const budget = Number(sess.context_budget ?? statsCompat.context_budget ?? 10000);
-    const pct = Math.min(100, Math.round((usage / budget) * 100));
+    const rollingWindowCount = Number(statsCompat.rolling_window_size || (mem.rolling_window || []).length || 0);
+    const rollingBoostPct = rollingWindowCount > 0 ? ROLLING_INJECTION_PCT : 0;
+    const tokenPct = budget > 0 ? ((usage / budget) * 100) : 0;
+    const windowPct = Math.min(100, rollingBoostPct + tokenPct);
+    const flushProgressPct = Math.min(100, Math.round((windowPct / AUTO_FLUSH_THRESHOLD_PCT) * 100));
     document.getElementById('stat-tokens').textContent = usage;
     document.getElementById('stat-budget').textContent = budget;
     document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || statsCompat.session_id || '---');
 
     const fill = document.getElementById('budget-fill');
-    fill.style.width = pct + '%';
-    fill.className = 'budget-fill' + (pct >= 80 ? ' critical' : pct >= 50 ? ' warn' : '');
-    document.getElementById('budget-text').textContent = usage.toLocaleString() + ' / ' + budget.toLocaleString() + ' tokens (' + pct + '%)';
+    fill.style.width = flushProgressPct + '%';
+    fill.className = 'budget-fill' + (flushProgressPct >= 100 ? ' critical' : flushProgressPct >= 70 ? ' warn' : '');
+    document.getElementById('budget-text').textContent =
+      usage.toLocaleString() + ' / ' + budget.toLocaleString() + ' tokens' +
+      ' · rolling +' + rollingBoostPct + '%' +
+      ' · window ' + windowPct.toFixed(1) + '%' +
+      ' · auto-flush ' + AUTO_FLUSH_THRESHOLD_PCT + '%' +
+      ' (' + flushProgressPct + '% to trigger)';
   } catch (err) {
     console.error('refreshMemory failed:', err);
   }
@@ -1705,9 +1744,26 @@ function closeModal() {
 
 async function seedMemory() {
   try {
-    const res = await fetch('/api/seed', {method: 'POST'});
+    const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
+    const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
+    const preloadMax = Number.isFinite(preloadRaw) ? Math.max(1, Math.floor(preloadRaw)) : 200;
+    const body = {
+      wait_for_idle: true,
+      auto_flush: true,
+      flush_threshold_ratio: AUTO_FLUSH_THRESHOLD_PCT / 100,
+    };
+    if (preloadEnabled) body.max_turns = preloadMax;
+    const res = await fetch('/api/seed', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify(body),
+    });
     const data = await res.json();
-    addMsg('system', 'Seeded ' + data.seeded + ' turn(s) via chat replay');
+    addMsg('system',
+      'Seeded ' + data.seeded + ' turn(s) via chat replay' +
+      ' · flushes=' + String(data.flush_count || 0) +
+      ' · queue_idle=' + String(!!data.queue_idle)
+    );
     refreshMemory();
   } catch (err) {
     alert('Seed failed: ' + err.message);
@@ -1804,7 +1860,8 @@ async function runBenchmark() {
 }
 
 function switchTab(name) {
-  document.querySelectorAll('.tab').forEach(t => t.classList.toggle('active', t.dataset.tab === name));
+  const sel = document.getElementById('tab-selector');
+  if (sel && sel.value !== name) sel.value = name;
   document.querySelectorAll('.tab-content').forEach(t => t.classList.toggle('active', t.id === 'tab-' + name));
 }
 
