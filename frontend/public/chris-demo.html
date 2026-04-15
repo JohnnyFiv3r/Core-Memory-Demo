@@ -1768,6 +1768,7 @@ async function seedMemory() {
       const progress = addMsg('system', 'Seeding story-pack... Message 0 of ' + preloadMax);
       let seededTotal = 0;
       let queueIdle = true;
+      let fallbackTurns = 0;
       for (let i = 1; i <= preloadMax; i++) {
         progress.textContent = 'Seeding story-pack... Message ' + i + ' of ' + preloadMax;
         const res = await fetch('/api/story-pack/replay', {
@@ -1795,10 +1796,15 @@ async function seedMemory() {
         }
         seededTotal += Number(row.seeded || row.seeded_turns || 0);
         queueIdle = queueIdle && !!row.queue_idle;
+        fallbackTurns += Number(row.fallback_turns || 0);
         data = row;
       }
       progress.textContent =
-        'Seeded ' + seededTotal + ' turn(s) via story-pack replay · queue_idle=' + String(queueIdle);
+        'Seeded ' + seededTotal + ' turn(s) via story-pack replay · queue_idle=' + String(queueIdle) +
+        (fallbackTurns > 0 ? (' · fallback=' + fallbackTurns) : '');
+      if (fallbackTurns > 0) {
+        addMsg('system', 'Warning: fallback mode was used for ' + fallbackTurns + ' turn(s). Configure model API keys on backend to enable full claim/entity/association extraction.');
+      }
     } else {
       const progress = addMsg('system', 'Seeding default demo turns...');
       const res = await fetch('/api/seed', {
@@ -1822,7 +1828,11 @@ async function seedMemory() {
       progress.textContent =
         'Seeded ' + seeded + ' turn(s) via chat replay' +
         (data.flush_count != null ? (' · flushes=' + String(data.flush_count || 0)) : '') +
-        ' · queue_idle=' + String(!!data.queue_idle);
+        ' · queue_idle=' + String(!!data.queue_idle) +
+        (Number(data.fallback_turns || 0) > 0 ? (' · fallback=' + String(data.fallback_turns || 0)) : '');
+      if (Number(data.fallback_turns || 0) > 0) {
+        addMsg('system', 'Warning: fallback mode was used for ' + String(data.fallback_turns || 0) + ' turn(s). Configure model API keys on backend to enable full claim/entity/association extraction.');
+      }
     }
 
     refreshMemory();

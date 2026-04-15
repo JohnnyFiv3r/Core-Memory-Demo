@@ -359,13 +359,15 @@ def _build_fallback_answer(message: str, retrieval: dict[str, Any] | None = None
         if text:
             facts.append(text[:160])
 
-    if facts:
-        return "Fallback response (no model configured). Related memory facts: " + "; ".join(facts)
-
     msg = str(message or "").strip()
+    base = "Fallback response (no model configured). "
     if msg:
-        return "Fallback response (no model configured). I recorded this turn and will ground future answers from memory."
-    return "Fallback response (no model configured)."
+        base += "Recorded memory statement: " + msg
+    else:
+        base += "Recorded memory turn."
+    if facts:
+        base += " Related memory facts: " + "; ".join(facts)
+    return base
 
 
 async def run_chat(message: str) -> dict[str, Any]:
@@ -555,6 +557,7 @@ async def seed_demo_history(
 
     seeded = 0
     seeded_since_flush = 0
+    fallback_turns = 0
     errors: list[dict[str, Any]] = []
     flush_events: list[dict[str, Any]] = []
     queue_waits: list[dict[str, Any]] = []
@@ -570,7 +573,9 @@ async def seed_demo_history(
 
     for idx, user_query in enumerate(prompts[:target], start=1):
         try:
-            await run_chat(user_query)
+            turn_out = await run_chat(user_query)
+            if bool((((turn_out.get("last_answer") or {}).get("diagnostics") or {}).get("fallback_mode"))):
+                fallback_turns += 1
             seeded += 1
             seeded_since_flush += 1
 
@@ -639,6 +644,7 @@ async def seed_demo_history(
         "auto_flush": bool(auto_flush),
         "flush_count": len(flush_events),
         "flushes": flush_events[-20:],
+        "fallback_turns": int(fallback_turns),
         "session": {
             "session_id": SESSION.session_id,
             "token_usage": SESSION.token_usage,
@@ -695,6 +701,7 @@ async def replay_story_pack(
     queue_waits: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     seeded = 0
+    fallback_turns = 0
 
     for row in turns:
         turn_no = int(row.get("turn") or 0)
@@ -703,7 +710,9 @@ async def replay_story_pack(
             continue
 
         try:
-            await run_chat(prompt)
+            turn_out = await run_chat(prompt)
+            if bool((((turn_out.get("last_answer") or {}).get("diagnostics") or {}).get("fallback_mode"))):
+                fallback_turns += 1
             seeded += 1
 
             if wait_for_idle:
@@ -827,6 +836,7 @@ async def replay_story_pack(
         "run_checkpoints": bool(run_checkpoints),
         "checkpoint_count": int(len(executed_checkpoints)),
         "checkpoints": executed_checkpoints,
+        "fallback_turns": int(fallback_turns),
         "errors": errors[:20],
         "wait_for_idle": bool(wait_for_idle),
         "queue_idle": bool(_queue_idle(final_queue)),
