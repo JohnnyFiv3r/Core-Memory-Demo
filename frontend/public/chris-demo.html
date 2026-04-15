@@ -1803,7 +1803,9 @@ async function seedMemory() {
         'Seeded ' + seededTotal + ' turn(s) via story-pack replay · queue_idle=' + String(queueIdle) +
         (fallbackTurns > 0 ? (' · fallback=' + fallbackTurns) : '');
       if (fallbackTurns > 0) {
-        addMsg('system', 'Warning: fallback mode was used for ' + fallbackTurns + ' turn(s). Configure model API keys on backend to enable full claim/entity/association extraction.');
+        const ferr = data && data.fallback_error_counts ? Object.entries(data.fallback_error_counts).sort((a,b)=>Number(b[1])-Number(a[1]))[0] : null;
+        const ferrMsg = ferr ? (' Top error: ' + String(ferr[0])) : '';
+        addMsg('system', 'Warning: fallback mode was used for ' + fallbackTurns + ' turn(s).' + ferrMsg + ' Configure model selection/API keys on backend to enable full claim/entity/association extraction.');
       }
     } else {
       const progress = addMsg('system', 'Seeding default demo turns...');
@@ -1831,7 +1833,9 @@ async function seedMemory() {
         ' · queue_idle=' + String(!!data.queue_idle) +
         (Number(data.fallback_turns || 0) > 0 ? (' · fallback=' + String(data.fallback_turns || 0)) : '');
       if (Number(data.fallback_turns || 0) > 0) {
-        addMsg('system', 'Warning: fallback mode was used for ' + String(data.fallback_turns || 0) + ' turn(s). Configure model API keys on backend to enable full claim/entity/association extraction.');
+        const ferr = data && data.fallback_error_counts ? Object.entries(data.fallback_error_counts).sort((a,b)=>Number(b[1])-Number(a[1]))[0] : null;
+        const ferrMsg = ferr ? (' Top error: ' + String(ferr[0])) : '';
+        addMsg('system', 'Warning: fallback mode was used for ' + String(data.fallback_turns || 0) + ' turn(s).' + ferrMsg + ' Configure model selection/API keys on backend to enable full claim/entity/association extraction.');
       }
     }
 

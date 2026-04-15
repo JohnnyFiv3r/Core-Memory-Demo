@@ -222,10 +222,10 @@ def detect_model() -> str:
         return configured
 
     # If configured model is missing credentials, fall through to supported fallbacks.
-    if os.getenv("ANTHROPIC_API_KEY"):
-        return "anthropic:claude-sonnet-4-20250514"
     if os.getenv("OPENAI_API_KEY"):
         return "openai:gpt-4o"
+    if os.getenv("ANTHROPIC_API_KEY"):
+        return "anthropic:claude-sonnet-4-20250514"
     return ""
 
 
@@ -558,6 +558,7 @@ async def seed_demo_history(
     seeded = 0
     seeded_since_flush = 0
     fallback_turns = 0
+    fallback_error_counts: dict[str, int] = {}
     errors: list[dict[str, Any]] = []
     flush_events: list[dict[str, Any]] = []
     queue_waits: list[dict[str, Any]] = []
@@ -574,8 +575,11 @@ async def seed_demo_history(
     for idx, user_query in enumerate(prompts[:target], start=1):
         try:
             turn_out = await run_chat(user_query)
-            if bool((((turn_out.get("last_answer") or {}).get("diagnostics") or {}).get("fallback_mode"))):
+            diag = dict(((turn_out.get("last_answer") or {}).get("diagnostics") or {}))
+            if bool(diag.get("fallback_mode")):
                 fallback_turns += 1
+                ferr = str(diag.get("fallback_error") or "fallback").strip() or "fallback"
+                fallback_error_counts[ferr] = int(fallback_error_counts.get(ferr) or 0) + 1
             seeded += 1
             seeded_since_flush += 1
 
@@ -645,6 +649,7 @@ async def seed_demo_history(
         "flush_count": len(flush_events),
         "flushes": flush_events[-20:],
         "fallback_turns": int(fallback_turns),
+        "fallback_error_counts": dict(fallback_error_counts),
         "session": {
             "session_id": SESSION.session_id,
             "token_usage": SESSION.token_usage,
@@ -702,6 +707,7 @@ async def replay_story_pack(
     errors: list[dict[str, Any]] = []
     seeded = 0
     fallback_turns = 0
+    fallback_error_counts: dict[str, int] = {}
 
     for row in turns:
         turn_no = int(row.get("turn") or 0)
@@ -711,8 +717,11 @@ async def replay_story_pack(
 
         try:
             turn_out = await run_chat(prompt)
-            if bool((((turn_out.get("last_answer") or {}).get("diagnostics") or {}).get("fallback_mode"))):
+            diag = dict(((turn_out.get("last_answer") or {}).get("diagnostics") or {}))
+            if bool(diag.get("fallback_mode")):
                 fallback_turns += 1
+                ferr = str(diag.get("fallback_error") or "fallback").strip() or "fallback"
+                fallback_error_counts[ferr] = int(fallback_error_counts.get(ferr) or 0) + 1
             seeded += 1
 
             if wait_for_idle:
@@ -837,6 +846,7 @@ async def replay_story_pack(
         "checkpoint_count": int(len(executed_checkpoints)),
         "checkpoints": executed_checkpoints,
         "fallback_turns": int(fallback_turns),
+        "fallback_error_counts": dict(fallback_error_counts),
         "errors": errors[:20],
         "wait_for_idle": bool(wait_for_idle),
         "queue_idle": bool(_queue_idle(final_queue)),
