@@ -164,21 +164,6 @@
   </div>
 
 <script>
-const REAGRAPH_RUNTIMES = [
-  {
-    name: 'esm.sh',
-    react: 'https://esm.sh/react@18.3.1',
-    dom: 'https://esm.sh/react-dom@18.3.1/client',
-    reagraph: 'https://esm.sh/reagraph@4.30.8?bundle&deps=react@18.3.1,react-dom@18.3.1',
-  },
-  {
-    name: 'jsdelivr',
-    react: 'https://cdn.jsdelivr.net/npm/react@19.2.4/+esm',
-    dom: 'https://cdn.jsdelivr.net/npm/react-dom@19.2.4/client/+esm',
-    reagraph: 'https://cdn.jsdelivr.net/npm/reagraph@4.30.8/+esm',
-  },
-];
-
 const host = document.getElementById('graph-host');
 const detailEl = document.getElementById('detail');
 const metaEl = document.getElementById('meta');
@@ -190,9 +175,7 @@ const refreshBtn = document.getElementById('refresh-btn');
 const fitBtn = document.getElementById('fit-btn');
 const openDemoBtn = document.getElementById('open-demo-btn');
 
-let runtimePromise = null;
 let runtime = null;
-let runtimeName = '';
 let runtimeError = null;
 let graphRoot = null;
 let graphRef = null;
@@ -200,6 +183,12 @@ let beads = [];
 let associations = [];
 let refreshTimer = null;
 let lastGraph = { nodes: [], edges: [] };
+
+function goBackToDemo() {
+  const abs = new URL('./', window.location.href).toString();
+  window.location.assign(abs);
+}
+window.goBackToDemo = goBackToDemo;
 
 const theme = {
   canvas: { background: '#060a16' },
@@ -222,6 +211,21 @@ const theme = {
   },
   lasso: { border: '1px solid #6c7eff', background: 'rgba(108,126,255,0.15)' },
   ring: { fill: '#1f2838', activeFill: '#6c7eff' },
+};
+
+window.__cmSetReagraphRuntime = function (rt) {
+  try {
+    if (!rt || !rt.React || !rt.createRoot || !rt.GraphCanvas) return;
+    runtime = rt;
+    runtimeError = null;
+    if (!graphRoot) graphRoot = rt.createRoot(host);
+    renderGraph();
+  } catch (err) {
+    runtimeError = err;
+    runtime = null;
+    graphRoot = null;
+    renderGraph();
+  }
 };
 
 function typeColor(type) {
@@ -336,7 +340,7 @@ function buildGraphData() {
     },
   }));
 
-  const renderer = runtime ? ('Reagraph (' + runtimeName + ')') : 'SVG fallback';
+  const renderer = runtime ? ('Reagraph (' + String(runtime.name || 'module') + ')') : 'SVG fallback';
   metaEl.textContent =
     'renderer=' + renderer +
     ' · session beads=' + String(beads.length) +
@@ -355,14 +359,8 @@ async function showNodeDetailById(beadId) {
     const data = await res.json();
     detailEl.textContent = JSON.stringify(data, null, 2);
   } catch (err) {
-    detailEl.textContent = JSON.stringify({ error: String(err && err.message || err), bead_id: id }, null, 2);
+    detailEl.textContent = JSON.stringify({ error: String((err && err.message) || err), bead_id: id }, null, 2);
   }
-}
-
-async function showNodeDetail(node) {
-  const beadId = String((node && (node.id || (node.data || {}).bead_id)) || '').trim();
-  if (!beadId) return;
-  await showNodeDetailById(beadId);
 }
 
 function showEdgeDetail(edge) {
@@ -373,38 +371,6 @@ function showEdgeDetail(edge) {
     confidence: edge && ((edge.data || {}).confidence),
     reason_text: edge && ((edge.data || {}).reason_text),
   }, null, 2);
-}
-
-async function ensureReagraphRuntime() {
-  if (runtime) return runtime;
-  if (runtimePromise) return runtimePromise;
-  runtimePromise = (async () => {
-    let lastErr = null;
-    for (const cand of REAGRAPH_RUNTIMES) {
-      try {
-        const [reactMod, domMod, reagraphMod] = await Promise.all([
-          import(cand.react),
-          import(cand.dom),
-          import(cand.reagraph),
-        ]);
-        const React = reactMod && (reactMod.default || reactMod);
-        const createRoot = domMod && domMod.createRoot;
-        const GraphCanvas = reagraphMod && reagraphMod.GraphCanvas;
-        if (!React || !createRoot || !GraphCanvas) {
-          throw new Error('reagraph_runtime_missing_exports_' + cand.name);
-        }
-        runtime = { React, createRoot, GraphCanvas };
-        runtimeName = cand.name;
-        graphRoot = createRoot(host);
-        return runtime;
-      } catch (err) {
-        lastErr = err;
-      }
-    }
-    runtimeError = lastErr || new Error('reagraph_runtime_unavailable');
-    return null;
-  })();
-  return runtimePromise;
 }
 
 function renderGraphSvg(graph) {
@@ -484,32 +450,42 @@ function renderGraph() {
   lastGraph = graph;
 
   if (runtime && graphRoot && runtime.GraphCanvas && runtime.React) {
-    graphRoot.render(
-      runtime.React.createElement(runtime.GraphCanvas, {
-        ref: (r) => { graphRef = r; },
-        nodes: graph.nodes,
-        edges: graph.edges,
-        layoutType: 'forceDirected3d',
-        cameraMode: 'orbit',
-        draggable: true,
-        animated: true,
-        labelType: 'all',
-        edgeLabelPosition: 'inline',
-        theme,
-        onNodeClick: showNodeDetail,
-        onEdgeClick: showEdgeDetail,
-      })
-    );
-    return;
+    try {
+      graphRoot.render(
+        runtime.React.createElement(runtime.GraphCanvas, {
+          ref: (r) => { graphRef = r; },
+          nodes: graph.nodes,
+          edges: graph.edges,
+          layoutType: 'forceDirected3d',
+          cameraMode: 'orbit',
+          draggable: true,
+          animated: true,
+          labelType: 'all',
+          edgeLabelPosition: 'inline',
+          theme,
+          onNodeClick: (node) => {
+            const beadId = String((node && (node.id || (node.data || {}).bead_id)) || '').trim();
+            if (beadId) showNodeDetailById(beadId);
+          },
+          onEdgeClick: showEdgeDetail,
+        })
+      );
+      return;
+    } catch (err) {
+      runtimeError = err;
+      runtime = null;
+      graphRoot = null;
+    }
   }
 
   renderGraphSvg(graph);
+  if (runtimeError) {
+    detailEl.textContent = 'Reagraph unavailable, showing SVG fallback.\n\n' + String(runtimeError && (runtimeError.stack || runtimeError.message) || runtimeError);
+  }
 }
 
 async function refreshData() {
   metaEl.textContent = 'loading data...';
-  await ensureReagraphRuntime();
-
   let data = null;
   let lastErr = null;
   for (const stateUrl of ['/v1/memory/inspect/state', '/api/demo/state']) {
@@ -530,10 +506,6 @@ async function refreshData() {
   associations = Array.isArray(mem.associations) ? mem.associations : [];
   updateRelationOptions(normEdgeRows(associations));
   renderGraph();
-
-  if (!runtime && runtimeError) {
-    detailEl.textContent = 'Reagraph runtime failed from all CDNs, showing SVG fallback.\n\n' + String(runtimeError && (runtimeError.stack || runtimeError.message) || runtimeError);
-  }
 }
 
 function setupAutoRefresh() {
@@ -544,8 +516,8 @@ function setupAutoRefresh() {
   if (autoRefreshEl.checked) {
     refreshTimer = setInterval(() => {
       refreshData().catch((err) => {
-        metaEl.textContent = 'refresh error: ' + String(err && err.message || err);
-        detailEl.textContent = 'Runtime error while refreshing graph. Check api_base and CDN access.\n\n' + String(err && err.stack || err);
+        metaEl.textContent = 'refresh error: ' + String((err && err.message) || err);
+        detailEl.textContent = 'Runtime error while refreshing graph. Check api_base and CDN access.\n\n' + String((err && err.stack) || err);
       });
     }, 4000);
   }
@@ -553,8 +525,8 @@ function setupAutoRefresh() {
 
 refreshBtn.addEventListener('click', () => {
   refreshData().catch((err) => {
-    metaEl.textContent = 'refresh error: ' + String(err && err.message || err);
-    detailEl.textContent = 'Runtime error while refreshing graph. Check api_base and CDN access.\n\n' + String(err && err.stack || err);
+    metaEl.textContent = 'refresh error: ' + String((err && err.message) || err);
+    detailEl.textContent = 'Runtime error while refreshing graph. Check api_base and CDN access.\n\n' + String((err && err.stack) || err);
   });
 });
 
@@ -572,12 +544,6 @@ openDemoBtn.addEventListener('click', () => {
   goBackToDemo();
 });
 
-function goBackToDemo() {
-  const abs = new URL('./', window.location.href).toString();
-  window.location.assign(abs);
-}
-window.goBackToDemo = goBackToDemo;
-
 [relFilterEl, confFilterEl, searchFilterEl].forEach((el) => {
   el.addEventListener('change', () => renderGraph());
   el.addEventListener('input', () => renderGraph());
@@ -586,10 +552,18 @@ window.goBackToDemo = goBackToDemo;
 autoRefreshEl.addEventListener('change', setupAutoRefresh);
 
 refreshData().catch((err) => {
-  metaEl.textContent = 'load error: ' + String(err && err.message || err);
-  detailEl.textContent = 'Failed to initialize graph runtime.\n\n' + String(err && err.stack || err);
+  metaEl.textContent = 'load error: ' + String((err && err.message) || err);
+  detailEl.textContent = 'Failed to initialize graph runtime.\n\n' + String((err && err.stack) || err);
 });
 setupAutoRefresh();
+</script>
+<script type="module">
+import React from 'https://cdn.jsdelivr.net/npm/react@19.2.4/+esm';
+import { createRoot } from 'https://cdn.jsdelivr.net/npm/react-dom@19.2.4/client/+esm';
+import { GraphCanvas } from 'https://cdn.jsdelivr.net/npm/reagraph@4.30.8/+esm';
+if (window.__cmSetReagraphRuntime) {
+  window.__cmSetReagraphRuntime({ name: 'jsdelivr', React, createRoot, GraphCanvas });
+}
 </script>
 </body>
 </html>
