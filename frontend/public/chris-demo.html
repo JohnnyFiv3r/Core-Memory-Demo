@@ -327,16 +327,16 @@
   .runtime-badge-bad { color: var(--red); border-color: rgba(248, 113, 113, 0.35); }
 
   .claims-layout {
-    display: grid;
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr);
-    gap: 8px;
+    position: relative;
+    min-height: 420px;
   }
 
   .claims-list {
     background: var(--bg);
     border: 1px solid var(--border);
     border-radius: var(--radius);
-    overflow: hidden;
+    overflow: auto;
+    max-height: 64vh;
   }
 
   .claim-row {
@@ -356,6 +356,79 @@
     padding: 10px 12px;
     font-size: 12px;
     line-height: 1.45;
+  }
+
+  .claims-detail-overlay {
+    position: absolute;
+    inset: 0;
+    display: none;
+    z-index: 3;
+  }
+
+  .claims-detail-overlay.open {
+    display: block;
+  }
+
+  .claims-detail-backdrop {
+    position: absolute;
+    inset: 0;
+    background: rgba(15, 17, 23, 0.48);
+    border: 0;
+    margin: 0;
+    padding: 0;
+  }
+
+  .claims-detail-panel {
+    position: absolute;
+    top: 0;
+    right: 0;
+    width: min(100%, 440px);
+    height: 100%;
+    background: var(--surface);
+    border-left: 1px solid var(--border);
+    box-shadow: -10px 0 22px rgba(0, 0, 0, 0.35);
+    display: flex;
+    flex-direction: column;
+    min-height: 0;
+  }
+
+  .claims-detail-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+    padding: 8px 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+
+  .claims-detail-close {
+    width: 26px;
+    height: 26px;
+    border-radius: 999px;
+    border: 1px solid var(--border);
+    background: var(--surface2);
+    color: var(--text);
+    font-size: 16px;
+    line-height: 1;
+    cursor: pointer;
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    padding: 0;
+  }
+
+  .claims-detail-close:hover {
+    border-color: var(--accent);
+    background: rgba(108, 126, 255, 0.16);
+  }
+
+  .claims-detail-body {
+    padding: 10px;
+    overflow: auto;
+    min-height: 0;
+    flex: 1;
   }
 
   .claims-toolbar {
@@ -816,6 +889,7 @@ let lastBenchmarkSummary = null;
 let lastBenchmarkHistory = [];
 let selectedClaimSlot = null;
 let claimsAsOf = '';
+let claimsDetailOpen = false;
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
@@ -1928,6 +2002,7 @@ function renderClaims(rows, claimsMeta) {
   el.appendChild(countsWrap);
 
   if (!rows || !rows.length) {
+    claimsDetailOpen = false;
     const empty = document.createElement('div');
     empty.className = 'empty-state';
     empty.textContent = 'No claim-state slots yet';
@@ -1944,9 +2019,10 @@ function renderClaims(rows, claimsMeta) {
   wrap.className = 'claims-layout';
   const list = document.createElement('div');
   list.className = 'claims-list';
-  const detail = document.createElement('div');
-  detail.className = 'claim-detail';
-  detail.textContent = 'Loading slot detail...';
+  const hint = document.createElement('div');
+  hint.style.cssText = 'padding:8px 10px;border-bottom:1px solid var(--border);font-size:11px;color:var(--text-dim);';
+  hint.textContent = 'Select a claim slot to open detail view.';
+  list.appendChild(hint);
 
   rows.forEach(r => {
     const status = r.status || 'not_found';
@@ -1959,17 +2035,62 @@ function renderClaims(rows, claimsMeta) {
       ' · conflicts: ' + String(r.conflict_count ?? 0) + '</div>';
     row.addEventListener('click', async () => {
       selectedClaimSlot = r.slot_key || null;
+      claimsDetailOpen = true;
       syncClaimsStateToUrl();
-      renderClaims(rows);
+      renderClaims(rows, claimsMeta);
     });
     list.appendChild(row);
   });
 
   wrap.appendChild(list);
-  wrap.appendChild(detail);
+
+  const overlay = document.createElement('div');
+  overlay.className = 'claims-detail-overlay' + (claimsDetailOpen ? ' open' : '');
+
+  const backdrop = document.createElement('button');
+  backdrop.type = 'button';
+  backdrop.className = 'claims-detail-backdrop';
+  backdrop.setAttribute('aria-label', 'Close claim detail');
+  backdrop.addEventListener('click', () => {
+    claimsDetailOpen = false;
+    renderClaims(rows, claimsMeta);
+  });
+  overlay.appendChild(backdrop);
+
+  const panel = document.createElement('div');
+  panel.className = 'claims-detail-panel';
+
+  const panelHead = document.createElement('div');
+  panelHead.className = 'claims-detail-head';
+  panelHead.innerHTML = '<strong>Claim detail</strong><span style="color:var(--text-dim)">slot: ' + escapeHtml(String(selectedClaimSlot || 'n/a')) + '</span>';
+
+  const closeBtn = document.createElement('button');
+  closeBtn.type = 'button';
+  closeBtn.className = 'claims-detail-close';
+  closeBtn.setAttribute('aria-label', 'Close claim detail');
+  closeBtn.textContent = '×';
+  closeBtn.addEventListener('click', () => {
+    claimsDetailOpen = false;
+    renderClaims(rows, claimsMeta);
+  });
+  panelHead.appendChild(closeBtn);
+  panel.appendChild(panelHead);
+
+  const detailBodyWrap = document.createElement('div');
+  detailBodyWrap.className = 'claims-detail-body';
+  const detail = document.createElement('div');
+  detail.className = 'claim-detail';
+  detail.textContent = 'Loading slot detail...';
+  detailBodyWrap.appendChild(detail);
+  panel.appendChild(detailBodyWrap);
+
+  overlay.appendChild(panel);
+  wrap.appendChild(overlay);
   el.appendChild(wrap);
 
-  loadClaimSlotDetail(selectedClaimSlot, detail);
+  if (claimsDetailOpen) {
+    loadClaimSlotDetail(selectedClaimSlot, detail);
+  }
 }
 
 function renderEntities(entityMeta) {
@@ -2142,6 +2263,8 @@ async function entityDecideMerge(proposal, decision, keepEntityId) {
 
 async function loadClaimSlotDetail(slotKey, detailEl) {
   if (!slotKey || !detailEl) return;
+  const requestId = String(Date.now()) + '-' + Math.random().toString(36).slice(2, 8);
+  detailEl.dataset.req = requestId;
   const parts = String(slotKey).split(':');
   const subject = parts.shift() || '';
   const slot = parts.join(':');
@@ -2158,6 +2281,7 @@ async function loadClaimSlotDetail(slotKey, detailEl) {
     if (!res.ok || !data.ok) {
       throw new Error(data.error || ('HTTP ' + res.status));
     }
+    if (detailEl.dataset.req !== requestId) return;
     const row = data.row || {};
     const current = row.current_claim || {};
     const conflicts = row.conflicts || [];
@@ -2211,6 +2335,7 @@ async function loadClaimSlotDetail(slotKey, detailEl) {
       '<div style="margin-top:8px"><strong>Timeline / updates</strong> · ' + String(timeline.length) + '</div>' +
       timelineHtml;
   } catch (err) {
+    if (detailEl.dataset.req !== requestId) return;
     detailEl.textContent = 'Failed to load slot detail: ' + err.message;
   }
 }
