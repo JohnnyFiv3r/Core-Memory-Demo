@@ -684,6 +684,7 @@
         </div>
       </div>
     </div>
+    <button class="btn" onclick="openReagraphArchive()">Open Reagraph</button>
     <button class="btn btn-warn" onclick="flushSession()">Flush Session</button>
   </div>
 </header>
@@ -712,7 +713,6 @@
       <select id="tab-selector" class="tab-selector" onchange="switchTab(this.value)">
         <option value="beads" selected>Beads</option>
         <option value="associations">Associations</option>
-        <option value="graph">Graph</option>
         <option value="claims">Claims</option>
         <option value="entities">Entities</option>
         <option value="runtime">Runtime</option>
@@ -891,6 +891,15 @@ function refreshStoryCursorLabel() {
   const label = document.getElementById('story-cursor-label');
   if (!label) return;
   label.textContent = 'Story cursor: turn ' + String(getStoryCursorTurn());
+}
+
+function openReagraphArchive() {
+  const params = new URLSearchParams();
+  const apiBase = String(window.__CORE_MEMORY_API_BASE || '').trim();
+  if (apiBase) params.set('api_base', apiBase);
+  const q = params.toString();
+  const url = '/reagraph-archive.html' + (q ? ('?' + q) : '');
+  window.open(url, '_blank', 'noopener,noreferrer');
 }
 
 function resetStoryCursor(silent) {
@@ -2671,7 +2680,6 @@ async function refreshMemory() {
 
     renderBeads(mem.beads || data.beads || []);
     renderAssociations(mem.associations || data.associations || []);
-    renderGraph(mem.beads || data.beads || [], mem.associations || data.associations || []);
     renderClaims(claims.slots || data.claim_state || [], claims);
     renderEntities(entities);
     renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {});

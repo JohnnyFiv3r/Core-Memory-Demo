@@ -1,0 +1,430 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<script>
+(function () {
+  const params = new URLSearchParams(window.location.search);
+  const q = (params.get('api_base') || '').trim();
+  let s = '';
+  try { s = (localStorage.getItem('CORE_MEMORY_API_BASE') || '').trim(); } catch {}
+  const apiBase = (q || s || '').replace(/\/+$/, '');
+  if (apiBase) {
+    try { localStorage.setItem('CORE_MEMORY_API_BASE', apiBase); } catch {}
+  }
+  const nativeFetch = window.fetch.bind(window);
+  window.fetch = (input, init) => {
+    if (apiBase && typeof input === 'string' && input.startsWith('/')) {
+      input = apiBase + input;
+    }
+    return nativeFetch(input, init);
+  };
+  window.__CORE_MEMORY_API_BASE = apiBase;
+})();
+</script>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Core Memory Reagraph Archive</title>
+<style>
+  :root {
+    --bg: #0f1117;
+    --surface: #1a1d27;
+    --surface2: #232733;
+    --border: #2d3148;
+    --text: #e1e4ed;
+    --text-dim: #8b8fa3;
+    --accent: #6c7eff;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+    overflow: hidden;
+  }
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 10px;
+    padding: 10px 14px;
+    border-bottom: 1px solid var(--border);
+    background: var(--surface);
+  }
+  .title {
+    font-size: 14px;
+    font-weight: 600;
+  }
+  .title span { color: var(--accent); }
+  .controls {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    flex-wrap: wrap;
+  }
+  .controls label {
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  select, input {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+  button {
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+  }
+  button:hover { border-color: var(--accent); }
+  .layout {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr) 360px;
+    gap: 10px;
+    padding: 10px;
+    height: calc(100vh - 54px);
+  }
+  .panel {
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    background: var(--surface);
+    overflow: hidden;
+    min-height: 0;
+  }
+  #graph-host {
+    width: 100%;
+    height: 100%;
+  }
+  .side {
+    display: flex;
+    flex-direction: column;
+  }
+  .meta {
+    padding: 10px;
+    border-bottom: 1px solid var(--border);
+    font-size: 12px;
+    color: var(--text-dim);
+  }
+  .detail {
+    flex: 1;
+    overflow: auto;
+    padding: 10px;
+  }
+  pre {
+    margin: 0;
+    white-space: pre-wrap;
+    word-break: break-word;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+  .hint {
+    padding: 10px;
+    font-size: 12px;
+    color: var(--text-dim);
+    border-top: 1px solid var(--border);
+  }
+</style>
+</head>
+<body>
+  <header>
+    <div class="title"><span>Core Memory</span> Reagraph Archive Viewer</div>
+    <div class="controls">
+      <label>relation</label>
+      <select id="rel-filter"><option value="all">all</option></select>
+      <label>min conf</label>
+      <input id="conf-filter" type="number" min="0" max="1" step="0.05" value="0" style="width:78px" />
+      <label>search</label>
+      <input id="search-filter" type="text" placeholder="node/edge" style="width:140px" />
+      <label><input id="auto-refresh" type="checkbox" checked /> auto</label>
+      <button id="refresh-btn" type="button">Refresh</button>
+      <button id="fit-btn" type="button">Fit</button>
+      <button id="open-demo-btn" type="button">Back to Demo</button>
+    </div>
+  </header>
+  <div class="layout">
+    <div class="panel"><div id="graph-host"></div></div>
+    <div class="panel side">
+      <div class="meta" id="meta">loading...</div>
+      <div class="detail"><pre id="detail">Select a node or edge.</pre></div>
+      <div class="hint">This page renders from the demo bead archive via <code>/v1/memory/inspect/state</code>.</div>
+    </div>
+  </div>
+
+<script type="module">
+import React from 'https://esm.sh/react@18.3.1';
+import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';
+import { GraphCanvas } from 'https://esm.sh/reagraph@4.30.8?bundle&deps=react@18.3.1,react-dom@18.3.1';
+
+const h = React.createElement;
+const host = document.getElementById('graph-host');
+const detailEl = document.getElementById('detail');
+const metaEl = document.getElementById('meta');
+const relFilterEl = document.getElementById('rel-filter');
+const confFilterEl = document.getElementById('conf-filter');
+const searchFilterEl = document.getElementById('search-filter');
+const autoRefreshEl = document.getElementById('auto-refresh');
+const refreshBtn = document.getElementById('refresh-btn');
+const fitBtn = document.getElementById('fit-btn');
+const openDemoBtn = document.getElementById('open-demo-btn');
+
+const graphRoot = createRoot(host);
+let graphRef = null;
+let beads = [];
+let associations = [];
+let refreshTimer = null;
+
+const theme = {
+  canvas: { background: '#060a16' },
+  node: {
+    fill: '#7ca0ab',
+    activeFill: '#6c7eff',
+    opacity: 0.95,
+    selectedOpacity: 1,
+    inactiveOpacity: 0.2,
+    label: { color: '#e1e4ed', stroke: '#060a16', activeColor: '#ffffff' },
+    subLabel: { color: '#8b8fa3', stroke: 'transparent', activeColor: '#e1e4ed' },
+  },
+  edge: {
+    fill: '#5b6a8a',
+    activeFill: '#8ea2ff',
+    opacity: 0.7,
+    selectedOpacity: 1,
+    inactiveOpacity: 0.2,
+    label: { color: '#b8c0d8', stroke: '#060a16', activeColor: '#ffffff' },
+  },
+  lasso: { border: '1px solid #6c7eff', background: 'rgba(108,126,255,0.15)' },
+  ring: { fill: '#1f2838', activeFill: '#6c7eff' },
+};
+
+function typeColor(type) {
+  const t = String(type || '').toLowerCase();
+  if (t === 'decision') return '#6c7eff';
+  if (t === 'evidence') return '#22d3ee';
+  if (t === 'lesson') return '#4ade80';
+  if (t === 'goal') return '#fbbf24';
+  if (t === 'outcome') return '#f87171';
+  if (t === 'context') return '#8b8fa3';
+  return '#7ca0ab';
+}
+
+function normEdgeRows(rows) {
+  return (rows || []).map((r, idx) => {
+    const src = String((r || {}).source_bead || '').trim();
+    const dst = String((r || {}).target_bead || '').trim();
+    if (!src || !dst) return null;
+    return {
+      id: String((r || {}).id || ('edge-' + idx + '-' + src.slice(0, 6) + '-' + dst.slice(0, 6))),
+      source: src,
+      target: dst,
+      relationship: String((r || {}).relationship || 'associated_with'),
+      confidence: Number((r || {}).confidence || 0),
+      reason_text: String((r || {}).explanation || ''),
+    };
+  }).filter(Boolean);
+}
+
+function beadMapFromRows(rows) {
+  const out = {};
+  (rows || []).forEach((b) => {
+    const id = String((b || {}).id || '').trim();
+    if (!id) return;
+    out[id] = b;
+  });
+  return out;
+}
+
+function updateRelationOptions(edges) {
+  const current = String(relFilterEl.value || 'all');
+  const rels = Array.from(new Set((edges || []).map((e) => String(e.relationship || 'associated_with')))).sort();
+  relFilterEl.innerHTML = '';
+  const allOpt = document.createElement('option');
+  allOpt.value = 'all';
+  allOpt.textContent = 'all';
+  relFilterEl.appendChild(allOpt);
+  rels.forEach((rel) => {
+    const opt = document.createElement('option');
+    opt.value = rel;
+    opt.textContent = rel;
+    relFilterEl.appendChild(opt);
+  });
+  if (current === 'all' || rels.includes(current)) relFilterEl.value = current;
+  else relFilterEl.value = 'all';
+}
+
+function buildGraphData() {
+  const beadMap = beadMapFromRows(beads);
+  const edgesRaw = normEdgeRows(associations);
+  const rel = String(relFilterEl.value || 'all');
+  const minConf = Number(confFilterEl.value || 0);
+  const search = String(searchFilterEl.value || '').trim().toLowerCase();
+
+  const edges = edgesRaw.filter((e) => {
+    if (rel !== 'all' && e.relationship !== rel) return false;
+    if (Number.isFinite(minConf) && e.confidence < minConf) return false;
+    if (!search) return true;
+    const srcTitle = String(((beadMap[e.source] || {}).title || e.source) || '').toLowerCase();
+    const dstTitle = String(((beadMap[e.target] || {}).title || e.target) || '').toLowerCase();
+    const hay = [srcTitle, dstTitle, String(e.relationship || '').toLowerCase(), String(e.reason_text || '').toLowerCase()].join(' ');
+    return hay.includes(search);
+  });
+
+  const ids = new Set();
+  const degree = {};
+  edges.forEach((e) => {
+    ids.add(e.source);
+    ids.add(e.target);
+    degree[e.source] = Number(degree[e.source] || 0) + 1;
+    degree[e.target] = Number(degree[e.target] || 0) + 1;
+  });
+
+  const nodes = Array.from(ids).map((id) => {
+    const bead = beadMap[id] || {};
+    const d = Number(degree[id] || 1);
+    return {
+      id,
+      label: String(bead.title || id),
+      size: Math.max(3, Math.min(14, 4 + (d * 1.1))),
+      fill: typeColor(bead.type),
+      data: {
+        bead_id: id,
+        title: bead.title,
+        type: bead.type,
+        status: bead.status,
+        source_turn_ids: bead.source_turn_ids || [],
+      },
+    };
+  });
+
+  const graphEdges = edges.map((e) => ({
+    id: e.id,
+    source: e.source,
+    target: e.target,
+    label: e.relationship,
+    size: 0.5 + (Math.max(0, Math.min(1, Number(e.confidence || 0))) * 2.2),
+    data: {
+      relationship: e.relationship,
+      confidence: e.confidence,
+      reason_text: e.reason_text,
+    },
+  }));
+
+  metaEl.textContent =
+    'session beads=' + String(beads.length) +
+    ' · associations=' + String(edgesRaw.length) +
+    ' · showing nodes=' + String(nodes.length) +
+    ' edges=' + String(graphEdges.length);
+
+  return { nodes, edges: graphEdges };
+}
+
+async function showNodeDetail(node) {
+  const beadId = String((node && (node.id || (node.data || {}).bead_id)) || '').trim();
+  if (!beadId) return;
+  try {
+    const res = await fetch('/v1/memory/inspect/beads/' + encodeURIComponent(beadId));
+    const data = await res.json();
+    detailEl.textContent = JSON.stringify(data, null, 2);
+  } catch (err) {
+    detailEl.textContent = JSON.stringify({ error: String(err && err.message || err), bead_id: beadId }, null, 2);
+  }
+}
+
+function showEdgeDetail(edge) {
+  detailEl.textContent = JSON.stringify({
+    source: edge && edge.source,
+    target: edge && edge.target,
+    relationship: edge && (edge.label || (edge.data || {}).relationship),
+    confidence: edge && ((edge.data || {}).confidence),
+    reason_text: edge && ((edge.data || {}).reason_text),
+  }, null, 2);
+}
+
+function renderGraph() {
+  const graph = buildGraphData();
+  graphRoot.render(
+    h(GraphCanvas, {
+      ref: (r) => { graphRef = r; },
+      nodes: graph.nodes,
+      edges: graph.edges,
+      layoutType: 'forceDirected3d',
+      cameraMode: 'orbit',
+      draggable: true,
+      animated: true,
+      labelType: 'all',
+      edgeLabelPosition: 'inline',
+      theme,
+      onNodeClick: showNodeDetail,
+      onEdgeClick: showEdgeDetail,
+    })
+  );
+}
+
+async function refreshData() {
+  const stateUrl = '/v1/memory/inspect/state';
+  const res = await fetch(stateUrl);
+  const data = await res.json();
+  const mem = data.memory || {};
+  beads = Array.isArray(mem.beads) ? mem.beads : [];
+  associations = Array.isArray(mem.associations) ? mem.associations : [];
+  updateRelationOptions(normEdgeRows(associations));
+  renderGraph();
+}
+
+function setupAutoRefresh() {
+  if (refreshTimer) {
+    clearInterval(refreshTimer);
+    refreshTimer = null;
+  }
+  if (autoRefreshEl.checked) {
+    refreshTimer = setInterval(() => {
+      refreshData().catch((err) => {
+        metaEl.textContent = 'refresh error: ' + String(err && err.message || err);
+      });
+    }, 4000);
+  }
+}
+
+refreshBtn.addEventListener('click', () => {
+  refreshData().catch((err) => {
+    metaEl.textContent = 'refresh error: ' + String(err && err.message || err);
+  });
+});
+
+fitBtn.addEventListener('click', () => {
+  try {
+    if (graphRef && typeof graphRef.fitNodesInView === 'function') graphRef.fitNodesInView();
+  } catch (_) {}
+});
+
+openDemoBtn.addEventListener('click', () => {
+  const params = new URLSearchParams();
+  const base = String(window.__CORE_MEMORY_API_BASE || '').trim();
+  if (base) params.set('api_base', base);
+  const q = params.toString();
+  window.location.href = '/chris-demo.html' + (q ? ('?' + q) : '');
+});
+
+[relFilterEl, confFilterEl, searchFilterEl].forEach((el) => {
+  el.addEventListener('change', () => renderGraph());
+  el.addEventListener('input', () => renderGraph());
+});
+
+autoRefreshEl.addEventListener('change', setupAutoRefresh);
+
+refreshData().catch((err) => {
+  metaEl.textContent = 'load error: ' + String(err && err.message || err);
+});
+setupAutoRefresh();
+</script>
+</body>
+</html>
