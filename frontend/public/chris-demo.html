@@ -723,7 +723,7 @@ function resetStoryCursor(silent) {
 }
 
 function loadSeedResetPrefs() {
-  let resetBeforeRun = true;
+  let resetBeforeRun = false;
   let wipeMemory = false;
   let continueStory = true;
   try {
@@ -1983,8 +1983,25 @@ async function seedMemory() {
   }
 
   try {
-    const resetBeforeRun = !!document.getElementById('seed-reset-before-run')?.checked;
-    const wipeBeforeRun = !!document.getElementById('seed-wipe-memory')?.checked;
+    const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
+    const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
+    const preloadMax = Number.isFinite(preloadRaw) ? Math.max(1, Math.floor(preloadRaw)) : 200;
+    const continueStory = !!document.getElementById('seed-continue-story')?.checked;
+    let resetBeforeRun = !!document.getElementById('seed-reset-before-run')?.checked;
+    let wipeBeforeRun = !!document.getElementById('seed-wipe-memory')?.checked;
+
+    if (preloadEnabled && continueStory) {
+      if (resetBeforeRun || wipeBeforeRun) {
+        const resetEl = document.getElementById('seed-reset-before-run');
+        const wipeEl = document.getElementById('seed-wipe-memory');
+        if (resetEl) resetEl.checked = false;
+        if (wipeEl) wipeEl.checked = false;
+        saveSeedResetPrefs();
+        addMsg('system', 'Seed note: continuing from story bookmark, so fresh-session reset was skipped.');
+      }
+      resetBeforeRun = false;
+      wipeBeforeRun = false;
+    }
 
     if (resetBeforeRun) {
       const resetOut = await resetSessionForSeed({wipeMemory: wipeBeforeRun});
@@ -1998,10 +2015,6 @@ async function seedMemory() {
       );
     }
 
-    const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
-    const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
-    const preloadMax = Number.isFinite(preloadRaw) ? Math.max(1, Math.floor(preloadRaw)) : 200;
-    const continueStory = !!document.getElementById('seed-continue-story')?.checked;
     let data = null;
 
     if (preloadEnabled) {
