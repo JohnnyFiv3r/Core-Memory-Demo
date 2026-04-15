@@ -4,7 +4,7 @@ import { ReactParityApp } from './ReactParityApp'
 
 export function App() {
   const reactMode = typeof window !== 'undefined' && window.location.hash === '#react'
-  const uiRev = '20260415-session-popover-7'
+  const uiRev = '20260415-session-popover-8'
 
   if (reactMode) {
     return <ReactParityApp />
