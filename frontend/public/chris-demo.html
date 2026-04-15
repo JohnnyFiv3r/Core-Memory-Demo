@@ -519,6 +519,28 @@
     min-height: 380px;
   }
 
+  .graph-3d-wrap {
+    border: 1px solid var(--border);
+    border-radius: var(--radius);
+    background: var(--bg);
+    padding: 6px;
+    margin-bottom: 8px;
+  }
+
+  .graph-3d-canvas {
+    width: 100%;
+    height: 500px;
+    border-radius: 8px;
+    overflow: hidden;
+    background: #060a16;
+  }
+
+  .graph-3d-note {
+    margin-top: 6px;
+    font-size: 11px;
+    color: var(--text-dim);
+  }
+
   .graph-edge {
     stroke: rgba(139, 143, 163, 0.55);
     stroke-linecap: round;
@@ -803,6 +825,7 @@ const PREF_GRAPH_VIEW_MODE_KEY = 'cm_graph_view_mode';
 const PREF_GRAPH_REL_FILTER_KEY = 'cm_graph_rel_filter';
 const PREF_GRAPH_CONF_FILTER_KEY = 'cm_graph_conf_filter';
 const PREF_GRAPH_SEARCH_FILTER_KEY = 'cm_graph_search_filter';
+const FORCE_GRAPH_3D_SRC = 'https://unpkg.com/3d-force-graph@1.77.0/dist/3d-force-graph.min.js';
 
 let graphViewMode = 'list';
 const graphFilters = {
@@ -810,6 +833,7 @@ const graphFilters = {
   minConfidence: 0,
   search: '',
 };
+let forceGraph3DLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1221,6 +1245,75 @@ function applyGraphFilters(edges, beadMap) {
   });
 }
 
+function graphEntityId(v) {
+  if (v && typeof v === 'object') return String(v.id || v.name || '');
+  return String(v || '');
+}
+
+function ensureForceGraph3D() {
+  if (window.ForceGraph3D) return Promise.resolve(window.ForceGraph3D);
+  if (forceGraph3DLoadPromise) return forceGraph3DLoadPromise;
+
+  forceGraph3DLoadPromise = new Promise((resolve, reject) => {
+    const existing = document.querySelector('script[data-force-graph-3d="1"]');
+    if (existing) {
+      existing.addEventListener('load', () => resolve(window.ForceGraph3D));
+      existing.addEventListener('error', () => reject(new Error('force_graph_3d_load_failed')));
+      return;
+    }
+
+    const s = document.createElement('script');
+    s.src = FORCE_GRAPH_3D_SRC;
+    s.async = true;
+    s.defer = true;
+    s.setAttribute('data-force-graph-3d', '1');
+    s.onload = () => {
+      if (window.ForceGraph3D) resolve(window.ForceGraph3D);
+      else reject(new Error('force_graph_3d_missing_global'));
+    };
+    s.onerror = () => reject(new Error('force_graph_3d_load_failed'));
+    document.head.appendChild(s);
+  }).catch((err) => {
+    forceGraph3DLoadPromise = null;
+    throw err;
+  });
+
+  return forceGraph3DLoadPromise;
+}
+
+function graphDataFromEdges(edges, beadMap) {
+  const nodeMap = {};
+  const degree = {};
+
+  (edges || []).forEach((e) => {
+    const s = String((e || {}).source || '');
+    const t = String((e || {}).target || '');
+    if (!s || !t) return;
+    degree[s] = Number(degree[s] || 0) + 1;
+    degree[t] = Number(degree[t] || 0) + 1;
+    if (!nodeMap[s]) {
+      const b = beadMap[s] || {};
+      nodeMap[s] = { id: s, title: String(b.title || s), type: String(b.type || 'context') };
+    }
+    if (!nodeMap[t]) {
+      const b = beadMap[t] || {};
+      nodeMap[t] = { id: t, title: String(b.title || t), type: String(b.type || 'context') };
+    }
+  });
+
+  const nodes = Object.values(nodeMap).map((n) => ({ ...n, degree: Number(degree[n.id] || 1) }));
+  const links = (edges || []).map((e) => ({
+    id: String((e || {}).id || ''),
+    source: String((e || {}).source || ''),
+    target: String((e || {}).target || ''),
+    relationship: String((e || {}).relationship || 'associated_with'),
+    confidence: Number((e || {}).confidence ?? 0),
+    reason_text: String((e || {}).reason_text || ''),
+  })).filter((l) => l.source && l.target);
+
+  return { nodes, links };
+}
+
 function renderGraphLegend(el, edges) {
   const wrap = document.createElement('div');
   wrap.className = 'graph-legend';
@@ -1249,7 +1342,67 @@ function renderGraphLegend(el, edges) {
   el.appendChild(wrap);
 }
 
-function renderGraphCanvas(el, edges, beadMap, onEdgeClick) {
+function renderGraph3DCanvas(el, edges, beadMap, onNodeClick, onEdgeClick) {
+  const wrap = document.createElement('div');
+  wrap.className = 'graph-3d-wrap';
+  const canvasHost = document.createElement('div');
+  canvasHost.className = 'graph-3d-canvas';
+  wrap.appendChild(canvasHost);
+  const loading = document.createElement('div');
+  loading.className = 'graph-3d-note';
+  loading.textContent = 'Loading 3D graph...';
+  wrap.appendChild(loading);
+  el.appendChild(wrap);
+
+  ensureForceGraph3D()
+    .then((ForceGraph3D) => {
+      if (!el.contains(canvasHost)) return;
+      const gData = graphDataFromEdges(edges, beadMap);
+      const Graph = ForceGraph3D({ controlType: 'orbit' })(canvasHost)
+        .graphData(gData)
+        .backgroundColor('#060a16')
+        .nodeRelSize(5)
+        .nodeOpacity(0.9)
+        .nodeVal((n) => Math.max(1, Number(n.degree || 1)))
+        .nodeLabel((n) => String((n && n.title) || (n && n.id) || 'node'))
+        .linkLabel((l) => {
+          const rel = String((l && l.relationship) || 'associated_with');
+          const conf = Number((l && l.confidence) || 0);
+          const reason = String((l && l.reason_text) || '').trim();
+          return rel + ' · conf=' + conf.toFixed(2) + (reason ? ('\n' + reason) : '');
+        })
+        .linkOpacity(0.35)
+        .linkWidth((l) => 0.4 + (Math.max(0, Math.min(1, Number((l && l.confidence) || 0))) * 2.2))
+        .cooldownTicks(180)
+        .onNodeClick((n) => {
+          const id = graphEntityId(n);
+          if (id && typeof onNodeClick === 'function') onNodeClick(id);
+        })
+        .onLinkClick((l) => {
+          if (typeof onEdgeClick === 'function') onEdgeClick(l || {});
+        });
+
+      if (typeof Graph.enableNodeDrag === 'function') {
+        Graph.enableNodeDrag(true);
+      }
+
+      if (typeof Graph.zoomToFit === 'function') {
+        setTimeout(() => {
+          try { Graph.zoomToFit(500, 40); } catch (_) {}
+        }, 450);
+      }
+
+      loading.textContent = '3D graph: drag to orbit, right-drag to pan, wheel to zoom, drag nodes to reposition.';
+    })
+    .catch(() => {
+      if (!el.contains(canvasHost)) return;
+      canvasHost.remove();
+      loading.remove();
+      renderGraphSvgCanvas(el, edges, beadMap, onEdgeClick);
+    });
+}
+
+function renderGraphSvgCanvas(el, edges, beadMap, onEdgeClick) {
   const svgNs = 'http://www.w3.org/2000/svg';
   const wrap = document.createElement('div');
   wrap.className = 'graph-canvas-wrap';
@@ -1568,9 +1721,11 @@ function renderGraph(beads, assocs) {
       '<div><strong>Edge details</strong></div>' +
       '<div style="margin-top:2px;color:var(--text-dim)">Click an edge in graph view to inspect and jump to source/target beads.</div>';
 
-    renderGraphCanvas(el, filtered, beadMap, (edge) => {
-      const src = String((edge || {}).source || '');
-      const dst = String((edge || {}).target || '');
+    renderGraph3DCanvas(el, filtered, beadMap, (nodeId) => {
+      if (nodeId) showBead(nodeId);
+    }, (edge) => {
+      const src = graphEntityId((edge || {}).source);
+      const dst = graphEntityId((edge || {}).target);
       const srcTitle = graphNodeTitle(beadMap, src);
       const dstTitle = graphNodeTitle(beadMap, dst);
       const conf = edge && edge.confidence !== null ? Number(edge.confidence).toFixed(2) : 'n/a';
