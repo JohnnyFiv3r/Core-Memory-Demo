@@ -275,25 +275,64 @@ _ASSOC_JUDGE_AGENT: Any | None = None
 _ASSOC_JUDGE_MODEL: str = ""
 
 ALLOWED_ASSOC_RELATIONS: tuple[str, ...] = (
-    "follows",
-    "derived_from",
-    "supports",
-    "supersedes",
-    "contradicts",
     "caused_by",
-    "enables",
-    "unblocks",
+    "led_to",
     "blocked_by",
+    "unblocks",
+    "enables",
+    "supports",
+    "reinforces",
+    "contradicts",
+    "invalidates",
+    "supersedes",
+    "superseded_by",
+    "resolves",
+    "diagnoses",
+    "derived_from",
+    "follows",
+    "precedes",
+    "similar_pattern",
+    "mirrors",
+    "structural_symmetry",
+    "applies_pattern_of",
+    "violates_pattern_of",
+    "generalizes",
+    "specializes",
+    "refines",
+    "transferable_lesson",
+    "reveals_bias",
+    "constraint_transformed_into",
+    "solves_same_mechanism",
+    "associated_with",
 )
 
 _ASSOC_SPECIFIC_RELATIONS: set[str] = {
+    "caused_by",
+    "led_to",
+    "blocked_by",
+    "unblocks",
+    "enables",
     "supports",
+    "reinforces",
+    "invalidates",
+    "superseded_by",
+    "resolves",
+    "diagnoses",
+    "precedes",
+    "similar_pattern",
+    "mirrors",
+    "structural_symmetry",
+    "applies_pattern_of",
+    "violates_pattern_of",
+    "generalizes",
+    "specializes",
+    "refines",
+    "transferable_lesson",
+    "reveals_bias",
+    "constraint_transformed_into",
+    "solves_same_mechanism",
     "supersedes",
     "contradicts",
-    "caused_by",
-    "enables",
-    "unblocks",
-    "blocked_by",
 }
 
 ASSOC_JUDGE_INSTRUCTION_BLOCK = """
@@ -305,17 +344,38 @@ Use follows only for meaningful sequence adjacency.
 Use derived_from only when no stronger semantic relation is justified.
 
 Allowed relationships and intent:
-- follows: source comes after target in a meaningful sequence
-- derived_from: source was built/inferred from target
-- supports: source gives meaningful support to target
-- supersedes: source replaces target as newer/current version
-- contradicts: source and target cannot both stand as written
-- caused_by: source happened because target created the mechanism/condition
-- enables: source makes target possible or practical
-- unblocks: source removes blocker on target
+- caused_by: source happened because target directly created the condition/mechanism
+- led_to: source contributed forward into target as downstream consequence
 - blocked_by: source could not proceed because target obstructed it
+- unblocks: source removes the blocker on target
+- enables: source makes target possible or practical
+- supports: source gives meaningful support to target
+- reinforces: source strengthens confidence in target through repeated/independent agreement
+- contradicts: source and target cannot both stand as written
+- invalidates: source makes target no longer valid
+- supersedes: source replaces target as newer/current version
+- superseded_by: source has been replaced by target
+- resolves: source settles or fixes the issue/open state in target
+- diagnoses: source identifies the underlying mechanism behind target
+- derived_from: source was built or inferred from target
+- follows: source comes after target in a meaningful sequence
+- precedes: source comes before target in a meaningful sequence
+- similar_pattern: shared reusable pattern, but no stronger transfer/structure claim
+- mirrors: notably parallel dynamics
+- structural_symmetry: matching internal role structure
+- applies_pattern_of: source deliberately reuses target's pattern
+- violates_pattern_of: source breaks the pattern target suggests
+- generalizes: source is a broader abstraction of target
+- specializes: source is a narrower instance of target
+- refines: source sharpens target without replacing it
+- transferable_lesson: lesson from source should be reused in target context
+- reveals_bias: source exposes a blind spot or recurrent reasoning error in target
+- constraint_transformed_into: former limit became a reusable rule/pattern elsewhere
+- solves_same_mechanism: source and target address the same underlying mechanism
+- associated_with: meaningful relation exists, but no stronger relation is justified
 
 Never invent facts or ids.
+Do not use weak fallback labels as convenience defaults.
 If unsure, omit the edge.
 """.strip()
 
@@ -668,15 +728,35 @@ async def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str
         ],
         "allowed_relationships": list(ALLOWED_ASSOC_RELATIONS),
         "relation_guidance": {
-            "follows": "Use for temporal sequence adjacency, current step comes after prior step.",
-            "derived_from": "Use when current content is materially derived from prior content without stronger semantics.",
-            "supports": "Use when prior evidence supports a current claim/decision.",
-            "supersedes": "Use when current statement replaces prior state/decision.",
-            "contradicts": "Use when current statement conflicts with prior statement.",
-            "caused_by": "Use when current outcome happened because of prior cause.",
-            "enables": "Use when prior decision/action enables current capability.",
-            "unblocks": "Use when prior action resolves a blocker for current step.",
-            "blocked_by": "Use when current progress is blocked by prior unresolved dependency.",
+            "caused_by": "source happened because target directly created the condition/mechanism",
+            "led_to": "source contributed forward into target as downstream consequence",
+            "blocked_by": "source could not proceed because target obstructed it",
+            "unblocks": "source removes the blocker on target",
+            "enables": "source makes target possible or practical",
+            "supports": "source gives meaningful support to target",
+            "reinforces": "source strengthens confidence in target through repeated or independent agreement",
+            "contradicts": "source and target cannot both stand as written",
+            "invalidates": "source makes target no longer valid",
+            "supersedes": "source replaces target as newer/current version",
+            "superseded_by": "source has been replaced by target",
+            "resolves": "source settles or fixes the issue/open state in target",
+            "diagnoses": "source identifies the underlying mechanism behind target",
+            "derived_from": "source was built or inferred from target",
+            "follows": "source comes after target in a meaningful sequence",
+            "precedes": "source comes before target in a meaningful sequence",
+            "similar_pattern": "shared reusable pattern, but no stronger transfer/structure claim",
+            "mirrors": "notably parallel dynamics",
+            "structural_symmetry": "matching internal role structure",
+            "applies_pattern_of": "source deliberately reuses target's pattern",
+            "violates_pattern_of": "source breaks the pattern target suggests",
+            "generalizes": "source is a broader abstraction of target",
+            "specializes": "source is a narrower instance of target",
+            "refines": "source sharpens target without replacing it",
+            "transferable_lesson": "lesson from source should be reused in target context",
+            "reveals_bias": "source exposes a blind spot or recurrent reasoning error in target",
+            "constraint_transformed_into": "former limit became a reusable rule/pattern elsewhere",
+            "solves_same_mechanism": "source and target address the same underlying mechanism",
+            "associated_with": "meaningful relation exists, but no stronger relation is justified",
         },
         "current": {
             "bead_id": str(current_id),
@@ -738,6 +818,11 @@ async def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str
         if rel in _ASSOC_SPECIFIC_RELATIONS:
             specific_by_target[target_id] = True
 
+    non_weak_by_target: dict[str, bool] = {}
+    for target_id, rel, _conf, _reason in valid_rows:
+        if rel not in {"associated_with"}:
+            non_weak_by_target[target_id] = True
+
     follows_emitted = False
     for target_id, rel, conf, reason in valid_rows:
         if len(links) >= max(1, int(max_links)):
@@ -751,6 +836,9 @@ async def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str
             follows_emitted = True
 
         if rel == "derived_from" and bool(specific_by_target.get(target_id)):
+            continue
+
+        if rel == "associated_with" and bool(non_weak_by_target.get(target_id)):
             continue
 
         key = (str(current_id), target_id, rel)
