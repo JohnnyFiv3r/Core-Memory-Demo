@@ -52,6 +52,15 @@ def _utc_now_iso() -> str:
     return datetime.now(timezone.utc).isoformat()
 
 
+def _normalize_as_of(value: str | None) -> str | None:
+    s = str(value or "").strip()
+    if not s:
+        return None
+    if s.lower() in {"none", "null"}:
+        return None
+    return s
+
+
 def _new_session_id() -> str:
     return f"demo-{uuid.uuid4().hex[:8]}"
 
@@ -281,10 +290,11 @@ def get_agent() -> Any:
 
 
 def inspect_state_payload(*, as_of: str | None = None) -> dict[str, Any]:
+    as_of_n = _normalize_as_of(as_of)
     base = inspect_state(
         root=settings.core_memory_root,
         session_id=SESSION.session_id,
-        as_of=as_of,
+        as_of=as_of_n,
         limit_beads=300,
         limit_associations=300,
         limit_flushes=20,
@@ -1319,7 +1329,12 @@ def inspect_bead_hydration_payload(bead_id: str) -> dict[str, Any]:
 
 
 def inspect_claim_slot_payload(subject: str, slot: str, as_of: str | None) -> dict[str, Any]:
-    return inspect_claim_slot(root=settings.core_memory_root, subject=subject, slot=slot, as_of=as_of)
+    return inspect_claim_slot(
+        root=settings.core_memory_root,
+        subject=subject,
+        slot=slot,
+        as_of=_normalize_as_of(as_of),
+    )
 
 
 def inspect_turns_payload(session_id: str | None, limit: int, cursor: str | None) -> dict[str, Any]:
