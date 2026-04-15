@@ -557,21 +557,21 @@ def _extract_json_object_text(raw: str) -> str:
     return ""
 
 
-def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str], beads: dict[str, Any], max_links: int = 20) -> tuple[list[dict[str, Any]], list[str], bool]:
+async def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str], beads: dict[str, Any], max_links: int = 20) -> tuple[list[dict[str, Any]], list[str], bool, str]:
     current = dict(beads.get(str(current_id)) or {})
     if not current:
-        return [], [], False
+        return [], [], False, "current_bead_missing"
     if str(current_id) not in ordered_ids:
-        return [], [], False
+        return [], [], False, "current_bead_not_in_session_order"
 
     judge = _get_assoc_judge_agent()
     if judge is None:
-        return [], [], False
+        return [], [], False, "judge_unavailable"
 
     pos = ordered_ids.index(str(current_id))
     prior_ids = list(reversed(ordered_ids[:pos]))
     if not prior_ids:
-        return [], [str(current_id)], True
+        return [], [str(current_id)], True, ""
 
     current_entities = _bead_entities(current)
     current_tokens = _bead_tokens(current)
@@ -592,6 +592,7 @@ def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str], bea
                 "target_title": str(target.get("title") or "")[:140],
                 "target_type": str(target.get("type") or ""),
                 "target_summary": " ".join(str(x or "") for x in list(target.get("summary") or [])[:2])[:220],
+                "target_excerpt": _bead_text(target)[:360],
                 "shared_entities": shared_entities[:5],
                 "shared_terms": shared_terms[:8],
                 "evidence_score": int(score),
@@ -606,6 +607,7 @@ def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str], bea
                 "target_title": str(prev.get("title") or "")[:140],
                 "target_type": str(prev.get("type") or ""),
                 "target_summary": " ".join(str(x or "") for x in list(prev.get("summary") or [])[:2])[:220],
+                "target_excerpt": _bead_text(prev)[:360],
                 "shared_entities": [],
                 "shared_terms": [],
                 "evidence_score": 1,
@@ -623,14 +625,29 @@ def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str], bea
             "Do not invent bead ids or facts.",
             "Use only allowed relationship values.",
             "If unsure, omit the link.",
+            "Prefer specific semantic relations over generic derived_from when evidence supports them.",
+            "Use follows mainly for temporal adjacency.",
         ],
         "allowed_relationships": list(ALLOWED_ASSOC_RELATIONS),
+        "relation_guidance": {
+            "follows": "Use for temporal sequence adjacency, current step comes after prior step.",
+            "derived_from": "Use when current content is materially derived from prior content without stronger semantics.",
+            "supports": "Use when prior evidence supports a current claim/decision.",
+            "supersedes": "Use when current statement replaces prior state/decision.",
+            "contradicts": "Use when current statement conflicts with prior statement.",
+            "caused_by": "Use when current outcome happened because of prior cause.",
+            "enables": "Use when prior decision/action enables current capability.",
+            "unblocks": "Use when prior action resolves a blocker for current step.",
+            "blocked_by": "Use when current progress is blocked by prior unresolved dependency.",
+        },
         "current": {
             "bead_id": str(current_id),
             "title": str(current.get("title") or "")[:180],
             "type": str(current.get("type") or ""),
             "summary": [str(x or "")[:220] for x in list(current.get("summary") or [])[:3]],
+            "excerpt": _bead_text(current)[:500],
             "entities": sorted(list(current_entities))[:10],
+            "cue_flags": _cue_flags(_bead_text(current)),
         },
         "candidate_targets": candidates,
         "output_schema": {
@@ -646,12 +663,12 @@ def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str], bea
     }
 
     try:
-        resp = judge.run_sync(json.dumps(prompt, ensure_ascii=False))
+        resp = await judge.run(json.dumps(prompt, ensure_ascii=False))
         text = str(getattr(resp, "output", None) or getattr(resp, "data", None) or resp)
         payload_text = _extract_json_object_text(text)
         parsed = json.loads(payload_text) if payload_text else {}
     except Exception:
-        return [], [], False
+        return [], [], False, "judge_invoke_or_parse_failed"
 
     links: list[dict[str, Any]] = []
     referenced_ids: set[str] = {str(current_id)}
@@ -695,7 +712,7 @@ def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str], bea
         )
         referenced_ids.add(str(target_id))
 
-    return links, sorted(referenced_ids), True
+    return links, sorted(referenced_ids), True, ""
 
 
 def _proof_links_for_turn(*, current_id: str, ordered_ids: list[str], beads: dict[str, Any], max_links: int = 14) -> tuple[list[dict[str, Any]], list[str]]:
@@ -871,7 +888,7 @@ def _previous_session_turn_bead_id(*, root: str, session_id: str, current_bead_i
     return ""
 
 
-def _link_turn_temporal_association(*, turn_id: str) -> dict[str, Any]:
+async def _link_turn_temporal_association(*, turn_id: str) -> dict[str, Any]:
     current_bead_id = _latest_turn_bead_id_for_turn(
         root=settings.core_memory_root,
         session_id=SESSION.session_id,
@@ -890,7 +907,7 @@ def _link_turn_temporal_association(*, turn_id: str) -> dict[str, Any]:
             beads = {}
 
     ordered_ids = _session_turn_bead_ids(beads, session_id=SESSION.session_id)
-    associations, referenced_ids, judge_used = _agent_judged_links_for_turn(
+    associations, referenced_ids, judge_used, judge_error = await _agent_judged_links_for_turn(
         current_id=current_bead_id,
         ordered_ids=ordered_ids,
         beads=beads,
@@ -934,6 +951,7 @@ def _link_turn_temporal_association(*, turn_id: str) -> dict[str, Any]:
         "ok": bool(out.get("ok", True)),
         "linked": int(out.get("associations_appended") or 0) > 0,
         "judge_used": bool(judge_used),
+        "judge_error": str(judge_error or ""),
         "current_bead_id": str(current_bead_id),
         "previous_bead_id": str(previous_bead_id),
         "proven_link_candidates": int(len(associations)),
@@ -1011,7 +1029,7 @@ async def run_chat(message: str) -> dict[str, Any]:
 
     association_linking: dict[str, Any] = {}
     try:
-        association_linking = _link_turn_temporal_association(turn_id=turn_id)
+        association_linking = await _link_turn_temporal_association(turn_id=turn_id)
     except Exception as exc:
         association_linking = {"ok": False, "error": str(exc or "association_link_failed")}
 
