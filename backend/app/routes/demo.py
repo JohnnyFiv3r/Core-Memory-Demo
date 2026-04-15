@@ -250,6 +250,9 @@ async def story_pack_replay(request: Request):
 @router.post('/benchmark-run')
 async def benchmark_run(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
+    subset = str((body or {}).get('subset') or 'local').strip().lower() or 'local'
+    if subset not in {'local', 'full'}:
+        subset = 'local'
     semantic_mode = str((body or {}).get('semantic_mode') or 'degraded_allowed').strip() or 'degraded_allowed'
     root_mode = str((body or {}).get('root_mode') or 'snapshot').strip().lower() or 'snapshot'
     if root_mode not in {'snapshot', 'clean'}:
@@ -261,6 +264,7 @@ async def benchmark_run(request: Request):
 
     try:
         out = run_benchmark(
+            subset=subset,
             semantic_mode_name=semantic_mode,
             root_mode=root_mode,
             preload_from_demo=preload_from_demo,

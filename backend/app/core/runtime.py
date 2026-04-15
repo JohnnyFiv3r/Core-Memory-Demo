@@ -32,6 +32,8 @@ from core_memory.integrations.pydanticai.memory_tools import (
 )
 from core_memory.integrations.pydanticai.run import run_with_memory
 from core_memory.retrieval.tools import memory as memory_tools
+from core_memory.persistence.store import MemoryStore
+from core_memory.persistence.store_claim_ops import write_claim_updates_to_bead, write_claims_to_bead
 from core_memory.runtime.engine import process_flush, process_turn_finalized
 from core_memory.runtime.jobs import async_jobs_status, run_async_jobs
 from core_memory.runtime.association_pass import run_association_pass
@@ -1892,31 +1894,196 @@ def _load_preload_turns_from_live(*, max_turns: int = 200) -> list[dict[str, str
     return [dict(x or {}) for x in rows[:target]]
 
 
-def _benchmark_cases() -> list[dict[str, Any]]:
+def _locomo_benchmark_dirs() -> tuple[Path, Path]:
+    base = Path(__file__).resolve().parents[2] / "benchmarks" / "locomo_like"
+    return base / "fixtures", base / "gold"
+
+
+def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    if not path.exists():
+        return out
+    for line in path.read_text(encoding="utf-8").splitlines():
+        raw = str(line or "").strip()
+        if not raw:
+            continue
+        try:
+            row = json.loads(raw)
+        except Exception:
+            continue
+        if isinstance(row, dict):
+            out.append(row)
+    return out
+
+
+def _legacy_smoke_cases() -> list[dict[str, Any]]:
     return [
-        {"case_id": "b1", "query": "What database did we choose?", "expect": "postgres"},
-        {"case_id": "b2", "query": "What lesson did we learn about infra choices?", "expect": "benchmark"},
-        {"case_id": "b3", "query": "Why did we pick FastAPI?", "expect": "async"},
+        {
+            "case_id": "b1",
+            "query": "What database did we choose?",
+            "intent": "remember",
+            "k": 8,
+            "expected_answer_class": "answer_partial",
+            "setup": {},
+            "bucket_labels": ["smoke"],
+        },
+        {
+            "case_id": "b2",
+            "query": "What lesson did we learn about infra choices?",
+            "intent": "remember",
+            "k": 8,
+            "expected_answer_class": "answer_partial",
+            "setup": {},
+            "bucket_labels": ["smoke"],
+        },
+        {
+            "case_id": "b3",
+            "query": "Why did we pick FastAPI?",
+            "intent": "causal",
+            "k": 8,
+            "expected_answer_class": "answer_partial",
+            "setup": {},
+            "bucket_labels": ["smoke"],
+        },
     ]
 
 
-def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None) -> dict[str, Any]:
+def _load_locomo_cases(*, subset: str = "local") -> list[dict[str, Any]]:
+    fixtures_dir, gold_dir = _locomo_benchmark_dirs()
+    if not fixtures_dir.exists() or not gold_dir.exists():
+        return _legacy_smoke_cases()
+
+    fixture_paths = sorted(fixtures_dir.glob("*.jsonl"))
+    if str(subset or "local").strip().lower() == "local":
+        local_path = fixtures_dir / "local_subset.jsonl"
+        if local_path.exists():
+            fixture_paths = [local_path]
+
+    gold_map: dict[str, dict[str, Any]] = {}
+    for g in sorted(gold_dir.glob("*.json")):
+        try:
+            payload = json.loads(g.read_text(encoding="utf-8"))
+        except Exception:
+            continue
+        rows = payload.get("cases") if isinstance(payload, dict) else payload
+        if not isinstance(rows, list):
+            continue
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            gid = str(row.get("id") or "").strip()
+            if gid:
+                gold_map[gid] = row
+
+    out: list[dict[str, Any]] = []
+    for fp in fixture_paths:
+        for row in _read_jsonl_rows(fp):
+            cid = str(row.get("id") or "").strip()
+            if not cid:
+                continue
+            gold_id = str(row.get("gold_id") or cid).strip() or cid
+            g = dict(gold_map.get(gold_id) or {})
+            out.append(
+                {
+                    "case_id": cid,
+                    "query": str(row.get("query") or "").strip(),
+                    "intent": str(row.get("intent") or "remember").strip() or "remember",
+                    "k": max(1, int(row.get("k") or 5)),
+                    "setup": dict(row.get("setup") or {}),
+                    "bucket_labels": [str(x) for x in (row.get("bucket_labels") or []) if str(x)],
+                    "expected_answer_class": str(g.get("expected_answer_class") or "answer_partial").strip() or "answer_partial",
+                    "expected_slot": str(g.get("expected_slot") or "").strip(),
+                    "expected_source_surface": str(g.get("expected_source_surface") or "").strip(),
+                }
+            )
+
+    if not out:
+        return _legacy_smoke_cases()
+
+    out.sort(key=lambda x: str(x.get("case_id") or ""))
+    return out
+
+
+def _materialize_locomo_setup(*, root: str, setup: dict[str, Any], case_id: str) -> None:
+    s = MemoryStore(root)
+    bead_keys: dict[str, str] = {}
+
+    for i, t in enumerate(list(setup.get("turns") or []), start=1):
+        if not isinstance(t, dict):
+            continue
+        tid = str(t.get("turn_id") or f"{case_id}-turn-{i}").strip() or f"{case_id}-turn-{i}"
+        sid = str(t.get("session_id") or "main").strip() or "main"
+        uq = str(t.get("user_query") or "").strip()
+        af = str(t.get("assistant_final") or "").strip()
+        if not uq or not af:
+            continue
+        process_turn_finalized(
+            root=root,
+            session_id=sid,
+            turn_id=tid,
+            transaction_id=f"tx-{case_id}-{i}",
+            trace_id=f"tr-{case_id}-{i}",
+            user_query=uq,
+            assistant_final=af,
+            origin="BENCH_FIXTURE_TURN",
+            metadata=dict(t.get("metadata") or {}),
+        )
+
+    for row in list(setup.get("beads") or []):
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("key") or "").strip()
+        bead_id = s.add_bead(
+            type=str(row.get("type") or "context"),
+            title=str(row.get("title") or "fixture bead"),
+            summary=list(row.get("summary") or ["fixture"]),
+            detail=str(row.get("detail") or ""),
+            session_id=str(row.get("session_id") or "main"),
+            source_turn_ids=list(row.get("source_turn_ids") or [f"{case_id}-setup"]),
+            tags=list(row.get("tags") or ["benchmark_fixture"]),
+            status=str(row.get("status") or "open"),
+        )
+        if key:
+            bead_keys[key] = bead_id
+
+    for row in list(setup.get("claims") or []):
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("bead_key") or "").strip()
+        bead_id = bead_keys.get(key)
+        if not bead_id:
+            continue
+        write_claims_to_bead(root, bead_id, list(row.get("rows") or []))
+
+    for row in list(setup.get("claim_updates") or []):
+        if not isinstance(row, dict):
+            continue
+        key = str(row.get("bead_key") or "").strip()
+        bead_id = bead_keys.get(key)
+        if not bead_id:
+            continue
+        write_claim_updates_to_bead(root, bead_id, list(row.get("rows") or []))
+
+
+def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local") -> dict[str, Any]:
     global LAST_BENCHMARK_REPORT, LAST_BENCHMARK_SUMMARY, LAST_BENCHMARK_HISTORY
 
     run_id = f"bench-{uuid.uuid4().hex[:10]}"
     started = _utc_now_iso()
     run_root = Path(settings.core_memory_demo_benchmark_root) / run_id
     run_root.mkdir(parents=True, exist_ok=True)
+    base_root = run_root / "base"
+    base_root.mkdir(parents=True, exist_ok=True)
 
     if str(root_mode or "snapshot") == "snapshot":
-        _copy_tree(Path(settings.core_memory_root), run_root)
+        _copy_tree(Path(settings.core_memory_root), base_root)
 
     preloaded_rows: list[dict[str, Any]] = []
     if preload_from_demo:
         preloaded_rows = _load_preload_turns_from_live(max_turns=preload_turns_max)
         for rec in preloaded_rows:
             process_turn_finalized(
-                root=str(run_root),
+                root=str(base_root),
                 session_id=str(rec.get("session_id") or "bench"),
                 turn_id=str(rec.get("turn_id") or uuid.uuid4().hex[:10]),
                 transaction_id=f"bench-preload-{uuid.uuid4().hex[:8]}",
@@ -1927,34 +2094,64 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 metadata={"source": "demo_preload"},
             )
 
-    rows = _benchmark_cases()
+    rows = _load_locomo_cases(subset=str(subset or "local"))
     if isinstance(limit, int) and limit > 0:
-        rows = rows[:limit]
+        rows = rows[: limit]
 
     per_case: list[dict[str, Any]] = []
     passes = 0
     with semantic_mode(semantic_mode_name):
         for c in rows:
-            result = memory_tools.execute({"query": c["query"], "intent": "remember", "k": 8}, root=str(run_root), explain=False)
+            case_id = str(c.get("case_id") or f"case-{len(per_case)+1}")
+            case_root = run_root / f"case-{case_id}"
+            case_root.mkdir(parents=True, exist_ok=True)
+            _copy_tree(base_root, case_root)
+            _materialize_locomo_setup(root=str(case_root), setup=dict(c.get("setup") or {}), case_id=case_id)
+
+            req = {
+                "query": str(c.get("query") or ""),
+                "intent": str(c.get("intent") or "remember"),
+                "k": max(1, int(c.get("k") or 5)),
+            }
+            result = memory_tools.execute(req, root=str(case_root), explain=False)
             results = list(result.get("results") or [])
-            text_blob = " ".join(
-                [
-                    str((r.get("title") or "")).lower() + " " + str((r.get("summary") or "")).lower()
-                    for r in results
-                ]
-            )
-            ok = str(c["expect"]).lower() in text_blob
+            expected_class = str(c.get("expected_answer_class") or "answer_partial")
+            actual_class = str(result.get("answer_outcome") or "")
+            class_ok = actual_class == expected_class
+
+            expected_source_surface = str(c.get("expected_source_surface") or "")
+            top_source_surface = str(((results[0] if results else {}) or {}).get("source_surface") or "")
+            source_ok = (not expected_source_surface) or (top_source_surface == expected_source_surface)
+
+            checks = {
+                "answer_class": {
+                    "expected": expected_class,
+                    "actual": actual_class,
+                    "pass": bool(class_ok),
+                },
+                "source_surface": {
+                    "expected": expected_source_surface,
+                    "actual": top_source_surface,
+                    "pass": bool(source_ok),
+                },
+            }
+
+            ok = bool(class_ok and source_ok)
             if ok:
                 passes += 1
             per_case.append(
                 {
-                    "case_id": c["case_id"],
-                    "query": c["query"],
-                    "expected": c["expect"],
+                    "case_id": case_id,
+                    "query": str(c.get("query") or ""),
+                    "expected_answer_class": expected_class,
+                    "actual_answer_class": actual_class,
                     "pass": bool(ok),
+                    "checks": checks,
+                    "bucket_labels": list(c.get("bucket_labels") or []),
                     "result_count": len(results),
                     "warnings": list(result.get("warnings") or []),
                     "backend": str(result.get("backend") or "unknown"),
+                    "root": str(case_root),
                 }
             )
 
@@ -1969,6 +2166,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         "fail": fail,
         "accuracy": (passes / total) if total else 0.0,
         "semantic_mode": semantic_mode_name,
+        "subset": str(subset or "local"),
         "root_mode": root_mode,
         "isolated_root": str(run_root),
         "isolated_run": True,
