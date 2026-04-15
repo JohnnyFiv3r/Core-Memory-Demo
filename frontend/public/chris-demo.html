@@ -1697,20 +1697,14 @@ async function refreshMemory() {
     const rollingBoostPct = rollingWindowCount > 0 ? ROLLING_INJECTION_PCT : 0;
     const tokenPct = budget > 0 ? ((usage / budget) * 100) : 0;
     const windowPct = Math.min(100, rollingBoostPct + tokenPct);
-    const flushProgressPct = Math.min(100, Math.round((windowPct / AUTO_FLUSH_THRESHOLD_PCT) * 100));
     document.getElementById('stat-tokens').textContent = usage;
     document.getElementById('stat-budget').textContent = budget;
     document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || statsCompat.session_id || '---');
 
     const fill = document.getElementById('budget-fill');
-    fill.style.width = flushProgressPct + '%';
-    fill.className = 'budget-fill' + (flushProgressPct >= 100 ? ' critical' : flushProgressPct >= 70 ? ' warn' : '');
-    document.getElementById('budget-text').textContent =
-      usage.toLocaleString() + ' / ' + budget.toLocaleString() + ' tokens' +
-      ' · rolling +' + rollingBoostPct + '%' +
-      ' · window ' + windowPct.toFixed(1) + '%' +
-      ' · auto-flush ' + AUTO_FLUSH_THRESHOLD_PCT + '%' +
-      ' (' + flushProgressPct + '% to trigger)';
+    fill.style.width = windowPct.toFixed(1) + '%';
+    fill.className = 'budget-fill' + (windowPct >= AUTO_FLUSH_THRESHOLD_PCT ? ' critical' : windowPct >= 50 ? ' warn' : '');
+    document.getElementById('budget-text').textContent = windowPct.toFixed(1) + '% used';
   } catch (err) {
     console.error('refreshMemory failed:', err);
   }
