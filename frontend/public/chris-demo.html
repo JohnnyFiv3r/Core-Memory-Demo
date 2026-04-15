@@ -1283,7 +1283,90 @@ function renderGraphCanvas(el, edges, beadMap, onEdgeClick) {
 
   const svg = document.createElementNS(svgNs, 'svg');
   svg.setAttribute('class', 'graph-canvas');
-  svg.setAttribute('viewBox', '0 0 ' + String(width) + ' ' + String(height));
+  const baseView = { x: 0, y: 0, w: width, h: height };
+  const view = { x: baseView.x, y: baseView.y, w: baseView.w, h: baseView.h };
+  function applyView() {
+    svg.setAttribute(
+      'viewBox',
+      String(view.x.toFixed(2)) + ' ' + String(view.y.toFixed(2)) + ' ' + String(view.w.toFixed(2)) + ' ' + String(view.h.toFixed(2))
+    );
+  }
+  applyView();
+
+  let panState = null;
+  let dragged = false;
+  let suppressClickUntil = 0;
+  svg.style.cursor = 'grab';
+
+  svg.addEventListener('pointerdown', (ev) => {
+    if (ev.button !== 0) return;
+    panState = {
+      pointerId: ev.pointerId,
+      sx: ev.clientX,
+      sy: ev.clientY,
+      ox: view.x,
+      oy: view.y,
+    };
+    dragged = false;
+    try { svg.setPointerCapture(ev.pointerId); } catch (_) {}
+    svg.style.cursor = 'grabbing';
+  });
+
+  svg.addEventListener('pointermove', (ev) => {
+    if (!panState || ev.pointerId !== panState.pointerId) return;
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const px = ev.clientX - panState.sx;
+    const py = ev.clientY - panState.sy;
+    if (Math.abs(px) > 2 || Math.abs(py) > 2) dragged = true;
+    const dx = px * (view.w / rect.width);
+    const dy = py * (view.h / rect.height);
+    view.x = panState.ox - dx;
+    view.y = panState.oy - dy;
+    applyView();
+  });
+
+  function endPan(ev) {
+    if (!panState || !ev || ev.pointerId !== panState.pointerId) return;
+    if (dragged) suppressClickUntil = Date.now() + 180;
+    try { svg.releasePointerCapture(ev.pointerId); } catch (_) {}
+    panState = null;
+    svg.style.cursor = 'grab';
+  }
+  svg.addEventListener('pointerup', endPan);
+  svg.addEventListener('pointercancel', endPan);
+
+  svg.addEventListener('wheel', (ev) => {
+    ev.preventDefault();
+    const rect = svg.getBoundingClientRect();
+    if (!rect.width || !rect.height) return;
+    const mx = (ev.clientX - rect.left) / rect.width;
+    const my = (ev.clientY - rect.top) / rect.height;
+    const zoom = ev.deltaY < 0 ? 0.92 : 1.08;
+    const worldX = view.x + (mx * view.w);
+    const worldY = view.y + (my * view.h);
+    view.w = Math.max(140, Math.min(6000, view.w * zoom));
+    view.h = Math.max(140, Math.min(6000, view.h * zoom));
+    view.x = worldX - (mx * view.w);
+    view.y = worldY - (my * view.h);
+    applyView();
+  }, { passive: false });
+
+  svg.addEventListener('dblclick', (ev) => {
+    ev.preventDefault();
+    view.x = baseView.x;
+    view.y = baseView.y;
+    view.w = baseView.w;
+    view.h = baseView.h;
+    applyView();
+  });
+
+  svg.addEventListener('click', (ev) => {
+    if (Date.now() < suppressClickUntil) {
+      ev.preventDefault();
+      ev.stopPropagation();
+    }
+  }, true);
 
   const pos = {};
   nodeIds.forEach((id, idx) => {
@@ -1364,7 +1447,7 @@ function renderGraphCanvas(el, edges, beadMap, onEdgeClick) {
     '<div><strong>Graph view</strong></div>' +
     '<div style="margin-top:2px;color:var(--text-dim)">nodes=' + String(nodeIds.length) +
     ' · edges=' + String(limitedEdges.length) +
-    ' · click a node or edge for details.</div>';
+    ' · drag to pan · wheel to zoom · double-click to reset.</div>';
   el.appendChild(note);
 }
 
