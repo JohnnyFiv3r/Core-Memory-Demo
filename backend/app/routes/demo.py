@@ -157,7 +157,8 @@ async def seed(request: Request):
         )
         state = inspect_state_payload()
         out['stats'] = state.get('stats') or {}
-        return out
+        code = 200 if bool(out.get('ok')) else 400
+        return JSONResponse(out, status_code=code)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 

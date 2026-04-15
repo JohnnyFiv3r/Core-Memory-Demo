@@ -1754,21 +1754,50 @@ async function seedMemory() {
     const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
     const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
     const preloadMax = Number.isFinite(preloadRaw) ? Math.max(1, Math.floor(preloadRaw)) : 200;
-    const body = {
-      wait_for_idle: true,
-      auto_flush: true,
-      flush_threshold_ratio: AUTO_FLUSH_THRESHOLD_PCT / 100,
-    };
-    if (preloadEnabled) body.max_turns = preloadMax;
-    const res = await fetch('/api/seed', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(body),
-    });
-    const data = await res.json();
+    let res;
+    let data;
+
+    if (preloadEnabled) {
+      res = await fetch('/api/story-pack/replay', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          max_turns: preloadMax,
+          run_checkpoints: false,
+          reset_session: false,
+          use_manifest_sessions: false,
+          wait_for_idle: true,
+          idle_timeout_ms: 30000,
+          idle_poll_ms: 250,
+        }),
+      });
+      data = await res.json();
+    } else {
+      res = await fetch('/api/seed', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          wait_for_idle: true,
+          auto_flush: true,
+          flush_threshold_ratio: AUTO_FLUSH_THRESHOLD_PCT / 100,
+        }),
+      });
+      data = await res.json();
+    }
+
+    if (!res.ok || !data.ok) {
+      const err =
+        (Array.isArray(data.errors) && data.errors.length > 0 && (data.errors[0].error || JSON.stringify(data.errors[0]))) ||
+        data.error ||
+        ('HTTP ' + res.status);
+      throw new Error(String(err));
+    }
+
+    const seeded = Number(data.seeded || data.seeded_turns || 0);
+    const modeLabel = data.pack_name ? 'story-pack replay' : 'chat replay';
     addMsg('system',
-      'Seeded ' + data.seeded + ' turn(s) via chat replay' +
-      ' · flushes=' + String(data.flush_count || 0) +
+      'Seeded ' + seeded + ' turn(s) via ' + modeLabel +
+      (data.flush_count != null ? (' · flushes=' + String(data.flush_count || 0)) : '') +
       ' · queue_idle=' + String(!!data.queue_idle)
     );
     refreshMemory();
