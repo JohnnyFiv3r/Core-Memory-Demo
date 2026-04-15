@@ -120,8 +120,39 @@ async def seed(request: Request):
     max_turns = None
     if isinstance(max_turns_raw, int) and max_turns_raw > 0:
         max_turns = int(max_turns_raw)
+
+    wait_for_idle = bool((body or {}).get('wait_for_idle', True))
+    idle_timeout_ms_raw = (body or {}).get('idle_timeout_ms')
+    idle_timeout_ms = int(idle_timeout_ms_raw) if isinstance(idle_timeout_ms_raw, int) and idle_timeout_ms_raw > 0 else 20000
+
+    idle_poll_ms_raw = (body or {}).get('idle_poll_ms')
+    idle_poll_ms = int(idle_poll_ms_raw) if isinstance(idle_poll_ms_raw, int) and idle_poll_ms_raw > 0 else 250
+
+    auto_flush = bool((body or {}).get('auto_flush', True))
+    flush_threshold_ratio_raw = (body or {}).get('flush_threshold_ratio')
+    flush_threshold_ratio = float(flush_threshold_ratio_raw) if isinstance(flush_threshold_ratio_raw, (int, float)) else 0.85
+
+    flush_every_turns_raw = (body or {}).get('flush_every_turns')
+    flush_every_turns = int(flush_every_turns_raw) if isinstance(flush_every_turns_raw, int) and flush_every_turns_raw > 0 else 0
+
+    max_compaction_per_pass_raw = (body or {}).get('max_compaction_per_pass')
+    max_compaction_per_pass = int(max_compaction_per_pass_raw) if isinstance(max_compaction_per_pass_raw, int) and max_compaction_per_pass_raw > 0 else 2
+
+    max_side_effects_per_pass_raw = (body or {}).get('max_side_effects_per_pass')
+    max_side_effects_per_pass = int(max_side_effects_per_pass_raw) if isinstance(max_side_effects_per_pass_raw, int) and max_side_effects_per_pass_raw > 0 else 8
     try:
-        out = await seed_demo_history(messages=messages if isinstance(messages, list) else None, max_turns=max_turns)
+        out = await seed_demo_history(
+            messages=messages if isinstance(messages, list) else None,
+            max_turns=max_turns,
+            wait_for_idle=wait_for_idle,
+            idle_timeout_ms=idle_timeout_ms,
+            idle_poll_ms=idle_poll_ms,
+            auto_flush=auto_flush,
+            flush_threshold_ratio=flush_threshold_ratio,
+            flush_every_turns=flush_every_turns,
+            max_compaction_per_pass=max_compaction_per_pass,
+            max_side_effects_per_pass=max_side_effects_per_pass,
+        )
         state = inspect_state_payload()
         out['stats'] = state.get('stats') or {}
         return out

@@ -3,6 +3,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import time
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -31,6 +32,7 @@ from core_memory.integrations.pydanticai.memory_tools import (
 from core_memory.integrations.pydanticai.run import run_with_memory
 from core_memory.retrieval.tools import memory as memory_tools
 from core_memory.runtime.engine import process_flush, process_turn_finalized
+from core_memory.runtime.jobs import async_jobs_status, run_async_jobs
 
 from app.core.config import settings
 
@@ -236,7 +238,85 @@ def _normalize_seed_messages(messages: list[Any] | None) -> list[str]:
     return out
 
 
-async def seed_demo_history(*, messages: list[Any] | None = None, max_turns: int | None = None) -> dict[str, Any]:
+def _queue_idle(status: dict[str, Any] | None) -> bool:
+    s = dict(status or {})
+    if int(s.get("pending_total") or 0) > 0:
+        return False
+    if int(s.get("processable_now") or 0) > 0:
+        return False
+    queues = dict(s.get("queues") or {})
+    for _name, q in queues.items():
+        row = dict(q or {})
+        if int(row.get("pending") or row.get("queue_depth") or 0) > 0:
+            return False
+        if int(row.get("processable_now") or 0) > 0:
+            return False
+        if int(row.get("retry_ready") or 0) > 0:
+            return False
+    return True
+
+
+def _drain_async_until_idle(
+    *,
+    timeout_ms: int,
+    poll_ms: int,
+    max_compaction: int,
+    max_side_effects: int,
+) -> dict[str, Any]:
+    started = time.monotonic()
+    timeout_s = max(1.0, float(timeout_ms) / 1000.0)
+    poll_s = max(0.05, float(poll_ms) / 1000.0)
+
+    passes = 0
+    last_status: dict[str, Any] = {}
+    while (time.monotonic() - started) <= timeout_s:
+        last_status = async_jobs_status(root=settings.core_memory_root)
+        if _queue_idle(last_status):
+            return {
+                "ok": True,
+                "idle": True,
+                "passes": passes,
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+                "status": last_status,
+            }
+
+        out = run_async_jobs(
+            root=settings.core_memory_root,
+            run_semantic=True,
+            max_compaction=max(1, int(max_compaction)),
+            max_side_effects=max(1, int(max_side_effects)),
+        )
+        passes += 1
+        comp_processed = int(((out.get("compaction_run") or {}).get("processed") or 0))
+        se_processed = int(((out.get("side_effect_run") or {}).get("processed") or 0))
+        sem_ran = bool(((out.get("semantic_run") or {}).get("ran") or False))
+
+        if (comp_processed + se_processed) <= 0 and not sem_ran:
+            time.sleep(poll_s)
+
+    return {
+        "ok": False,
+        "idle": False,
+        "passes": passes,
+        "elapsed_ms": int((time.monotonic() - started) * 1000),
+        "status": last_status,
+        "error": "idle_timeout",
+    }
+
+
+async def seed_demo_history(
+    *,
+    messages: list[Any] | None = None,
+    max_turns: int | None = None,
+    wait_for_idle: bool = True,
+    idle_timeout_ms: int = 20000,
+    idle_poll_ms: int = 250,
+    auto_flush: bool = True,
+    flush_threshold_ratio: float = 0.85,
+    flush_every_turns: int = 0,
+    max_compaction_per_pass: int = 2,
+    max_side_effects_per_pass: int = 8,
+) -> dict[str, Any]:
     prompts = _normalize_seed_messages(messages)
     if not prompts:
         prompts = list(DEFAULT_SEED_USER_MESSAGES)
@@ -246,14 +326,75 @@ async def seed_demo_history(*, messages: list[Any] | None = None, max_turns: int
         target = min(target, max_turns)
 
     seeded = 0
+    seeded_since_flush = 0
     errors: list[dict[str, Any]] = []
+    flush_events: list[dict[str, Any]] = []
+    queue_waits: list[dict[str, Any]] = []
+
+    def _should_flush() -> bool:
+        if not auto_flush:
+            return False
+        if int(flush_every_turns) > 0 and seeded_since_flush >= int(flush_every_turns):
+            return True
+        budget = max(1, int(SESSION.context_budget))
+        usage_ratio = float(SESSION.token_usage) / float(budget)
+        return usage_ratio >= max(0.1, float(flush_threshold_ratio))
 
     for idx, user_query in enumerate(prompts[:target], start=1):
         try:
             await run_chat(user_query)
             seeded += 1
+            seeded_since_flush += 1
+
+            if wait_for_idle:
+                wait_result = _drain_async_until_idle(
+                    timeout_ms=idle_timeout_ms,
+                    poll_ms=idle_poll_ms,
+                    max_compaction=max_compaction_per_pass,
+                    max_side_effects=max_side_effects_per_pass,
+                )
+                queue_waits.append({"turn": idx, **wait_result})
+                if not bool(wait_result.get("idle")):
+                    errors.append({
+                        "index": idx,
+                        "user_query": user_query[:160],
+                        "error": "queue_not_idle_timeout",
+                        "details": {
+                            "elapsed_ms": wait_result.get("elapsed_ms"),
+                            "passes": wait_result.get("passes"),
+                            "pending_total": ((wait_result.get("status") or {}).get("pending_total")),
+                        },
+                    })
+                    break
+
+            if _should_flush():
+                f = run_flush()
+                flush_events.append(dict(f or {}))
+                seeded_since_flush = 0
+                if wait_for_idle:
+                    post_wait = _drain_async_until_idle(
+                        timeout_ms=idle_timeout_ms,
+                        poll_ms=idle_poll_ms,
+                        max_compaction=max_compaction_per_pass,
+                        max_side_effects=max_side_effects_per_pass,
+                    )
+                    queue_waits.append({"turn": idx, "after_flush": True, **post_wait})
+                    if not bool(post_wait.get("idle")):
+                        errors.append({
+                            "index": idx,
+                            "user_query": user_query[:160],
+                            "error": "queue_not_idle_timeout_after_flush",
+                            "details": {
+                                "elapsed_ms": post_wait.get("elapsed_ms"),
+                                "passes": post_wait.get("passes"),
+                                "pending_total": ((post_wait.get("status") or {}).get("pending_total")),
+                            },
+                        })
+                        break
         except Exception as exc:
             errors.append({"index": idx, "user_query": user_query[:160], "error": str(exc)})
+
+    final_queue = async_jobs_status(root=settings.core_memory_root)
 
     return {
         "ok": seeded > 0 and not errors,
@@ -263,6 +404,18 @@ async def seed_demo_history(*, messages: list[Any] | None = None, max_turns: int
         "failed_turns": len(errors),
         "errors": errors[:20],
         "mode": "chat_replay",
+        "wait_for_idle": bool(wait_for_idle),
+        "queue_idle": bool(_queue_idle(final_queue)),
+        "queue": final_queue,
+        "queue_wait_checks": queue_waits[-20:],
+        "auto_flush": bool(auto_flush),
+        "flush_count": len(flush_events),
+        "flushes": flush_events[-20:],
+        "session": {
+            "session_id": SESSION.session_id,
+            "token_usage": SESSION.token_usage,
+            "context_budget": SESSION.context_budget,
+        },
     }
 
 
