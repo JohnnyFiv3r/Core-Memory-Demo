@@ -68,9 +68,15 @@ DEFAULT_SEED_USER_MESSAGES: list[str] = [
     "Why FastAPI?",
 ]
 
+# Demo defaults to keep claim/association surfaces active unless explicitly overridden.
+os.environ.setdefault("CORE_MEMORY_CLAIM_LAYER", "1")
+os.environ.setdefault("CORE_MEMORY_CLAIM_EXTRACTION_MODE", "heuristic")
+os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_PROMOTION", "1")
+
 STORY_PACK_DIR = Path(__file__).resolve().parents[3] / "demo" / "story-pack"
 TURN_HEADER_RE = re.compile(r"^##\s*Turn\s+(\d{3})\s*:\s*(.+?)\s*$", re.MULTILINE)
 SEND_PROMPT_RE = re.compile(r"^\*\*Send:\*\*\s*`([^`]+)`\s*$", re.MULTILINE)
+ENTITY_CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9._-]{2,}|[A-Z]{2,}[A-Za-z0-9._-]*)\b")
 
 
 def _load_story_pack_bundle(*, pack_dir: Path | None = None) -> dict[str, Any]:
@@ -347,6 +353,52 @@ def record_turn_tokens(user_query: str, assistant_response: str) -> None:
     SESSION.token_usage += (turn_text + 500) // 4
 
 
+def _heuristic_entities(*texts: str, limit: int = 16) -> list[str]:
+    seen: set[str] = set()
+    out: list[str] = []
+    stop = {
+        "Before", "Show", "Open", "Record", "Add", "Explain", "What", "When", "Where", "Which", "Why", "How",
+        "Turn", "Act", "Graph", "Claims", "Entities", "Runtime", "Benchmark", "Send", "Point", "Say",
+    }
+    for raw in texts:
+        text = str(raw or "")
+        if not text:
+            continue
+        for m in ENTITY_CANDIDATE_RE.finditer(text):
+            token = str(m.group(1) or "").strip().strip(".,:;!?()[]{}\"'")
+            if len(token) < 3:
+                continue
+            if token in stop:
+                continue
+            key = token.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(token)
+            if len(out) >= max(1, int(limit)):
+                return out
+    return out
+
+
+def _seed_crawler_updates(*, user_query: str, turn_id: str) -> dict[str, Any]:
+    uq = str(user_query or "").strip()
+    entities = _heuristic_entities(uq)
+    title = (uq or "Turn memory").splitlines()[0][:160]
+    return {
+        "beads_create": [
+            {
+                "type": "context",
+                "title": title or "Turn memory",
+                "summary": [uq[:240]] if uq else ["turn memory"],
+                "because": [uq[:240]] if uq else [],
+                "source_turn_ids": [str(turn_id or "")],
+                "entities": entities,
+                "tags": ["demo_seed", "crawler_reviewed", "turn_finalized"],
+            }
+        ]
+    }
+
+
 def _build_fallback_answer(message: str, retrieval: dict[str, Any] | None = None) -> str:
     out = dict(retrieval or {})
     results = list(out.get("results") or [])
@@ -374,6 +426,11 @@ async def run_chat(message: str) -> dict[str, Any]:
     global LAST_TURN_DIAGNOSTICS
     turn_id = uuid.uuid4().hex[:12]
     fallback_error = ""
+    seed_updates = _seed_crawler_updates(user_query=message, turn_id=turn_id)
+    turn_metadata = {
+        "source": "core_memory_demo_backend",
+        "crawler_updates": seed_updates,
+    }
 
     try:
         agent = get_agent()
@@ -383,6 +440,7 @@ async def run_chat(message: str) -> dict[str, Any]:
             root=settings.core_memory_root,
             session_id=SESSION.session_id,
             turn_id=turn_id,
+            metadata=turn_metadata,
         )
         answer = str(getattr(result, "output", None) or getattr(result, "data", None) or result)
     except Exception as exc:
@@ -403,6 +461,7 @@ async def run_chat(message: str) -> dict[str, Any]:
                 "fallback": True,
                 "fallback_error": fallback_error,
                 "source": "core_memory_demo_backend",
+                "crawler_updates": seed_updates,
             },
         )
 
