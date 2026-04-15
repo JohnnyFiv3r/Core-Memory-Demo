@@ -441,6 +441,175 @@ def _bead_entities(bead: dict[str, Any]) -> set[str]:
     return out
 
 
+def _bead_text(bead: dict[str, Any]) -> str:
+    parts: list[str] = []
+    for key in ("title", "detail"):
+        val = str((bead or {}).get(key) or "").strip()
+        if val:
+            parts.append(val)
+    for key in ("summary", "because", "retrieval_facts"):
+        vals = list((bead or {}).get(key) or [])
+        for v in vals:
+            s = str(v or "").strip()
+            if s:
+                parts.append(s)
+    return "\n".join(parts)
+
+
+_ASSOC_STOPWORDS = {
+    "the", "and", "for", "with", "that", "this", "from", "into", "your", "our", "their",
+    "were", "was", "have", "has", "had", "will", "would", "should", "could", "can", "cant",
+    "about", "after", "before", "then", "than", "because", "there", "here", "when", "where",
+    "what", "which", "who", "whom", "whose", "why", "how", "turn", "main", "session",
+}
+
+
+def _bead_tokens(bead: dict[str, Any], limit: int = 128) -> set[str]:
+    text = _bead_text(bead).lower()
+    out: set[str] = set()
+    for tok in re.findall(r"\b[a-z][a-z0-9_-]{2,}\b", text):
+        if tok in _ASSOC_STOPWORDS:
+            continue
+        out.add(tok)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def _session_turn_bead_ids(beads: dict[str, Any], *, session_id: str) -> list[str]:
+    rows: list[dict[str, Any]] = []
+    for b in beads.values():
+        if not isinstance(b, dict):
+            continue
+        if str(b.get("session_id") or "") != str(session_id):
+            continue
+        if not list(b.get("source_turn_ids") or []):
+            continue
+        rows.append(b)
+    rows.sort(key=lambda x: str((x or {}).get("created_at") or ""))
+    return [str((r or {}).get("id") or "") for r in rows if str((r or {}).get("id") or "")]
+
+
+def _cue_flags(text: str) -> dict[str, bool]:
+    t = str(text or "").lower()
+    return {
+        "support": bool(any(x in t for x in ["because", "evidence", "supports", "proof", "confirmed", "validated"])),
+        "supersede": bool(any(x in t for x in ["supersede", "superseded", "replaced", "instead of", "no longer use"])),
+        "contradict": bool(any(x in t for x in ["contradict", "conflict", "wrong", "not true", "incorrect", "no longer"])),
+        "caused_by": bool(any(x in t for x in ["because of", "due to", "caused by"])),
+        "enables": bool(any(x in t for x in ["enables", "allows", "lets us", "made possible"])),
+        "unblocks": bool(any(x in t for x in ["unblock", "unblocked", "resolved blocker", "not blocked"])),
+        "blocked_by": bool(any(x in t for x in ["blocked by", "blocking", "cannot proceed", "stuck on"])),
+    }
+
+
+def _proof_links_for_turn(*, current_id: str, ordered_ids: list[str], beads: dict[str, Any], max_links: int = 14) -> tuple[list[dict[str, Any]], list[str]]:
+    current = dict(beads.get(str(current_id)) or {})
+    if not current:
+        return [], []
+
+    if str(current_id) not in ordered_ids:
+        return [], []
+    pos = ordered_ids.index(str(current_id))
+    prior_ids = list(reversed(ordered_ids[:pos]))
+
+    current_entities = _bead_entities(current)
+    current_tokens = _bead_tokens(current)
+    current_text = _bead_text(current)
+    flags = _cue_flags(current_text)
+
+    dedupe: set[tuple[str, str, str]] = set()
+    links: list[dict[str, Any]] = []
+    referenced_ids: set[str] = {str(current_id)}
+
+    if prior_ids:
+        prev = prior_ids[0]
+        key = (str(current_id), str(prev), "follows")
+        dedupe.add(key)
+        links.append(
+            {
+                "source_bead_id": str(current_id),
+                "target_bead_id": str(prev),
+                "relationship": "follows",
+                "confidence": 0.62,
+                "reason_text": "demo turn temporal adjacency",
+                "provenance": "demo_seed",
+            }
+        )
+        referenced_ids.add(str(prev))
+
+    for target_id in prior_ids[:40]:
+        if len(links) >= max(1, int(max_links)):
+            break
+        target = dict(beads.get(str(target_id)) or {})
+        if not target:
+            continue
+
+        shared_entities = sorted(current_entities.intersection(_bead_entities(target)))
+        shared_terms = sorted(current_tokens.intersection(_bead_tokens(target)))
+        if not shared_entities and len(shared_terms) < 3:
+            continue
+
+        evidence_parts: list[str] = []
+        if shared_entities:
+            evidence_parts.append("shared entities: " + ", ".join(shared_entities[:3]))
+        if len(shared_terms) >= 3:
+            evidence_parts.append("shared terms: " + ", ".join(shared_terms[:4]))
+        reason = "; ".join(evidence_parts)[:300]
+        if not reason:
+            continue
+
+        relation_order: list[str] = []
+        if shared_entities:
+            relation_order.append("derived_from")
+        if flags.get("support") and (shared_entities or len(shared_terms) >= 3):
+            relation_order.append("supports")
+        if flags.get("supersede") and (shared_entities or len(shared_terms) >= 3):
+            relation_order.append("supersedes")
+        if flags.get("contradict") and (shared_entities or len(shared_terms) >= 3):
+            relation_order.append("contradicts")
+        if flags.get("caused_by") and (shared_entities or len(shared_terms) >= 3):
+            relation_order.append("caused_by")
+        if flags.get("enables") and (shared_entities or len(shared_terms) >= 3):
+            relation_order.append("enables")
+        if flags.get("unblocks") and (shared_entities or len(shared_terms) >= 3):
+            relation_order.append("unblocks")
+        if flags.get("blocked_by") and (shared_entities or len(shared_terms) >= 3):
+            relation_order.append("blocked_by")
+
+        if not relation_order:
+            continue
+
+        for rel in relation_order:
+            if len(links) >= max(1, int(max_links)):
+                break
+            key = (str(current_id), str(target_id), str(rel))
+            if key in dedupe:
+                continue
+            dedupe.add(key)
+
+            conf = 0.54
+            conf += min(0.18, 0.06 * float(len(shared_entities)))
+            conf += min(0.12, 0.03 * float(max(0, len(shared_terms) - 2)))
+            if rel != "derived_from":
+                conf += 0.06
+            conf = max(0.3, min(0.95, conf))
+
+            links.append(
+                {
+                    "source_bead_id": str(current_id),
+                    "target_bead_id": str(target_id),
+                    "relationship": rel,
+                    "confidence": round(conf, 3),
+                    "reason_text": reason,
+                    "provenance": "demo_seed",
+                }
+            )
+            referenced_ids.add(str(target_id))
+
+    return links, sorted(referenced_ids)
+
+
 def _latest_turn_bead_id_for_turn(*, root: str, session_id: str, turn_id: str) -> str:
     idx_path = Path(root) / ".beads" / "index.json"
     if not idx_path.exists():
@@ -516,14 +685,6 @@ def _link_turn_temporal_association(*, turn_id: str) -> dict[str, Any]:
     if not current_bead_id:
         return {"ok": False, "reason": "current_turn_bead_not_found"}
 
-    previous_bead_id = _previous_session_turn_bead_id(
-        root=settings.core_memory_root,
-        session_id=SESSION.session_id,
-        current_bead_id=current_bead_id,
-    )
-    if not previous_bead_id or previous_bead_id == current_bead_id:
-        return {"ok": True, "linked": False, "reason": "no_previous_turn_bead"}
-
     idx_path = Path(settings.core_memory_root) / ".beads" / "index.json"
     beads = {}
     if idx_path.exists():
@@ -533,46 +694,47 @@ def _link_turn_temporal_association(*, turn_id: str) -> dict[str, Any]:
         except Exception:
             beads = {}
 
-    current_bead = dict(beads.get(str(current_bead_id)) or {})
-    previous_bead = dict(beads.get(str(previous_bead_id)) or {})
-
-    associations = [
-        {
-            "source_bead_id": str(current_bead_id),
-            "target_bead_id": str(previous_bead_id),
-            "relationship": "follows",
-            "confidence": 0.6,
-            "reason_text": "demo turn temporal adjacency",
-            "provenance": "demo_seed",
-        }
-    ]
-
-    shared_entities = sorted(_bead_entities(current_bead).intersection(_bead_entities(previous_bead)))
-    if shared_entities:
-        associations.append(
-            {
-                "source_bead_id": str(current_bead_id),
-                "target_bead_id": str(previous_bead_id),
-                "relationship": "derived_from",
-                "confidence": 0.55,
-                "reason_text": "shared entities: " + ", ".join(shared_entities[:3]),
-                "provenance": "demo_seed",
-            }
-        )
+    ordered_ids = _session_turn_bead_ids(beads, session_id=SESSION.session_id)
+    associations, referenced_ids = _proof_links_for_turn(
+        current_id=current_bead_id,
+        ordered_ids=ordered_ids,
+        beads=beads,
+        max_links=14,
+    )
+    if not associations:
+        return {"ok": True, "linked": False, "reason": "no_proven_links"}
 
     out = run_association_pass(
         root=settings.core_memory_root,
         session_id=SESSION.session_id,
-        updates={"associations": associations},
-        visible_bead_ids=[str(previous_bead_id), str(current_bead_id)],
+        updates={
+            "association_scope": "historical_session",
+            "associations": associations,
+        },
+        visible_bead_ids=list(referenced_ids),
     )
     merged = merge_crawler_updates(root=settings.core_memory_root, session_id=SESSION.session_id)
+
+    relationship_counts: dict[str, int] = {}
+    for row in associations:
+        rel = str((row or {}).get("relationship") or "")
+        if not rel:
+            continue
+        relationship_counts[rel] = int(relationship_counts.get(rel) or 0) + 1
+
+    previous_bead_id = _previous_session_turn_bead_id(
+        root=settings.core_memory_root,
+        session_id=SESSION.session_id,
+        current_bead_id=current_bead_id,
+    )
+
     return {
         "ok": bool(out.get("ok", True)),
         "linked": int(out.get("associations_appended") or 0) > 0,
         "current_bead_id": str(current_bead_id),
         "previous_bead_id": str(previous_bead_id),
-        "shared_entities": shared_entities[:6],
+        "proven_link_candidates": int(len(associations)),
+        "relationship_counts": relationship_counts,
         "associations_appended": int(out.get("associations_appended") or 0),
         "merge_associations_appended": int(merged.get("associations_appended") or 0),
     }
