@@ -34,6 +34,8 @@ from core_memory.integrations.pydanticai.run import run_with_memory
 from core_memory.retrieval.tools import memory as memory_tools
 from core_memory.runtime.engine import process_flush, process_turn_finalized
 from core_memory.runtime.jobs import async_jobs_status, run_async_jobs
+from core_memory.runtime.association_pass import run_association_pass
+from core_memory.association.crawler_contract import merge_crawler_updates
 from core_memory.write_pipeline.continuity_injection import load_continuity_injection
 
 from app.core.config import settings
@@ -72,6 +74,7 @@ DEFAULT_SEED_USER_MESSAGES: list[str] = [
 os.environ.setdefault("CORE_MEMORY_CLAIM_LAYER", "1")
 os.environ.setdefault("CORE_MEMORY_CLAIM_EXTRACTION_MODE", "heuristic")
 os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_PROMOTION", "1")
+os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_ALLOW_SHARED_TAG", "1")
 
 STORY_PACK_DIR = Path(__file__).resolve().parents[3] / "demo" / "story-pack"
 TURN_HEADER_RE = re.compile(r"^##\s*Turn\s+(\d{3})\s*:\s*(.+?)\s*$", re.MULTILINE)
@@ -399,6 +402,117 @@ def _seed_crawler_updates(*, user_query: str, turn_id: str) -> dict[str, Any]:
     }
 
 
+def _latest_turn_bead_id_for_turn(*, root: str, session_id: str, turn_id: str) -> str:
+    idx_path = Path(root) / ".beads" / "index.json"
+    if not idx_path.exists():
+        return ""
+    try:
+        payload = json.loads(idx_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+
+    beads = dict((payload.get("beads") or {})) if isinstance(payload, dict) else {}
+    candidates: list[dict[str, Any]] = []
+    for bead in beads.values():
+        if not isinstance(bead, dict):
+            continue
+        if str(bead.get("session_id") or "") != str(session_id):
+            continue
+        source_turn_ids = [str(x) for x in (bead.get("source_turn_ids") or []) if str(x)]
+        if str(turn_id) not in source_turn_ids:
+            continue
+        candidates.append(bead)
+
+    if not candidates:
+        return ""
+
+    candidates.sort(key=lambda b: str((b or {}).get("created_at") or ""), reverse=True)
+    return str((candidates[0] or {}).get("id") or "")
+
+
+def _previous_session_turn_bead_id(*, root: str, session_id: str, current_bead_id: str) -> str:
+    idx_path = Path(root) / ".beads" / "index.json"
+    if not idx_path.exists():
+        return ""
+    try:
+        payload = json.loads(idx_path.read_text(encoding="utf-8"))
+    except Exception:
+        return ""
+
+    beads = dict((payload.get("beads") or {})) if isinstance(payload, dict) else {}
+    rows: list[dict[str, Any]] = []
+    for bead in beads.values():
+        if not isinstance(bead, dict):
+            continue
+        if str(bead.get("session_id") or "") != str(session_id):
+            continue
+        if not list(bead.get("source_turn_ids") or []):
+            continue
+        rows.append(bead)
+
+    if not rows:
+        return ""
+
+    rows.sort(key=lambda b: str((b or {}).get("created_at") or ""))
+    ids = [str((b or {}).get("id") or "") for b in rows if str((b or {}).get("id") or "")]
+    if not ids:
+        return ""
+
+    current = str(current_bead_id or "").strip()
+    if current and current in ids:
+        pos = ids.index(current)
+        if pos > 0:
+            return ids[pos - 1]
+    if len(ids) >= 2:
+        return ids[-2]
+    return ""
+
+
+def _link_turn_temporal_association(*, turn_id: str) -> dict[str, Any]:
+    current_bead_id = _latest_turn_bead_id_for_turn(
+        root=settings.core_memory_root,
+        session_id=SESSION.session_id,
+        turn_id=turn_id,
+    )
+    if not current_bead_id:
+        return {"ok": False, "reason": "current_turn_bead_not_found"}
+
+    previous_bead_id = _previous_session_turn_bead_id(
+        root=settings.core_memory_root,
+        session_id=SESSION.session_id,
+        current_bead_id=current_bead_id,
+    )
+    if not previous_bead_id or previous_bead_id == current_bead_id:
+        return {"ok": True, "linked": False, "reason": "no_previous_turn_bead"}
+
+    out = run_association_pass(
+        root=settings.core_memory_root,
+        session_id=SESSION.session_id,
+        updates={
+            "associations": [
+                {
+                    "source_bead_id": str(current_bead_id),
+                    "target_bead_id": str(previous_bead_id),
+                    "relationship": "follows",
+                    "confidence": 0.6,
+                    "reason_text": "demo turn temporal adjacency",
+                    "provenance": "demo_seed",
+                }
+            ]
+        },
+        visible_bead_ids=[str(previous_bead_id), str(current_bead_id)],
+    )
+    merged = merge_crawler_updates(root=settings.core_memory_root, session_id=SESSION.session_id)
+    return {
+        "ok": bool(out.get("ok", True)),
+        "linked": int(out.get("associations_appended") or 0) > 0,
+        "current_bead_id": str(current_bead_id),
+        "previous_bead_id": str(previous_bead_id),
+        "associations_appended": int(out.get("associations_appended") or 0),
+        "merge_associations_appended": int(merged.get("associations_appended") or 0),
+    }
+
+
 def _build_fallback_answer(message: str, retrieval: dict[str, Any] | None = None) -> str:
     out = dict(retrieval or {})
     results = list(out.get("results") or [])
@@ -465,6 +579,12 @@ async def run_chat(message: str) -> dict[str, Any]:
             },
         )
 
+    association_linking: dict[str, Any] = {}
+    try:
+        association_linking = _link_turn_temporal_association(turn_id=turn_id)
+    except Exception as exc:
+        association_linking = {"ok": False, "error": str(exc or "association_link_failed")}
+
     record_turn_tokens(message, answer)
 
     req = {"query": message, "intent": "remember", "k": 8}
@@ -484,6 +604,7 @@ async def run_chat(message: str) -> dict[str, Any]:
             "warnings": list(retrieval.get("warnings") or []),
             "fallback_mode": bool(fallback_error),
             "fallback_error": fallback_error,
+            "association_linking": association_linking,
         },
     }
 
