@@ -165,9 +165,17 @@
   }
 
   .inspector-tabs {
-    display: flex; align-items: center; gap: 8px;
+    display: flex; flex-direction: column; align-items: stretch; gap: 6px;
     border-bottom: 1px solid var(--border); background: var(--surface2);
     padding: 8px 10px;
+  }
+
+  .control-panel-title {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--font);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
   }
 
   .tab-selector {
@@ -485,7 +493,7 @@
 
   <div class="inspector">
     <div class="inspector-tabs">
-      <span class="control-label" style="margin-right:0">panel</span>
+      <div class="control-panel-title">Control Panel</div>
       <select id="tab-selector" class="tab-selector" onchange="switchTab(this.value)">
         <option value="beads" selected>Beads</option>
         <option value="associations">Associations</option>
