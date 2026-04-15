@@ -90,6 +90,19 @@
     cursor: pointer;
   }
   button:hover { border-color: var(--accent); }
+  .controls a.nav-btn {
+    display: inline-block;
+    background: var(--surface2);
+    color: var(--text);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    cursor: pointer;
+    text-decoration: none;
+    line-height: 1.2;
+  }
+  .controls a.nav-btn:hover { border-color: var(--accent); }
   .layout {
     display: grid;
     grid-template-columns: minmax(0, 1fr) 360px;
@@ -151,7 +164,7 @@
       <label><input id="auto-refresh" type="checkbox" checked /> auto</label>
       <button id="refresh-btn" type="button">Refresh</button>
       <button id="fit-btn" type="button">Fit</button>
-      <button id="open-demo-btn" type="button" onclick="goBackToDemo()">Back to Demo</button>
+      <a id="open-demo-btn" class="nav-btn" href="./">Back to Demo</a>
     </div>
   </header>
   <div class="layout">
@@ -173,7 +186,6 @@ const searchFilterEl = document.getElementById('search-filter');
 const autoRefreshEl = document.getElementById('auto-refresh');
 const refreshBtn = document.getElementById('refresh-btn');
 const fitBtn = document.getElementById('fit-btn');
-const openDemoBtn = document.getElementById('open-demo-btn');
 
 let runtime = null;
 let runtimeError = null;
@@ -183,12 +195,6 @@ let beads = [];
 let associations = [];
 let refreshTimer = null;
 let lastGraph = { nodes: [], edges: [] };
-
-function goBackToDemo() {
-  const abs = new URL('./', window.location.href).toString();
-  window.location.assign(abs);
-}
-window.goBackToDemo = goBackToDemo;
 
 const theme = {
   canvas: { background: '#060a16' },
@@ -308,6 +314,23 @@ function buildGraphData() {
     degree[e.source] = Number(degree[e.source] || 0) + 1;
     degree[e.target] = Number(degree[e.target] || 0) + 1;
   });
+
+  if (!ids.size) {
+    const beadRows = Array.isArray(beads) ? beads : [];
+    const candidates = beadRows.filter((b) => {
+      const id = String((b || {}).id || '').trim();
+      if (!id) return false;
+      if (!search) return true;
+      const hay = [String((b || {}).title || ''), String((b || {}).type || ''), String((b || {}).status || '')].join(' ').toLowerCase();
+      return hay.includes(search);
+    });
+    candidates.slice(0, 180).forEach((b) => {
+      const id = String((b || {}).id || '').trim();
+      if (!id) return;
+      ids.add(id);
+      degree[id] = Number(degree[id] || 0);
+    });
+  }
 
   const nodes = Array.from(ids).map((id) => {
     const bead = beadMap[id] || {};
@@ -538,10 +561,6 @@ fitBtn.addEventListener('click', () => {
     }
     renderGraphSvg(lastGraph);
   } catch (_) {}
-});
-
-openDemoBtn.addEventListener('click', () => {
-  goBackToDemo();
 });
 
 [relFilterEl, confFilterEl, searchFilterEl].forEach((el) => {
