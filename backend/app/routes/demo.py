@@ -113,9 +113,15 @@ def flush():
 
 
 @router.post('/seed')
-def seed():
+async def seed(request: Request):
+    body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
+    messages = (body or {}).get('messages')
+    max_turns_raw = (body or {}).get('max_turns')
+    max_turns = None
+    if isinstance(max_turns_raw, int) and max_turns_raw > 0:
+        max_turns = int(max_turns_raw)
     try:
-        out = seed_demo_history()
+        out = await seed_demo_history(messages=messages if isinstance(messages, list) else None, max_turns=max_turns)
         state = inspect_state_payload()
         out['stats'] = state.get('stats') or {}
         return out
@@ -220,4 +226,3 @@ async def merge_decide(request: Request):
         return JSONResponse({'ok': bool(out.get('ok')), **dict(out or {})}, status_code=status)
     except Exception as exc:
         return {'ok': False, 'error': str(exc)}
-

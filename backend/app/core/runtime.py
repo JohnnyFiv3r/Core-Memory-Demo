@@ -3,7 +3,6 @@ from __future__ import annotations
 import json
 import os
 import shutil
-import tempfile
 import uuid
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -56,6 +55,14 @@ LAST_TURN_DIAGNOSTICS: dict[str, Any] = {}
 LAST_BENCHMARK_REPORT: dict[str, Any] = {}
 LAST_BENCHMARK_SUMMARY: dict[str, Any] = {}
 LAST_BENCHMARK_HISTORY: list[dict[str, Any]] = []
+
+DEFAULT_SEED_USER_MESSAGES: list[str] = [
+    "Should we use MySQL or PostgreSQL for JSON-heavy service?",
+    "What lesson did we learn?",
+    "What evidence supports the DB decision?",
+    "What project goal is pending?",
+    "Why FastAPI?",
+]
 
 
 def detect_model() -> str:
@@ -219,27 +226,44 @@ def run_flush() -> dict[str, Any]:
     }
 
 
-def seed_demo_history() -> dict[str, Any]:
-    seed_turns = [
-        ("seed-001", "Should we use MySQL or PostgreSQL for JSON-heavy service?", "Decision: choose PostgreSQL due to JSONB benchmark wins."),
-        ("seed-002", "What lesson did we learn?", "Lesson: benchmark representative workload first."),
-        ("seed-003", "What evidence supports the DB decision?", "Evidence: pgbench/sysbench showed PostgreSQL around 2x faster for JSON-heavy queries."),
-        ("seed-004", "What project goal is pending?", "Goal: migrate auth to OAuth2 by end of Q2."),
-        ("seed-005", "Why FastAPI?", "Decision: FastAPI for async-first I/O and native validation."),
-    ]
-    for i, (turn_id, user_q, assistant_f) in enumerate(seed_turns, start=1):
-        process_turn_finalized(
-            root=settings.core_memory_root,
-            session_id="seed-history",
-            turn_id=turn_id,
-            transaction_id=f"seed-tx-{i:03d}",
-            trace_id=f"seed-tr-{i:03d}",
-            user_query=user_q,
-            assistant_final=assistant_f,
-            origin="DEMO_SEED",
-            metadata={"source": "demo_seed", "seed": True},
-        )
-    return {"ok": True, "seeded": len(seed_turns)}
+def _normalize_seed_messages(messages: list[Any] | None) -> list[str]:
+    rows = list(messages or [])
+    out: list[str] = []
+    for x in rows:
+        s = str(x or "").strip()
+        if s:
+            out.append(s)
+    return out
+
+
+async def seed_demo_history(*, messages: list[Any] | None = None, max_turns: int | None = None) -> dict[str, Any]:
+    prompts = _normalize_seed_messages(messages)
+    if not prompts:
+        prompts = list(DEFAULT_SEED_USER_MESSAGES)
+
+    target = len(prompts)
+    if isinstance(max_turns, int) and max_turns > 0:
+        target = min(target, max_turns)
+
+    seeded = 0
+    errors: list[dict[str, Any]] = []
+
+    for idx, user_query in enumerate(prompts[:target], start=1):
+        try:
+            await run_chat(user_query)
+            seeded += 1
+        except Exception as exc:
+            errors.append({"index": idx, "user_query": user_query[:160], "error": str(exc)})
+
+    return {
+        "ok": seeded > 0 and not errors,
+        "seeded": seeded,
+        "seeded_turns": seeded,
+        "requested_turns": target,
+        "failed_turns": len(errors),
+        "errors": errors[:20],
+        "mode": "chat_replay",
+    }
 
 
 @contextmanager
@@ -307,7 +331,7 @@ def _copy_tree(src: Path, dst: Path) -> None:
             shutil.copy2(child, target)
 
 
-def _build_preload_turns_file_from_live(*, max_turns: int = 200) -> str:
+def _load_preload_turns_from_live(*, max_turns: int = 200) -> list[dict[str, str]]:
     rows: list[dict[str, Any]] = []
     cursor: str | None = None
     target = max(1, int(max_turns))
@@ -341,12 +365,7 @@ def _build_preload_turns_file_from_live(*, max_turns: int = 200) -> str:
         if not cursor:
             break
 
-    if not rows:
-        return ""
-    fd, path = tempfile.mkstemp(prefix="demo-preload-", suffix=".jsonl")
-    os.close(fd)
-    Path(path).write_text("".join(json.dumps(r, ensure_ascii=False) + "\n" for r in rows[:target]), encoding="utf-8")
-    return path
+    return [dict(x or {}) for x in rows[:target]]
 
 
 def _benchmark_cases() -> list[dict[str, Any]]:
@@ -368,110 +387,104 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
     if str(root_mode or "snapshot") == "snapshot":
         _copy_tree(Path(settings.core_memory_root), run_root)
 
-    preload_file = ""
-    try:
-        if preload_from_demo:
-            preload_file = _build_preload_turns_file_from_live(max_turns=preload_turns_max)
-            if preload_file:
-                for line in Path(preload_file).read_text(encoding="utf-8").splitlines():
-                    rec = json.loads(line)
-                    process_turn_finalized(
-                        root=str(run_root),
-                        session_id=str(rec.get("session_id") or "bench"),
-                        turn_id=str(rec.get("turn_id") or uuid.uuid4().hex[:10]),
-                        transaction_id=f"bench-preload-{uuid.uuid4().hex[:8]}",
-                        trace_id=f"bench-preload-{uuid.uuid4().hex[:8]}",
-                        user_query=str(rec.get("user_query") or ""),
-                        assistant_final=str(rec.get("assistant_final") or ""),
-                        origin="BENCH_PRELOAD",
-                        metadata={"source": "demo_preload"},
-                    )
+    preloaded_rows: list[dict[str, Any]] = []
+    if preload_from_demo:
+        preloaded_rows = _load_preload_turns_from_live(max_turns=preload_turns_max)
+        for rec in preloaded_rows:
+            process_turn_finalized(
+                root=str(run_root),
+                session_id=str(rec.get("session_id") or "bench"),
+                turn_id=str(rec.get("turn_id") or uuid.uuid4().hex[:10]),
+                transaction_id=f"bench-preload-{uuid.uuid4().hex[:8]}",
+                trace_id=f"bench-preload-{uuid.uuid4().hex[:8]}",
+                user_query=str(rec.get("user_query") or ""),
+                assistant_final=str(rec.get("assistant_final") or ""),
+                origin="BENCH_PRELOAD",
+                metadata={"source": "demo_preload"},
+            )
 
-        rows = _benchmark_cases()
-        if isinstance(limit, int) and limit > 0:
-            rows = rows[:limit]
+    rows = _benchmark_cases()
+    if isinstance(limit, int) and limit > 0:
+        rows = rows[:limit]
 
-        per_case: list[dict[str, Any]] = []
-        passes = 0
-        with semantic_mode(semantic_mode_name):
-            for c in rows:
-                result = memory_tools.execute({"query": c["query"], "intent": "remember", "k": 8}, root=str(run_root), explain=False)
-                results = list(result.get("results") or [])
-                text_blob = " ".join(
-                    [
-                        str((r.get("title") or "")).lower() + " " + str((r.get("summary") or "")).lower()
-                        for r in results
-                    ]
-                )
-                ok = str(c["expect"]).lower() in text_blob
-                if ok:
-                    passes += 1
-                per_case.append(
-                    {
-                        "case_id": c["case_id"],
-                        "query": c["query"],
-                        "expected": c["expect"],
-                        "pass": bool(ok),
-                        "result_count": len(results),
-                        "warnings": list(result.get("warnings") or []),
-                        "backend": str(result.get("backend") or "unknown"),
-                    }
-                )
-
-        total = len(per_case)
-        fail = max(0, total - passes)
-        summary = {
-            "run_id": run_id,
-            "started_at": started,
-            "finished_at": _utc_now_iso(),
-            "cases": total,
-            "pass": passes,
-            "fail": fail,
-            "accuracy": (passes / total) if total else 0.0,
-            "semantic_mode": semantic_mode_name,
-            "root_mode": root_mode,
-            "isolated_root": str(run_root),
-            "isolated_run": True,
-            "preload_turn_count": preload_turns_max if preload_from_demo else 0,
-            "backend_modes": sorted(set(str(x.get("backend") or "unknown") for x in per_case)),
-            "warnings": [],
-        }
-        report = {
-            "totals": {"cases": total, "pass": passes, "fail": fail, "accuracy": summary["accuracy"]},
-            "metadata": {
-                "run_id": run_id,
-                "semantic_mode": semantic_mode_name,
-                "benchmark_backend_modes": summary["backend_modes"],
-                "preload_turn_count": summary["preload_turn_count"],
-                "root_mode": root_mode,
-            },
-            "cases": per_case,
-            "per_bucket": {
-                "overall": {
-                    "cases": total,
-                    "pass": passes,
-                    "fail": fail,
-                    "accuracy": summary["accuracy"],
+    per_case: list[dict[str, Any]] = []
+    passes = 0
+    with semantic_mode(semantic_mode_name):
+        for c in rows:
+            result = memory_tools.execute({"query": c["query"], "intent": "remember", "k": 8}, root=str(run_root), explain=False)
+            results = list(result.get("results") or [])
+            text_blob = " ".join(
+                [
+                    str((r.get("title") or "")).lower() + " " + str((r.get("summary") or "")).lower()
+                    for r in results
+                ]
+            )
+            ok = str(c["expect"]).lower() in text_blob
+            if ok:
+                passes += 1
+            per_case.append(
+                {
+                    "case_id": c["case_id"],
+                    "query": c["query"],
+                    "expected": c["expect"],
+                    "pass": bool(ok),
+                    "result_count": len(results),
+                    "warnings": list(result.get("warnings") or []),
+                    "backend": str(result.get("backend") or "unknown"),
                 }
-            },
-        }
+            )
 
-        LAST_BENCHMARK_SUMMARY = dict(summary)
-        LAST_BENCHMARK_REPORT = dict(report)
-
-        history_row = {
+    total = len(per_case)
+    fail = max(0, total - passes)
+    summary = {
+        "run_id": run_id,
+        "started_at": started,
+        "finished_at": _utc_now_iso(),
+        "cases": total,
+        "pass": passes,
+        "fail": fail,
+        "accuracy": (passes / total) if total else 0.0,
+        "semantic_mode": semantic_mode_name,
+        "root_mode": root_mode,
+        "isolated_root": str(run_root),
+        "isolated_run": True,
+        "preload_turn_count": int(len(preloaded_rows)),
+        "backend_modes": sorted(set(str(x.get("backend") or "unknown") for x in per_case)),
+        "warnings": [],
+    }
+    report = {
+        "totals": {"cases": total, "pass": passes, "fail": fail, "accuracy": summary["accuracy"]},
+        "metadata": {
             "run_id": run_id,
-            "created_at": summary["finished_at"],
-            "summary": dict(summary),
-            "report": dict(report),
-        }
-        LAST_BENCHMARK_HISTORY = ([history_row] + list(LAST_BENCHMARK_HISTORY or []))[:100]
-        _append_history(history_row)
+            "semantic_mode": semantic_mode_name,
+            "benchmark_backend_modes": summary["backend_modes"],
+            "preload_turn_count": summary["preload_turn_count"],
+            "root_mode": root_mode,
+        },
+        "cases": per_case,
+        "per_bucket": {
+            "overall": {
+                "cases": total,
+                "pass": passes,
+                "fail": fail,
+                "accuracy": summary["accuracy"],
+            }
+        },
+    }
 
-        return {"ok": True, "summary": summary, "report": report}
-    finally:
-        if preload_file:
-            Path(preload_file).unlink(missing_ok=True)
+    LAST_BENCHMARK_SUMMARY = dict(summary)
+    LAST_BENCHMARK_REPORT = dict(report)
+
+    history_row = {
+        "run_id": run_id,
+        "created_at": summary["finished_at"],
+        "summary": dict(summary),
+        "report": dict(report),
+    }
+    LAST_BENCHMARK_HISTORY = ([history_row] + list(LAST_BENCHMARK_HISTORY or []))[:100]
+    _append_history(history_row)
+
+    return {"ok": True, "summary": summary, "report": report}
 
 
 def compare_benchmark_runs(left_run_id: str, right_run_id: str) -> dict[str, Any]:

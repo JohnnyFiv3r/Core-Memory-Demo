@@ -1707,7 +1707,7 @@ async function seedMemory() {
   try {
     const res = await fetch('/api/seed', {method: 'POST'});
     const data = await res.json();
-    addMsg('system', 'Seeded ' + data.seeded + ' beads from project history');
+    addMsg('system', 'Seeded ' + data.seeded + ' turn(s) via chat replay');
     refreshMemory();
   } catch (err) {
     alert('Seed failed: ' + err.message);
