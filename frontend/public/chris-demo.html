@@ -116,6 +116,8 @@
     padding: 4px 10px;
     border-radius: 12px;
     border: 1px solid var(--border);
+    cursor: pointer !important;
+    user-select: none;
   }
 
   .session-badge-btn {
@@ -526,7 +528,7 @@
   <h1><span>Core Memory</span> Live Demo</h1>
   <div class="header-controls">
     <div class="session-chip-wrap">
-      <button class="session-badge session-badge-btn" id="session-badge" type="button" onclick="toggleSessionPopover(event)">session: --- ▾</button>
+      <button class="session-badge session-badge-btn" id="session-badge" type="button" style="cursor:pointer;user-select:none" onclick="toggleSessionPopover(event)">session: --- ▾</button>
       <div class="session-popover" id="session-popover" onclick="event.stopPropagation()">
         <div class="session-pop-title">Session Controls</div>
         <label class="session-pop-check" title="Resets session before each seed run so replay starts at turn 1 in a clean session.">
@@ -723,8 +725,17 @@ function bindSessionPopoverControls() {
   const badge = document.getElementById('session-badge');
   if (!badge) return;
   badge.style.cursor = 'pointer';
+  badge.style.userSelect = 'none';
+  badge.setAttribute('role', 'button');
+  badge.setAttribute('tabindex', '0');
   if (badge.__cmPopoverBound) return;
   badge.addEventListener('click', (e) => toggleSessionPopover(e));
+  badge.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter' || e.key === ' ') {
+      e.preventDefault();
+      toggleSessionPopover(e);
+    }
+  });
   badge.__cmPopoverBound = true;
 }
 
