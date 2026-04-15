@@ -323,8 +323,14 @@ def create_agent(model_id: str):
     agent = Agent(
         model_id,
         system_prompt=(
-            "You are a helpful project assistant. Use memory tools to ground answers. "
-            "Tool policy: execute first, search second, trace for causal requests."
+            "You are a helpful project assistant. You have access to the team's "
+            "persistent memory — decisions, lessons, goals, and context from prior "
+            "conversations. Use your memory tools proactively to ground your answers "
+            "in what the team has recorded. Be specific and cite what you find. "
+            "Tool policy: call execute_memory_request first for recall questions; "
+            "use search_memory as a secondary check; use trace_memory for "
+            "explicit causal trace questions. Do not claim memory is missing unless "
+            "both execute and search return no anchors/results."
         ),
         tools=[
             memory_execute_tool(root=settings.core_memory_root),
@@ -1214,19 +1220,21 @@ async def run_chat(message: str) -> dict[str, Any]:
 
     try:
         agent = get_agent()
-        result = await run_with_memory(
-            agent,
-            message,
-            root=settings.core_memory_root,
-            session_id=SESSION.session_id,
-            turn_id=turn_id,
-            metadata=turn_metadata,
-        )
+        with semantic_mode(str(os.getenv("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "degraded_allowed")):
+            result = await run_with_memory(
+                agent,
+                message,
+                root=settings.core_memory_root,
+                session_id=SESSION.session_id,
+                turn_id=turn_id,
+                metadata=turn_metadata,
+            )
         answer = str(getattr(result, "output", None) or getattr(result, "data", None) or result)
     except Exception as exc:
         err = str(exc or "").strip()
         fallback_error = err or "model_unavailable"
-        retrieval_preview = memory_tools.execute({"query": message, "intent": "remember", "k": 8}, root=settings.core_memory_root, explain=False)
+        with semantic_mode(str(os.getenv("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "degraded_allowed")):
+            retrieval_preview = memory_tools.execute({"query": message, "intent": "remember", "k": 8}, root=settings.core_memory_root, explain=False)
         answer = _build_fallback_answer(message, retrieval_preview)
         process_turn_finalized(
             root=settings.core_memory_root,
@@ -1254,7 +1262,8 @@ async def run_chat(message: str) -> dict[str, Any]:
     record_turn_tokens(message, answer)
 
     req = {"query": message, "intent": "remember", "k": 8}
-    retrieval = memory_tools.execute(req, root=settings.core_memory_root, explain=False)
+    with semantic_mode(str(os.getenv("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "degraded_allowed")):
+        retrieval = memory_tools.execute(req, root=settings.core_memory_root, explain=False)
     LAST_TURN_DIAGNOSTICS = {
         "ok": True,
         "turn_id": turn_id,
