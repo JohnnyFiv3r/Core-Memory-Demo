@@ -160,12 +160,11 @@
     </div>
   </div>
 
-<script type="module">
-import React from 'https://esm.sh/react@18.3.1';
-import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';
-import { GraphCanvas } from 'https://esm.sh/reagraph@4.30.8?bundle&deps=react@18.3.1,react-dom@18.3.1';
+<script>
+const REACT_ESM_SRC = 'https://esm.sh/react@18.3.1';
+const REACT_DOM_CLIENT_ESM_SRC = 'https://esm.sh/react-dom@18.3.1/client';
+const REAGRAPH_ESM_SRC = 'https://esm.sh/reagraph@4.30.8?bundle&deps=react@18.3.1,react-dom@18.3.1';
 
-const h = React.createElement;
 const host = document.getElementById('graph-host');
 const detailEl = document.getElementById('detail');
 const metaEl = document.getElementById('meta');
@@ -177,7 +176,10 @@ const refreshBtn = document.getElementById('refresh-btn');
 const fitBtn = document.getElementById('fit-btn');
 const openDemoBtn = document.getElementById('open-demo-btn');
 
-const graphRoot = createRoot(host);
+let runtimePromise = null;
+let ReactRuntime = null;
+let GraphCanvasRuntime = null;
+let graphRoot = null;
 let graphRef = null;
 let beads = [];
 let associations = [];
@@ -349,10 +351,36 @@ function showEdgeDetail(edge) {
   }, null, 2);
 }
 
+async function ensureRuntime() {
+  if (ReactRuntime && GraphCanvasRuntime && graphRoot) return;
+  if (!runtimePromise) {
+    runtimePromise = Promise.all([
+      import(REACT_ESM_SRC),
+      import(REACT_DOM_CLIENT_ESM_SRC),
+      import(REAGRAPH_ESM_SRC),
+    ]).then(([reactMod, domMod, reagraphMod]) => {
+      const React = reactMod && (reactMod.default || reactMod);
+      const createRoot = domMod && domMod.createRoot;
+      const GraphCanvas = reagraphMod && reagraphMod.GraphCanvas;
+      if (!React || !createRoot || !GraphCanvas) {
+        throw new Error('reagraph_runtime_missing_exports');
+      }
+      ReactRuntime = React;
+      GraphCanvasRuntime = GraphCanvas;
+      graphRoot = createRoot(host);
+    }).catch((err) => {
+      runtimePromise = null;
+      throw err;
+    });
+  }
+  await runtimePromise;
+}
+
 function renderGraph() {
+  if (!graphRoot || !ReactRuntime || !GraphCanvasRuntime) return;
   const graph = buildGraphData();
   graphRoot.render(
-    h(GraphCanvas, {
+    ReactRuntime.createElement(GraphCanvasRuntime, {
       ref: (r) => { graphRef = r; },
       nodes: graph.nodes,
       edges: graph.edges,
@@ -370,9 +398,24 @@ function renderGraph() {
 }
 
 async function refreshData() {
-  const stateUrl = '/v1/memory/inspect/state';
-  const res = await fetch(stateUrl);
-  const data = await res.json();
+  metaEl.textContent = 'loading data...';
+  await ensureRuntime();
+
+  let data = null;
+  let lastErr = null;
+  for (const stateUrl of ['/v1/memory/inspect/state', '/api/demo/state']) {
+    try {
+      const res = await fetch(stateUrl);
+      const body = await res.json();
+      if (!res.ok) throw new Error(body && body.error ? String(body.error) : ('HTTP ' + res.status));
+      data = body;
+      break;
+    } catch (err) {
+      lastErr = err;
+    }
+  }
+  if (!data) throw (lastErr || new Error('state_fetch_failed'));
+
   const mem = data.memory || {};
   beads = Array.isArray(mem.beads) ? mem.beads : [];
   associations = Array.isArray(mem.associations) ? mem.associations : [];
@@ -389,6 +432,9 @@ function setupAutoRefresh() {
     refreshTimer = setInterval(() => {
       refreshData().catch((err) => {
         metaEl.textContent = 'refresh error: ' + String(err && err.message || err);
+        detailEl.textContent = 'Runtime error while refreshing graph. Check api_base and CDN access.
+
+' + String(err && err.stack || err);
       });
     }, 4000);
   }
@@ -397,6 +443,9 @@ function setupAutoRefresh() {
 refreshBtn.addEventListener('click', () => {
   refreshData().catch((err) => {
     metaEl.textContent = 'refresh error: ' + String(err && err.message || err);
+    detailEl.textContent = 'Runtime error while refreshing graph. Check api_base and CDN access.
+
+' + String(err && err.stack || err);
   });
 });
 
@@ -423,6 +472,9 @@ autoRefreshEl.addEventListener('change', setupAutoRefresh);
 
 refreshData().catch((err) => {
   metaEl.textContent = 'load error: ' + String(err && err.message || err);
+  detailEl.textContent = 'Failed to initialize Reagraph runtime.
+
+' + String(err && err.stack || err);
 });
 setupAutoRefresh();
 </script>
