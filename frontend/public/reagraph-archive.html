@@ -163,10 +163,21 @@
     </div>
   </div>
 
-<script type="module">
-import React from 'https://esm.sh/react@18.3.1';
-import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';
-import { GraphCanvas } from 'https://esm.sh/reagraph@4.30.8?bundle&deps=react@18.3.1,react-dom@18.3.1';
+<script>
+const REAGRAPH_RUNTIMES = [
+  {
+    name: 'esm.sh',
+    react: 'https://esm.sh/react@18.3.1',
+    dom: 'https://esm.sh/react-dom@18.3.1/client',
+    reagraph: 'https://esm.sh/reagraph@4.30.8?bundle&deps=react@18.3.1,react-dom@18.3.1',
+  },
+  {
+    name: 'jsdelivr',
+    react: 'https://cdn.jsdelivr.net/npm/react@19.2.4/+esm',
+    dom: 'https://cdn.jsdelivr.net/npm/react-dom@19.2.4/client/+esm',
+    reagraph: 'https://cdn.jsdelivr.net/npm/reagraph@4.30.8/+esm',
+  },
+];
 
 const host = document.getElementById('graph-host');
 const detailEl = document.getElementById('detail');
@@ -179,11 +190,16 @@ const refreshBtn = document.getElementById('refresh-btn');
 const fitBtn = document.getElementById('fit-btn');
 const openDemoBtn = document.getElementById('open-demo-btn');
 
-const graphRoot = createRoot(host);
+let runtimePromise = null;
+let runtime = null;
+let runtimeName = '';
+let runtimeError = null;
+let graphRoot = null;
 let graphRef = null;
 let beads = [];
 let associations = [];
 let refreshTimer = null;
+let lastGraph = { nodes: [], edges: [] };
 
 const theme = {
   canvas: { background: '#060a16' },
@@ -320,8 +336,10 @@ function buildGraphData() {
     },
   }));
 
+  const renderer = runtime ? ('Reagraph (' + runtimeName + ')') : 'SVG fallback';
   metaEl.textContent =
-    'session beads=' + String(beads.length) +
+    'renderer=' + renderer +
+    ' · session beads=' + String(beads.length) +
     ' · associations=' + String(edgesRaw.length) +
     ' · showing nodes=' + String(nodes.length) +
     ' edges=' + String(graphEdges.length);
@@ -329,16 +347,22 @@ function buildGraphData() {
   return { nodes, edges: graphEdges };
 }
 
-async function showNodeDetail(node) {
-  const beadId = String((node && (node.id || (node.data || {}).bead_id)) || '').trim();
-  if (!beadId) return;
+async function showNodeDetailById(beadId) {
+  const id = String(beadId || '').trim();
+  if (!id) return;
   try {
-    const res = await fetch('/v1/memory/inspect/beads/' + encodeURIComponent(beadId));
+    const res = await fetch('/v1/memory/inspect/beads/' + encodeURIComponent(id));
     const data = await res.json();
     detailEl.textContent = JSON.stringify(data, null, 2);
   } catch (err) {
-    detailEl.textContent = JSON.stringify({ error: String(err && err.message || err), bead_id: beadId }, null, 2);
+    detailEl.textContent = JSON.stringify({ error: String(err && err.message || err), bead_id: id }, null, 2);
   }
+}
+
+async function showNodeDetail(node) {
+  const beadId = String((node && (node.id || (node.data || {}).bead_id)) || '').trim();
+  if (!beadId) return;
+  await showNodeDetailById(beadId);
 }
 
 function showEdgeDetail(edge) {
@@ -351,28 +375,141 @@ function showEdgeDetail(edge) {
   }, null, 2);
 }
 
+async function ensureReagraphRuntime() {
+  if (runtime) return runtime;
+  if (runtimePromise) return runtimePromise;
+  runtimePromise = (async () => {
+    let lastErr = null;
+    for (const cand of REAGRAPH_RUNTIMES) {
+      try {
+        const [reactMod, domMod, reagraphMod] = await Promise.all([
+          import(cand.react),
+          import(cand.dom),
+          import(cand.reagraph),
+        ]);
+        const React = reactMod && (reactMod.default || reactMod);
+        const createRoot = domMod && domMod.createRoot;
+        const GraphCanvas = reagraphMod && reagraphMod.GraphCanvas;
+        if (!React || !createRoot || !GraphCanvas) {
+          throw new Error('reagraph_runtime_missing_exports_' + cand.name);
+        }
+        runtime = { React, createRoot, GraphCanvas };
+        runtimeName = cand.name;
+        graphRoot = createRoot(host);
+        return runtime;
+      } catch (err) {
+        lastErr = err;
+      }
+    }
+    runtimeError = lastErr || new Error('reagraph_runtime_unavailable');
+    return null;
+  })();
+  return runtimePromise;
+}
+
+function renderGraphSvg(graph) {
+  host.innerHTML = '';
+  const svgNs = 'http://www.w3.org/2000/svg';
+  const width = Math.max(720, host.clientWidth || 720);
+  const height = Math.max(520, host.clientHeight || 520);
+  const svg = document.createElementNS(svgNs, 'svg');
+  svg.setAttribute('width', String(width));
+  svg.setAttribute('height', String(height));
+  svg.setAttribute('viewBox', '0 0 ' + String(width) + ' ' + String(height));
+  svg.style.background = '#060a16';
+  svg.style.display = 'block';
+
+  const nodes = (graph.nodes || []).slice(0, 180);
+  const keep = new Set(nodes.map((n) => String(n.id)));
+  const edges = (graph.edges || []).filter((e) => keep.has(String(e.source)) && keep.has(String(e.target))).slice(0, 420);
+
+  const cx = width / 2;
+  const cy = height / 2;
+  const radius = Math.max(120, Math.min(width, height) * 0.38);
+  const pos = {};
+  nodes.forEach((n, i) => {
+    const a = (2 * Math.PI * i) / Math.max(1, nodes.length);
+    pos[n.id] = { x: cx + Math.cos(a) * radius, y: cy + Math.sin(a) * radius };
+  });
+
+  edges.forEach((e) => {
+    const s = pos[e.source];
+    const t = pos[e.target];
+    if (!s || !t) return;
+    const line = document.createElementNS(svgNs, 'line');
+    line.setAttribute('x1', String(s.x));
+    line.setAttribute('y1', String(s.y));
+    line.setAttribute('x2', String(t.x));
+    line.setAttribute('y2', String(t.y));
+    line.setAttribute('stroke', '#4e5f7c');
+    line.setAttribute('stroke-opacity', '0.65');
+    line.setAttribute('stroke-width', String(Math.max(0.6, Number(e.size || 1))));
+    line.style.cursor = 'pointer';
+    line.addEventListener('click', () => showEdgeDetail(e));
+    svg.appendChild(line);
+  });
+
+  nodes.forEach((n) => {
+    const p = pos[n.id];
+    if (!p) return;
+    const g = document.createElementNS(svgNs, 'g');
+    g.style.cursor = 'pointer';
+
+    const c = document.createElementNS(svgNs, 'circle');
+    c.setAttribute('cx', String(p.x));
+    c.setAttribute('cy', String(p.y));
+    c.setAttribute('r', String(Math.max(4, Math.min(12, Number(n.size || 5)))));
+    c.setAttribute('fill', String(n.fill || '#7ca0ab'));
+    c.setAttribute('stroke', '#0f1117');
+    c.setAttribute('stroke-width', '1.2');
+    g.appendChild(c);
+
+    const t = document.createElementNS(svgNs, 'text');
+    t.setAttribute('x', String(p.x + 7));
+    t.setAttribute('y', String(p.y - 7));
+    t.setAttribute('fill', '#d8dbe6');
+    t.setAttribute('font-size', '10');
+    t.textContent = String(n.label || n.id || '').slice(0, 42);
+    g.appendChild(t);
+
+    g.addEventListener('click', () => showNodeDetailById(n.id));
+    svg.appendChild(g);
+  });
+
+  host.appendChild(svg);
+}
+
 function renderGraph() {
   const graph = buildGraphData();
-  graphRoot.render(
-    React.createElement(GraphCanvas, {
-      ref: (r) => { graphRef = r; },
-      nodes: graph.nodes,
-      edges: graph.edges,
-      layoutType: 'forceDirected3d',
-      cameraMode: 'orbit',
-      draggable: true,
-      animated: true,
-      labelType: 'all',
-      edgeLabelPosition: 'inline',
-      theme,
-      onNodeClick: showNodeDetail,
-      onEdgeClick: showEdgeDetail,
-    })
-  );
+  lastGraph = graph;
+
+  if (runtime && graphRoot && runtime.GraphCanvas && runtime.React) {
+    graphRoot.render(
+      runtime.React.createElement(runtime.GraphCanvas, {
+        ref: (r) => { graphRef = r; },
+        nodes: graph.nodes,
+        edges: graph.edges,
+        layoutType: 'forceDirected3d',
+        cameraMode: 'orbit',
+        draggable: true,
+        animated: true,
+        labelType: 'all',
+        edgeLabelPosition: 'inline',
+        theme,
+        onNodeClick: showNodeDetail,
+        onEdgeClick: showEdgeDetail,
+      })
+    );
+    return;
+  }
+
+  renderGraphSvg(graph);
 }
 
 async function refreshData() {
   metaEl.textContent = 'loading data...';
+  await ensureReagraphRuntime();
+
   let data = null;
   let lastErr = null;
   for (const stateUrl of ['/v1/memory/inspect/state', '/api/demo/state']) {
@@ -393,6 +530,10 @@ async function refreshData() {
   associations = Array.isArray(mem.associations) ? mem.associations : [];
   updateRelationOptions(normEdgeRows(associations));
   renderGraph();
+
+  if (!runtime && runtimeError) {
+    detailEl.textContent = 'Reagraph runtime failed from all CDNs, showing SVG fallback.\n\n' + String(runtimeError && (runtimeError.stack || runtimeError.message) || runtimeError);
+  }
 }
 
 function setupAutoRefresh() {
@@ -419,7 +560,11 @@ refreshBtn.addEventListener('click', () => {
 
 fitBtn.addEventListener('click', () => {
   try {
-    if (graphRef && typeof graphRef.fitNodesInView === 'function') graphRef.fitNodesInView();
+    if (runtime && graphRef && typeof graphRef.fitNodesInView === 'function') {
+      graphRef.fitNodesInView();
+      return;
+    }
+    renderGraphSvg(lastGraph);
   } catch (_) {}
 });
 
@@ -442,7 +587,7 @@ autoRefreshEl.addEventListener('change', setupAutoRefresh);
 
 refreshData().catch((err) => {
   metaEl.textContent = 'load error: ' + String(err && err.message || err);
-  detailEl.textContent = 'Failed to initialize Reagraph runtime.\n\n' + String(err && err.stack || err);
+  detailEl.textContent = 'Failed to initialize graph runtime.\n\n' + String(err && err.stack || err);
 });
 setupAutoRefresh();
 </script>
