@@ -973,7 +973,7 @@ function refreshStoryCursorLabel() {
 function openReagraphArchive() {
   const rel = './graph';
   const url = new URL(rel, window.location.href).toString();
-  window.open(url, '_blank', 'noopener,noreferrer');
+  window.location.assign(url);
 }
 
 function resetStoryCursor(silent) {
