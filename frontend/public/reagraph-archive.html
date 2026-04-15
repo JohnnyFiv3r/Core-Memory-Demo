@@ -163,10 +163,10 @@
     </div>
   </div>
 
-<script>
-const REACT_ESM_SRC = 'https://esm.sh/react@18.3.1';
-const REACT_DOM_CLIENT_ESM_SRC = 'https://esm.sh/react-dom@18.3.1/client';
-const REAGRAPH_ESM_SRC = 'https://esm.sh/reagraph@4.30.8?bundle&deps=react@18.3.1,react-dom@18.3.1';
+<script type="module">
+import React from 'https://esm.sh/react@18.3.1';
+import { createRoot } from 'https://esm.sh/react-dom@18.3.1/client';
+import { GraphCanvas } from 'https://esm.sh/reagraph@4.30.8?bundle&deps=react@18.3.1,react-dom@18.3.1';
 
 const host = document.getElementById('graph-host');
 const detailEl = document.getElementById('detail');
@@ -179,10 +179,7 @@ const refreshBtn = document.getElementById('refresh-btn');
 const fitBtn = document.getElementById('fit-btn');
 const openDemoBtn = document.getElementById('open-demo-btn');
 
-let runtimePromise = null;
-let ReactRuntime = null;
-let GraphCanvasRuntime = null;
-let graphRoot = null;
+const graphRoot = createRoot(host);
 let graphRef = null;
 let beads = [];
 let associations = [];
@@ -354,36 +351,10 @@ function showEdgeDetail(edge) {
   }, null, 2);
 }
 
-async function ensureRuntime() {
-  if (ReactRuntime && GraphCanvasRuntime && graphRoot) return;
-  if (!runtimePromise) {
-    runtimePromise = Promise.all([
-      import(REACT_ESM_SRC),
-      import(REACT_DOM_CLIENT_ESM_SRC),
-      import(REAGRAPH_ESM_SRC),
-    ]).then(([reactMod, domMod, reagraphMod]) => {
-      const React = reactMod && (reactMod.default || reactMod);
-      const createRoot = domMod && domMod.createRoot;
-      const GraphCanvas = reagraphMod && reagraphMod.GraphCanvas;
-      if (!React || !createRoot || !GraphCanvas) {
-        throw new Error('reagraph_runtime_missing_exports');
-      }
-      ReactRuntime = React;
-      GraphCanvasRuntime = GraphCanvas;
-      graphRoot = createRoot(host);
-    }).catch((err) => {
-      runtimePromise = null;
-      throw err;
-    });
-  }
-  await runtimePromise;
-}
-
 function renderGraph() {
-  if (!graphRoot || !ReactRuntime || !GraphCanvasRuntime) return;
   const graph = buildGraphData();
   graphRoot.render(
-    ReactRuntime.createElement(GraphCanvasRuntime, {
+    React.createElement(GraphCanvas, {
       ref: (r) => { graphRef = r; },
       nodes: graph.nodes,
       edges: graph.edges,
@@ -402,8 +373,6 @@ function renderGraph() {
 
 async function refreshData() {
   metaEl.textContent = 'loading data...';
-  await ensureRuntime();
-
   let data = null;
   let lastErr = null;
   for (const stateUrl of ['/v1/memory/inspect/state', '/api/demo/state']) {
