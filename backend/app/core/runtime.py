@@ -397,10 +397,11 @@ def _seed_crawler_updates(*, user_query: str, turn_id: str) -> dict[str, Any]:
     uq = str(user_query or "").strip()
     entities = _heuristic_entities(uq)
     title = (uq or "Turn memory").splitlines()[0][:160]
+    bead_type = _infer_seed_bead_type(uq)
     return {
         "beads_create": [
             {
-                "type": "context",
+                "type": bead_type,
                 "title": title or "Turn memory",
                 "summary": [uq[:240]] if uq else ["turn memory"],
                 "because": [uq[:240]] if uq else [],
@@ -410,6 +411,34 @@ def _seed_crawler_updates(*, user_query: str, turn_id: str) -> dict[str, Any]:
             }
         ]
     }
+
+
+def _infer_seed_bead_type(user_query: str) -> str:
+    text = str(user_query or "").strip().lower()
+    if not text:
+        return "context"
+    if any(x in text for x in ["decide", "decision", "chose", "choose", "selected", "approved", "policy"]):
+        return "decision"
+    if any(x in text for x in ["goal", "objective", "target", "milestone", "pending", "plan"]):
+        return "goal"
+    if any(x in text for x in ["evidence", "because", "proof", "supports", "why"]):
+        return "evidence"
+    if any(x in text for x in ["outcome", "result", "completed", "shipped", "done"]):
+        return "outcome"
+    if any(x in text for x in ["lesson", "learned", "learning"]):
+        return "lesson"
+    if any(x in text for x in ["checkpoint", "flush", "session"]):
+        return "checkpoint"
+    return "context"
+
+
+def _bead_entities(bead: dict[str, Any]) -> set[str]:
+    out: set[str] = set()
+    for x in list((bead or {}).get("entities") or []):
+        token = str(x or "").strip()
+        if token:
+            out.add(token.lower())
+    return out
 
 
 def _latest_turn_bead_id_for_turn(*, root: str, session_id: str, turn_id: str) -> str:
@@ -495,21 +524,46 @@ def _link_turn_temporal_association(*, turn_id: str) -> dict[str, Any]:
     if not previous_bead_id or previous_bead_id == current_bead_id:
         return {"ok": True, "linked": False, "reason": "no_previous_turn_bead"}
 
+    idx_path = Path(settings.core_memory_root) / ".beads" / "index.json"
+    beads = {}
+    if idx_path.exists():
+        try:
+            payload = json.loads(idx_path.read_text(encoding="utf-8"))
+            beads = dict((payload.get("beads") or {})) if isinstance(payload, dict) else {}
+        except Exception:
+            beads = {}
+
+    current_bead = dict(beads.get(str(current_bead_id)) or {})
+    previous_bead = dict(beads.get(str(previous_bead_id)) or {})
+
+    associations = [
+        {
+            "source_bead_id": str(current_bead_id),
+            "target_bead_id": str(previous_bead_id),
+            "relationship": "follows",
+            "confidence": 0.6,
+            "reason_text": "demo turn temporal adjacency",
+            "provenance": "demo_seed",
+        }
+    ]
+
+    shared_entities = sorted(_bead_entities(current_bead).intersection(_bead_entities(previous_bead)))
+    if shared_entities:
+        associations.append(
+            {
+                "source_bead_id": str(current_bead_id),
+                "target_bead_id": str(previous_bead_id),
+                "relationship": "derived_from",
+                "confidence": 0.55,
+                "reason_text": "shared entities: " + ", ".join(shared_entities[:3]),
+                "provenance": "demo_seed",
+            }
+        )
+
     out = run_association_pass(
         root=settings.core_memory_root,
         session_id=SESSION.session_id,
-        updates={
-            "associations": [
-                {
-                    "source_bead_id": str(current_bead_id),
-                    "target_bead_id": str(previous_bead_id),
-                    "relationship": "follows",
-                    "confidence": 0.6,
-                    "reason_text": "demo turn temporal adjacency",
-                    "provenance": "demo_seed",
-                }
-            ]
-        },
+        updates={"associations": associations},
         visible_bead_ids=[str(previous_bead_id), str(current_bead_id)],
     )
     merged = merge_crawler_updates(root=settings.core_memory_root, session_id=SESSION.session_id)
@@ -518,6 +572,7 @@ def _link_turn_temporal_association(*, turn_id: str) -> dict[str, Any]:
         "linked": int(out.get("associations_appended") or 0) > 0,
         "current_bead_id": str(current_bead_id),
         "previous_bead_id": str(previous_bead_id),
+        "shared_entities": shared_entities[:6],
         "associations_appended": int(out.get("associations_appended") or 0),
         "merge_associations_appended": int(merged.get("associations_appended") or 0),
     }
