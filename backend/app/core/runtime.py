@@ -286,6 +286,39 @@ ALLOWED_ASSOC_RELATIONS: tuple[str, ...] = (
     "blocked_by",
 )
 
+_ASSOC_SPECIFIC_RELATIONS: set[str] = {
+    "supports",
+    "supersedes",
+    "contradicts",
+    "caused_by",
+    "enables",
+    "unblocks",
+    "blocked_by",
+}
+
+ASSOC_JUDGE_INSTRUCTION_BLOCK = """
+Use the strongest honest fit for every label.
+Prefer specific, grounded meaning over vague defaults.
+
+Read every edge as: source RELATION target.
+Use follows only for meaningful sequence adjacency.
+Use derived_from only when no stronger semantic relation is justified.
+
+Allowed relationships and intent:
+- follows: source comes after target in a meaningful sequence
+- derived_from: source was built/inferred from target
+- supports: source gives meaningful support to target
+- supersedes: source replaces target as newer/current version
+- contradicts: source and target cannot both stand as written
+- caused_by: source happened because target created the mechanism/condition
+- enables: source makes target possible or practical
+- unblocks: source removes blocker on target
+- blocked_by: source could not proceed because target obstructed it
+
+Never invent facts or ids.
+If unsure, omit the edge.
+""".strip()
+
 
 def get_agent() -> Any:
     global _AGENT
@@ -318,6 +351,8 @@ def _get_assoc_judge_agent() -> Any | None:
             system_prompt=(
                 "You are a strict memory graph association judge. "
                 "Only emit relationships that are directly supported by provided evidence. "
+                "Use strongest honest-fit labeling and avoid weak defaults when stronger semantics are justified. "
+                "Interpret all links as source RELATION target. "
                 "Output JSON only."
             ),
         )
@@ -620,6 +655,8 @@ async def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str
 
     prompt = {
         "task": "Judge memory associations for the current bead. Add any allowed relations that apply and are directly supported.",
+        "instruction_block": ASSOC_JUDGE_INSTRUCTION_BLOCK,
+        "orientation": "source=current bead, target=prior bead, relation means source RELATION target",
         "rules": [
             "Only output links you can support from provided evidence.",
             "Do not invent bead ids or facts.",
@@ -627,6 +664,7 @@ async def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str
             "If unsure, omit the link.",
             "Prefer specific semantic relations over generic derived_from when evidence supports them.",
             "Use follows mainly for temporal adjacency.",
+            "Do not emit follows for non-adjacent targets unless sequence evidence is explicit.",
         ],
         "allowed_relationships": list(ALLOWED_ASSOC_RELATIONS),
         "relation_guidance": {
@@ -673,10 +711,10 @@ async def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str
     links: list[dict[str, Any]] = []
     referenced_ids: set[str] = {str(current_id)}
     seen: set[tuple[str, str, str]] = set()
+    adjacency_target = str(prior_ids[0]) if prior_ids else ""
 
+    valid_rows: list[tuple[str, str, float, str]] = []
     for row in list((parsed or {}).get("associations") or []):
-        if len(links) >= max(1, int(max_links)):
-            break
         if not isinstance(row, dict):
             continue
         target_id = str(row.get("target_bead_id") or "").strip()
@@ -685,20 +723,40 @@ async def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str
             continue
         if rel not in ALLOWED_ASSOC_RELATIONS:
             continue
-        key = (str(current_id), target_id, rel)
-        if key in seen:
-            continue
-        seen.add(key)
-
         try:
             conf = float(row.get("confidence"))
         except Exception:
             conf = 0.6
         conf = max(0.0, min(1.0, conf))
-
         reason = str(row.get("reason_text") or "").strip()[:300]
         if not reason:
             reason = "agent-judged from provided candidate evidence"
+        valid_rows.append((target_id, rel, conf, reason))
+
+    specific_by_target: dict[str, bool] = {}
+    for target_id, rel, _conf, _reason in valid_rows:
+        if rel in _ASSOC_SPECIFIC_RELATIONS:
+            specific_by_target[target_id] = True
+
+    follows_emitted = False
+    for target_id, rel, conf, reason in valid_rows:
+        if len(links) >= max(1, int(max_links)):
+            break
+
+        if rel == "follows":
+            if follows_emitted:
+                continue
+            if adjacency_target and target_id != adjacency_target:
+                continue
+            follows_emitted = True
+
+        if rel == "derived_from" and bool(specific_by_target.get(target_id)):
+            continue
+
+        key = (str(current_id), target_id, rel)
+        if key in seen:
+            continue
+        seen.add(key)
 
         links.append(
             {
