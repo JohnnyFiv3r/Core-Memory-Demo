@@ -2046,6 +2046,8 @@ async function seedMemory() {
         body: JSON.stringify({
           start_turn: startTurn,
           max_turns: preloadMax,
+          auto_flush: true,
+          flush_threshold_ratio: AUTO_FLUSH_THRESHOLD_PCT / 100,
           run_checkpoints: false,
           reset_session: false,
           use_manifest_sessions: false,

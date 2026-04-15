@@ -1548,6 +1548,9 @@ async def replay_story_pack(
     use_manifest_sessions: bool = True,
     benchmark_semantic_mode: str = "required",
     benchmark_limit: int | None = None,
+    auto_flush: bool = True,
+    flush_threshold_ratio: float = 0.80,
+    flush_every_turns: int = 0,
 ) -> dict[str, Any]:
     bundle = _load_story_pack_bundle()
     manifest = dict(bundle.get("manifest") or {})
@@ -1581,8 +1584,19 @@ async def replay_story_pack(
     queue_waits: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
     seeded = 0
+    seeded_since_flush = 0
+    flush_events: list[dict[str, Any]] = []
     fallback_turns = 0
     fallback_error_counts: dict[str, int] = {}
+
+    def _should_flush() -> bool:
+        if not auto_flush:
+            return False
+        if int(flush_every_turns) > 0 and seeded_since_flush >= int(flush_every_turns):
+            return True
+        budget = max(1, int(SESSION.context_budget))
+        usage_ratio = float(SESSION.token_usage) / float(budget)
+        return usage_ratio >= max(0.1, float(flush_threshold_ratio))
 
     for row in turns:
         turn_no = int(row.get("turn") or 0)
@@ -1598,6 +1612,7 @@ async def replay_story_pack(
                 ferr = str(diag.get("fallback_error") or "fallback").strip() or "fallback"
                 fallback_error_counts[ferr] = int(fallback_error_counts.get(ferr) or 0) + 1
             seeded += 1
+            seeded_since_flush += 1
 
             if wait_for_idle:
                 wait_result = _drain_async_until_idle(
@@ -1620,6 +1635,43 @@ async def replay_story_pack(
                         }
                     )
                     break
+
+            if _should_flush():
+                f = run_flush()
+                flush_events.append(
+                    {
+                        "after_turn": turn_no,
+                        "type": "auto_flush",
+                        "ok": bool((f or {}).get("flush_ok")),
+                        "new_session": str((f or {}).get("new_session") or ""),
+                        "flushed_session": str((f or {}).get("flushed_session") or ""),
+                    }
+                )
+                seeded_since_flush = 0
+                if wait_for_idle:
+                    post_wait = _drain_async_until_idle(
+                        timeout_ms=idle_timeout_ms,
+                        poll_ms=idle_poll_ms,
+                        max_compaction=max_compaction_per_pass,
+                        max_side_effects=max_side_effects_per_pass,
+                    )
+                    queue_waits.append({"turn": turn_no, "after_flush": True, **post_wait})
+                    if not bool(post_wait.get("idle")):
+                        errors.append(
+                            {
+                                "turn": turn_no,
+                                "error": "queue_not_idle_timeout_after_flush",
+                                "details": {
+                                    "elapsed_ms": post_wait.get("elapsed_ms"),
+                                    "passes": post_wait.get("passes"),
+                                    "pending_total": ((post_wait.get("status") or {}).get("pending_total")),
+                                },
+                            }
+                        )
+                        break
+
+            if errors:
+                break
 
             if not run_checkpoints:
                 continue
@@ -1718,6 +1770,9 @@ async def replay_story_pack(
         "turn_range": {"first": first_turn, "last": last_turn},
         "selected_turns": sorted(selected_turns),
         "run_checkpoints": bool(run_checkpoints),
+        "auto_flush": bool(auto_flush),
+        "flush_count": int(len(flush_events)),
+        "flushes": list(flush_events[-20:]),
         "checkpoint_count": int(len(executed_checkpoints)),
         "checkpoints": executed_checkpoints,
         "fallback_turns": int(fallback_turns),

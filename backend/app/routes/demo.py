@@ -212,6 +212,11 @@ async def story_pack_replay(request: Request):
     run_checkpoints = bool((body or {}).get('run_checkpoints', True))
     reset_session = bool((body or {}).get('reset_session', True))
     use_manifest_sessions = bool((body or {}).get('use_manifest_sessions', True))
+    auto_flush = bool((body or {}).get('auto_flush', True))
+    flush_threshold_ratio_raw = (body or {}).get('flush_threshold_ratio')
+    flush_threshold_ratio = float(flush_threshold_ratio_raw) if isinstance(flush_threshold_ratio_raw, (int, float)) else 0.80
+    flush_every_turns_raw = (body or {}).get('flush_every_turns')
+    flush_every_turns = int(flush_every_turns_raw) if isinstance(flush_every_turns_raw, int) and flush_every_turns_raw > 0 else 0
     benchmark_semantic_mode = str((body or {}).get('benchmark_semantic_mode') or 'required').strip() or 'required'
 
     benchmark_limit_raw = (body or {}).get('benchmark_limit')
@@ -230,6 +235,9 @@ async def story_pack_replay(request: Request):
             run_checkpoints=run_checkpoints,
             reset_session=reset_session,
             use_manifest_sessions=use_manifest_sessions,
+            auto_flush=auto_flush,
+            flush_threshold_ratio=flush_threshold_ratio,
+            flush_every_turns=flush_every_turns,
             benchmark_semantic_mode=benchmark_semantic_mode,
             benchmark_limit=benchmark_limit,
         )
