@@ -271,6 +271,20 @@ def create_agent(model_id: str):
 
 
 _AGENT: Any | None = None
+_ASSOC_JUDGE_AGENT: Any | None = None
+_ASSOC_JUDGE_MODEL: str = ""
+
+ALLOWED_ASSOC_RELATIONS: tuple[str, ...] = (
+    "follows",
+    "derived_from",
+    "supports",
+    "supersedes",
+    "contradicts",
+    "caused_by",
+    "enables",
+    "unblocks",
+    "blocked_by",
+)
 
 
 def get_agent() -> Any:
@@ -287,6 +301,30 @@ def get_agent() -> Any:
         raise RuntimeError("no_model_configured: set DEMO_MODEL_ID with matching provider credentials, or set ANTHROPIC_API_KEY / OPENAI_API_KEY")
     _AGENT = create_agent(model)
     return _AGENT
+
+
+def _get_assoc_judge_agent() -> Any | None:
+    global _ASSOC_JUDGE_AGENT, _ASSOC_JUDGE_MODEL
+    model = detect_model().strip()
+    if not model:
+        return None
+    if _ASSOC_JUDGE_AGENT is not None and _ASSOC_JUDGE_MODEL == model:
+        return _ASSOC_JUDGE_AGENT
+    try:
+        from pydantic_ai import Agent
+
+        _ASSOC_JUDGE_AGENT = Agent(
+            model,
+            system_prompt=(
+                "You are a strict memory graph association judge. "
+                "Only emit relationships that are directly supported by provided evidence. "
+                "Output JSON only."
+            ),
+        )
+        _ASSOC_JUDGE_MODEL = model
+        return _ASSOC_JUDGE_AGENT
+    except Exception:
+        return None
 
 
 def inspect_state_payload(*, as_of: str | None = None) -> dict[str, Any]:
@@ -503,6 +541,163 @@ def _cue_flags(text: str) -> dict[str, bool]:
     }
 
 
+def _extract_json_object_text(raw: str) -> str:
+    text = str(raw or "").strip()
+    if not text:
+        return ""
+    m = re.search(r"```(?:json)?\s*(\{[\s\S]*\})\s*```", text, flags=re.IGNORECASE)
+    if m:
+        return str(m.group(1) or "").strip()
+    if text.startswith("{") and text.endswith("}"):
+        return text
+    start = text.find("{")
+    end = text.rfind("}")
+    if start >= 0 and end > start:
+        return text[start : end + 1]
+    return ""
+
+
+def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str], beads: dict[str, Any], max_links: int = 20) -> tuple[list[dict[str, Any]], list[str], bool]:
+    current = dict(beads.get(str(current_id)) or {})
+    if not current:
+        return [], [], False
+    if str(current_id) not in ordered_ids:
+        return [], [], False
+
+    judge = _get_assoc_judge_agent()
+    if judge is None:
+        return [], [], False
+
+    pos = ordered_ids.index(str(current_id))
+    prior_ids = list(reversed(ordered_ids[:pos]))
+    if not prior_ids:
+        return [], [str(current_id)], True
+
+    current_entities = _bead_entities(current)
+    current_tokens = _bead_tokens(current)
+
+    candidates: list[dict[str, Any]] = []
+    for target_id in prior_ids[:60]:
+        target = dict(beads.get(str(target_id)) or {})
+        if not target:
+            continue
+        shared_entities = sorted(current_entities.intersection(_bead_entities(target)))
+        shared_terms = sorted(current_tokens.intersection(_bead_tokens(target)))
+        score = (5 * len(shared_entities)) + min(6, len(shared_terms))
+        if score <= 0:
+            continue
+        candidates.append(
+            {
+                "target_bead_id": str(target_id),
+                "target_title": str(target.get("title") or "")[:140],
+                "target_type": str(target.get("type") or ""),
+                "target_summary": " ".join(str(x or "") for x in list(target.get("summary") or [])[:2])[:220],
+                "shared_entities": shared_entities[:5],
+                "shared_terms": shared_terms[:8],
+                "evidence_score": int(score),
+            }
+        )
+
+    if prior_ids and not any(str(c.get("target_bead_id") or "") == str(prior_ids[0]) for c in candidates):
+        prev = dict(beads.get(str(prior_ids[0])) or {})
+        candidates.append(
+            {
+                "target_bead_id": str(prior_ids[0]),
+                "target_title": str(prev.get("title") or "")[:140],
+                "target_type": str(prev.get("type") or ""),
+                "target_summary": " ".join(str(x or "") for x in list(prev.get("summary") or [])[:2])[:220],
+                "shared_entities": [],
+                "shared_terms": [],
+                "evidence_score": 1,
+            }
+        )
+
+    candidates.sort(key=lambda x: int(x.get("evidence_score") or 0), reverse=True)
+    candidates = candidates[:18]
+    candidate_ids = {str(c.get("target_bead_id") or "") for c in candidates}
+
+    prompt = {
+        "task": "Judge memory associations for the current bead. Add any allowed relations that apply and are directly supported.",
+        "rules": [
+            "Only output links you can support from provided evidence.",
+            "Do not invent bead ids or facts.",
+            "Use only allowed relationship values.",
+            "If unsure, omit the link.",
+        ],
+        "allowed_relationships": list(ALLOWED_ASSOC_RELATIONS),
+        "current": {
+            "bead_id": str(current_id),
+            "title": str(current.get("title") or "")[:180],
+            "type": str(current.get("type") or ""),
+            "summary": [str(x or "")[:220] for x in list(current.get("summary") or [])[:3]],
+            "entities": sorted(list(current_entities))[:10],
+        },
+        "candidate_targets": candidates,
+        "output_schema": {
+            "associations": [
+                {
+                    "target_bead_id": "string",
+                    "relationship": "one_of_allowed_relationships",
+                    "confidence": "0..1",
+                    "reason_text": "short evidence-grounded reason",
+                }
+            ]
+        },
+    }
+
+    try:
+        resp = judge.run_sync(json.dumps(prompt, ensure_ascii=False))
+        text = str(getattr(resp, "output", None) or getattr(resp, "data", None) or resp)
+        payload_text = _extract_json_object_text(text)
+        parsed = json.loads(payload_text) if payload_text else {}
+    except Exception:
+        return [], [], False
+
+    links: list[dict[str, Any]] = []
+    referenced_ids: set[str] = {str(current_id)}
+    seen: set[tuple[str, str, str]] = set()
+
+    for row in list((parsed or {}).get("associations") or []):
+        if len(links) >= max(1, int(max_links)):
+            break
+        if not isinstance(row, dict):
+            continue
+        target_id = str(row.get("target_bead_id") or "").strip()
+        rel = str(row.get("relationship") or "").strip().lower()
+        if not target_id or target_id not in candidate_ids:
+            continue
+        if rel not in ALLOWED_ASSOC_RELATIONS:
+            continue
+        key = (str(current_id), target_id, rel)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        try:
+            conf = float(row.get("confidence"))
+        except Exception:
+            conf = 0.6
+        conf = max(0.0, min(1.0, conf))
+
+        reason = str(row.get("reason_text") or "").strip()[:300]
+        if not reason:
+            reason = "agent-judged from provided candidate evidence"
+
+        links.append(
+            {
+                "source_bead_id": str(current_id),
+                "target_bead_id": str(target_id),
+                "relationship": rel,
+                "confidence": round(conf, 3),
+                "reason_text": reason,
+                "provenance": "demo_seed_agent_judged",
+            }
+        )
+        referenced_ids.add(str(target_id))
+
+    return links, sorted(referenced_ids), True
+
+
 def _proof_links_for_turn(*, current_id: str, ordered_ids: list[str], beads: dict[str, Any], max_links: int = 14) -> tuple[list[dict[str, Any]], list[str]]:
     current = dict(beads.get(str(current_id)) or {})
     if not current:
@@ -695,12 +890,19 @@ def _link_turn_temporal_association(*, turn_id: str) -> dict[str, Any]:
             beads = {}
 
     ordered_ids = _session_turn_bead_ids(beads, session_id=SESSION.session_id)
-    associations, referenced_ids = _proof_links_for_turn(
+    associations, referenced_ids, judge_used = _agent_judged_links_for_turn(
         current_id=current_bead_id,
         ordered_ids=ordered_ids,
         beads=beads,
-        max_links=14,
+        max_links=24,
     )
+    if not associations:
+        associations, referenced_ids = _proof_links_for_turn(
+            current_id=current_bead_id,
+            ordered_ids=ordered_ids,
+            beads=beads,
+            max_links=14,
+        )
     if not associations:
         return {"ok": True, "linked": False, "reason": "no_proven_links"}
 
@@ -731,6 +933,7 @@ def _link_turn_temporal_association(*, turn_id: str) -> dict[str, Any]:
     return {
         "ok": bool(out.get("ok", True)),
         "linked": int(out.get("associations_appended") or 0) > 0,
+        "judge_used": bool(judge_used),
         "current_bead_id": str(current_bead_id),
         "previous_bead_id": str(previous_bead_id),
         "proven_link_candidates": int(len(associations)),
