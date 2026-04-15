@@ -33,6 +33,7 @@ from core_memory.integrations.pydanticai.run import run_with_memory
 from core_memory.retrieval.tools import memory as memory_tools
 from core_memory.runtime.engine import process_flush, process_turn_finalized
 from core_memory.runtime.jobs import async_jobs_status, run_async_jobs
+from core_memory.write_pipeline.continuity_injection import load_continuity_injection
 
 from app.core.config import settings
 
@@ -133,6 +134,29 @@ def inspect_state_payload(*, as_of: str | None = None) -> dict[str, Any]:
         "token_usage": SESSION.token_usage,
         "context_budget": SESSION.context_budget,
     }
+
+    rolling_token_estimate = 0
+    rolling_token_budget = 0
+    rolling_record_count = 0
+    try:
+        continuity = load_continuity_injection(settings.core_memory_root)
+        continuity_meta = dict((continuity or {}).get("meta") or {})
+        continuity_records = list((continuity or {}).get("records") or [])
+        rolling_token_estimate = int(continuity_meta.get("token_estimate") or 0)
+        rolling_token_budget = int(continuity_meta.get("token_budget") or 0)
+        rolling_record_count = int(continuity_meta.get("record_count") or len(continuity_records))
+    except Exception:
+        rolling_token_estimate = 0
+        rolling_token_budget = 0
+        rolling_record_count = 0
+
+    out["session"].update(
+        {
+            "rolling_window_token_estimate": rolling_token_estimate,
+            "rolling_window_token_budget": rolling_token_budget,
+            "rolling_window_record_count": rolling_record_count,
+        }
+    )
     out["last_turn"] = dict(LAST_TURN_DIAGNOSTICS or {})
     out["benchmark"] = {
         "last_summary": dict(LAST_BENCHMARK_SUMMARY or {}),
@@ -153,6 +177,9 @@ def inspect_state_payload(*, as_of: str | None = None) -> dict[str, Any]:
         "total_beads": int(stats.get("total_beads") or len(out["beads"])),
         "total_associations": int(stats.get("total_associations") or len(out["associations"])),
         "rolling_window_size": int(stats.get("rolling_window_size") or len(out["rolling_window"])),
+        "rolling_window_token_estimate": rolling_token_estimate,
+        "rolling_window_token_budget": rolling_token_budget,
+        "rolling_window_record_count": rolling_record_count,
         "claim_slot_count": int(stats.get("claim_slot_count") or len(out["claim_state"])),
         "entity_count": int(stats.get("entity_count") or len(list(entities.get("rows") or []))),
         "session_id": SESSION.session_id,
