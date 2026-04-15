@@ -347,18 +347,63 @@ def record_turn_tokens(user_query: str, assistant_response: str) -> None:
     SESSION.token_usage += (turn_text + 500) // 4
 
 
+def _build_fallback_answer(message: str, retrieval: dict[str, Any] | None = None) -> str:
+    out = dict(retrieval or {})
+    results = list(out.get("results") or [])
+    facts: list[str] = []
+    for r in results[:3]:
+        row = dict(r or {})
+        title = str(row.get("title") or "").strip()
+        summary = str(row.get("summary") or "").strip()
+        text = title or summary or str(row.get("bead_id") or "").strip()
+        if text:
+            facts.append(text[:160])
+
+    if facts:
+        return "Fallback response (no model configured). Related memory facts: " + "; ".join(facts)
+
+    msg = str(message or "").strip()
+    if msg:
+        return "Fallback response (no model configured). I recorded this turn and will ground future answers from memory."
+    return "Fallback response (no model configured)."
+
+
 async def run_chat(message: str) -> dict[str, Any]:
     global LAST_TURN_DIAGNOSTICS
-    agent = get_agent()
     turn_id = uuid.uuid4().hex[:12]
-    result = await run_with_memory(
-        agent,
-        message,
-        root=settings.core_memory_root,
-        session_id=SESSION.session_id,
-        turn_id=turn_id,
-    )
-    answer = str(getattr(result, "output", None) or getattr(result, "data", None) or result)
+    fallback_error = ""
+
+    try:
+        agent = get_agent()
+        result = await run_with_memory(
+            agent,
+            message,
+            root=settings.core_memory_root,
+            session_id=SESSION.session_id,
+            turn_id=turn_id,
+        )
+        answer = str(getattr(result, "output", None) or getattr(result, "data", None) or result)
+    except Exception as exc:
+        err = str(exc or "").strip()
+        fallback_error = err or "model_unavailable"
+        retrieval_preview = memory_tools.execute({"query": message, "intent": "remember", "k": 8}, root=settings.core_memory_root, explain=False)
+        answer = _build_fallback_answer(message, retrieval_preview)
+        process_turn_finalized(
+            root=settings.core_memory_root,
+            session_id=SESSION.session_id,
+            turn_id=turn_id,
+            transaction_id=f"demo-fallback-{uuid.uuid4().hex[:8]}",
+            trace_id=f"demo-fallback-{uuid.uuid4().hex[:8]}",
+            user_query=str(message or ""),
+            assistant_final=str(answer or ""),
+            origin="DEMO_CHAT_FALLBACK",
+            metadata={
+                "fallback": True,
+                "fallback_error": fallback_error,
+                "source": "core_memory_demo_backend",
+            },
+        )
+
     record_turn_tokens(message, answer)
 
     req = {"query": message, "intent": "remember", "k": 8}
@@ -376,6 +421,8 @@ async def run_chat(message: str) -> dict[str, Any]:
             "top_bead_ids": [str(r.get("bead_id") or "") for r in list(retrieval.get("results") or [])[:5]],
             "chain_count": int(len(list(retrieval.get("chains") or []))),
             "warnings": list(retrieval.get("warnings") or []),
+            "fallback_mode": bool(fallback_error),
+            "fallback_error": fallback_error,
         },
     }
 
