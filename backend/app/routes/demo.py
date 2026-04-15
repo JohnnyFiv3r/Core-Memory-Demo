@@ -136,7 +136,7 @@ async def seed(request: Request):
 
     wait_for_idle = bool((body or {}).get('wait_for_idle', True))
     idle_timeout_ms_raw = (body or {}).get('idle_timeout_ms')
-    idle_timeout_ms = int(idle_timeout_ms_raw) if isinstance(idle_timeout_ms_raw, int) and idle_timeout_ms_raw > 0 else 20000
+    idle_timeout_ms = int(idle_timeout_ms_raw) if isinstance(idle_timeout_ms_raw, int) and idle_timeout_ms_raw > 0 else 120000
 
     idle_poll_ms_raw = (body or {}).get('idle_poll_ms')
     idle_poll_ms = int(idle_poll_ms_raw) if isinstance(idle_poll_ms_raw, int) and idle_poll_ms_raw > 0 else 250
@@ -198,7 +198,7 @@ async def story_pack_replay(request: Request):
     wait_for_idle = bool((body or {}).get('wait_for_idle', True))
 
     idle_timeout_ms_raw = (body or {}).get('idle_timeout_ms')
-    idle_timeout_ms = int(idle_timeout_ms_raw) if isinstance(idle_timeout_ms_raw, int) and idle_timeout_ms_raw > 0 else 20000
+    idle_timeout_ms = int(idle_timeout_ms_raw) if isinstance(idle_timeout_ms_raw, int) and idle_timeout_ms_raw > 0 else 120000
 
     idle_poll_ms_raw = (body or {}).get('idle_poll_ms')
     idle_poll_ms = int(idle_poll_ms_raw) if isinstance(idle_poll_ms_raw, int) and idle_poll_ms_raw > 0 else 250

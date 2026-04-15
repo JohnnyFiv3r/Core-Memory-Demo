@@ -1895,8 +1895,19 @@ def _load_preload_turns_from_live(*, max_turns: int = 200) -> list[dict[str, str
 
 
 def _locomo_benchmark_dirs() -> tuple[Path, Path]:
-    base = Path(__file__).resolve().parents[2] / "benchmarks" / "locomo_like"
-    return base / "fixtures", base / "gold"
+    env_fx = str(os.getenv("CORE_MEMORY_LOCOMO_FIXTURES_DIR") or "").strip()
+    env_gold = str(os.getenv("CORE_MEMORY_LOCOMO_GOLD_DIR") or "").strip()
+    if env_fx and env_gold:
+        return Path(env_fx), Path(env_gold)
+
+    demo_base = Path(__file__).resolve().parents[2] / "benchmarks" / "locomo_like"
+    demo_fx = demo_base / "fixtures"
+    demo_gold = demo_base / "gold"
+    if demo_fx.exists() and demo_gold.exists():
+        return demo_fx, demo_gold
+
+    workspace_core_memory = Path(__file__).resolve().parents[5] / "Core-Memory" / "benchmarks" / "locomo_like"
+    return workspace_core_memory / "fixtures", workspace_core_memory / "gold"
 
 
 def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
@@ -1948,12 +1959,22 @@ def _legacy_smoke_cases() -> list[dict[str, Any]]:
     ]
 
 
-def _load_locomo_cases(*, subset: str = "local") -> list[dict[str, Any]]:
+def _load_locomo_cases(*, subset: str = "local") -> tuple[list[dict[str, Any]], dict[str, Any]]:
     fixtures_dir, gold_dir = _locomo_benchmark_dirs()
     if not fixtures_dir.exists() or not gold_dir.exists():
-        return _legacy_smoke_cases()
+        rows = _legacy_smoke_cases()
+        return rows, {
+            "source": "legacy_smoke_fallback",
+            "fixtures_dir": str(fixtures_dir),
+            "gold_dir": str(gold_dir),
+            "available_cases": int(len(rows)),
+            "selected_cases": int(len(rows)),
+            "full_subset_available": False,
+            "warning": "fixture_dirs_missing",
+        }
 
-    fixture_paths = sorted(fixtures_dir.glob("*.jsonl"))
+    all_fixture_paths = sorted(fixtures_dir.glob("*.jsonl"))
+    fixture_paths = list(all_fixture_paths)
     if str(subset or "local").strip().lower() == "local":
         local_path = fixtures_dir / "local_subset.jsonl"
         if local_path.exists():
@@ -1998,10 +2019,32 @@ def _load_locomo_cases(*, subset: str = "local") -> list[dict[str, Any]]:
             )
 
     if not out:
-        return _legacy_smoke_cases()
+        rows = _legacy_smoke_cases()
+        return rows, {
+            "source": "legacy_smoke_fallback",
+            "fixtures_dir": str(fixtures_dir),
+            "gold_dir": str(gold_dir),
+            "available_cases": int(len(rows)),
+            "selected_cases": int(len(rows)),
+            "full_subset_available": False,
+            "warning": "fixture_rows_empty",
+        }
 
     out.sort(key=lambda x: str(x.get("case_id") or ""))
-    return out
+    local_count = len(_read_jsonl_rows(fixtures_dir / "local_subset.jsonl")) if (fixtures_dir / "local_subset.jsonl").exists() else 0
+    available_cases = sum(len(_read_jsonl_rows(p)) for p in all_fixture_paths)
+    full_subset_available = bool(available_cases > max(local_count, 0))
+
+    return out, {
+        "source": "fixture_pack",
+        "fixtures_dir": str(fixtures_dir),
+        "gold_dir": str(gold_dir),
+        "fixture_files": [p.name for p in all_fixture_paths],
+        "available_cases": int(available_cases),
+        "selected_cases": int(len(out)),
+        "local_subset_cases": int(local_count),
+        "full_subset_available": bool(full_subset_available),
+    }
 
 
 def _materialize_locomo_setup(*, root: str, setup: dict[str, Any], case_id: str) -> None:
@@ -2094,7 +2137,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 metadata={"source": "demo_preload"},
             )
 
-    rows = _load_locomo_cases(subset=str(subset or "local"))
+    rows, fixture_meta = _load_locomo_cases(subset=str(subset or "local"))
     if isinstance(limit, int) and limit > 0:
         rows = rows[: limit]
 
@@ -2157,6 +2200,17 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
 
     total = len(per_case)
     fail = max(0, total - passes)
+    warnings: list[str] = []
+    if str(subset or "local").strip().lower() == "full" and not bool(fixture_meta.get("full_subset_available")):
+        warnings.append("full_subset_not_available_running_best_available_pack")
+    warn_field = (fixture_meta or {}).get("warning")
+    if isinstance(warn_field, list):
+        for w in warn_field:
+            if str(w).strip():
+                warnings.append(str(w).strip())
+    elif isinstance(warn_field, str) and warn_field.strip():
+        warnings.append(warn_field.strip())
+
     summary = {
         "run_id": run_id,
         "started_at": started,
@@ -2172,7 +2226,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         "isolated_run": True,
         "preload_turn_count": int(len(preloaded_rows)),
         "backend_modes": sorted(set(str(x.get("backend") or "unknown") for x in per_case)),
-        "warnings": [],
+        "warnings": sorted(set([str(x) for x in warnings if str(x).strip()])),
+        "fixture_pack": dict(fixture_meta or {}),
     }
     report = {
         "totals": {"cases": total, "pass": passes, "fail": fail, "accuracy": summary["accuracy"]},
