@@ -183,15 +183,48 @@ def get_story_pack_meta() -> dict[str, Any]:
     }
 
 
+def _provider_from_model_id(model_id: str) -> str:
+    mid = str(model_id or "").strip().lower()
+    if not mid:
+        return ""
+    if ":" in mid:
+        return mid.split(":", 1)[0].strip()
+    if "/" in mid:
+        return mid.split("/", 1)[0].strip()
+    return mid
+
+
+def _required_api_key_env_for_model(model_id: str) -> str | None:
+    provider = _provider_from_model_id(model_id)
+    if provider in {"openai"}:
+        return "OPENAI_API_KEY"
+    if provider in {"anthropic"}:
+        return "ANTHROPIC_API_KEY"
+    if provider in {"google", "gemini", "google-gla"}:
+        # Google adapters commonly use one of these.
+        return "GEMINI_API_KEY|GOOGLE_API_KEY"
+    return None
+
+
+def _model_has_required_credentials(model_id: str) -> bool:
+    req = _required_api_key_env_for_model(model_id)
+    if not req:
+        return True
+    if "|" in req:
+        keys = [x.strip() for x in req.split("|") if x.strip()]
+        return any(bool(os.getenv(k)) for k in keys)
+    return bool(os.getenv(req))
+
+
 def detect_model() -> str:
-    if settings.demo_model_id.strip():
-        return settings.demo_model_id.strip()
+    configured = settings.demo_model_id.strip()
+    if configured and _model_has_required_credentials(configured):
+        return configured
+
+    # If configured model is missing credentials, fall through to supported fallbacks.
     if os.getenv("ANTHROPIC_API_KEY"):
         return "anthropic:claude-sonnet-4-20250514"
     if os.getenv("OPENAI_API_KEY"):
-        return "openai:gpt-4o"
-    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
-        # pydantic-ai provider id for Gemini can vary; keep OpenAI/Anthropic as primary in MVP.
         return "openai:gpt-4o"
     return ""
 
@@ -228,7 +261,12 @@ def get_agent() -> Any:
         return _AGENT
     model = detect_model()
     if not model:
-        raise RuntimeError("no_model_configured")
+        configured = settings.demo_model_id.strip()
+        if configured:
+            req = _required_api_key_env_for_model(configured)
+            if req:
+                raise RuntimeError(f"missing_model_credentials: configured model '{configured}' requires {req}")
+        raise RuntimeError("no_model_configured: set DEMO_MODEL_ID with matching provider credentials, or set ANTHROPIC_API_KEY / OPENAI_API_KEY")
     _AGENT = create_agent(model)
     return _AGENT
 

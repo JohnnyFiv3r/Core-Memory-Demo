@@ -545,7 +545,7 @@
             <input id="bench-preload-enabled" type="checkbox" checked>
             <span class="control-label" style="margin-right:0">from demo</span>
           </label>
-          <button class="btn" onclick="seedMemory()">Seed</button>
+          <button class="btn" id="btn-seed" onclick="seedMemory()">Seed</button>
           <button class="btn" id="btn-benchmark" onclick="runBenchmark()">Run LOCOMO Test</button>
         </div>
         <div id="tab-benchmark-content"></div>
@@ -644,6 +644,7 @@ function addMsg(role, text, turnId) {
   }
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
+  return div;
 }
 
 function showTyping() {
@@ -1750,30 +1751,57 @@ function closeModal() {
 }
 
 async function seedMemory() {
+  const seedBtn = document.getElementById('btn-seed');
+  const prevSeedLabel = seedBtn ? seedBtn.textContent : '';
+  if (seedBtn) {
+    seedBtn.disabled = true;
+    seedBtn.textContent = 'Seeding...';
+  }
+
   try {
     const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
     const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
     const preloadMax = Number.isFinite(preloadRaw) ? Math.max(1, Math.floor(preloadRaw)) : 200;
-    let res;
-    let data;
+    let data = null;
 
     if (preloadEnabled) {
-      res = await fetch('/api/story-pack/replay', {
-        method: 'POST',
-        headers: {'Content-Type': 'application/json'},
-        body: JSON.stringify({
-          max_turns: preloadMax,
-          run_checkpoints: false,
-          reset_session: false,
-          use_manifest_sessions: false,
-          wait_for_idle: true,
-          idle_timeout_ms: 30000,
-          idle_poll_ms: 250,
-        }),
-      });
-      data = await res.json();
+      const progress = addMsg('system', 'Seeding story-pack... Message 0 of ' + preloadMax);
+      let seededTotal = 0;
+      let queueIdle = true;
+      for (let i = 1; i <= preloadMax; i++) {
+        progress.textContent = 'Seeding story-pack... Message ' + i + ' of ' + preloadMax;
+        const res = await fetch('/api/story-pack/replay', {
+          method: 'POST',
+          headers: {'Content-Type': 'application/json'},
+          body: JSON.stringify({
+            start_turn: i,
+            end_turn: i,
+            max_turns: 1,
+            run_checkpoints: false,
+            reset_session: false,
+            use_manifest_sessions: false,
+            wait_for_idle: true,
+            idle_timeout_ms: 30000,
+            idle_poll_ms: 250,
+          }),
+        });
+        const row = await res.json();
+        if (!res.ok || !row.ok) {
+          const err =
+            (Array.isArray(row.errors) && row.errors.length > 0 && (row.errors[0].error || JSON.stringify(row.errors[0]))) ||
+            row.error ||
+            ('HTTP ' + res.status);
+          throw new Error('Message ' + i + ' failed: ' + String(err));
+        }
+        seededTotal += Number(row.seeded || row.seeded_turns || 0);
+        queueIdle = queueIdle && !!row.queue_idle;
+        data = row;
+      }
+      progress.textContent =
+        'Seeded ' + seededTotal + ' turn(s) via story-pack replay · queue_idle=' + String(queueIdle);
     } else {
-      res = await fetch('/api/seed', {
+      const progress = addMsg('system', 'Seeding default demo turns...');
+      const res = await fetch('/api/seed', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify({
@@ -1783,26 +1811,28 @@ async function seedMemory() {
         }),
       });
       data = await res.json();
+      if (!res.ok || !data.ok) {
+        const err =
+          (Array.isArray(data.errors) && data.errors.length > 0 && (data.errors[0].error || JSON.stringify(data.errors[0]))) ||
+          data.error ||
+          ('HTTP ' + res.status);
+        throw new Error(String(err));
+      }
+      const seeded = Number(data.seeded || data.seeded_turns || 0);
+      progress.textContent =
+        'Seeded ' + seeded + ' turn(s) via chat replay' +
+        (data.flush_count != null ? (' · flushes=' + String(data.flush_count || 0)) : '') +
+        ' · queue_idle=' + String(!!data.queue_idle);
     }
 
-    if (!res.ok || !data.ok) {
-      const err =
-        (Array.isArray(data.errors) && data.errors.length > 0 && (data.errors[0].error || JSON.stringify(data.errors[0]))) ||
-        data.error ||
-        ('HTTP ' + res.status);
-      throw new Error(String(err));
-    }
-
-    const seeded = Number(data.seeded || data.seeded_turns || 0);
-    const modeLabel = data.pack_name ? 'story-pack replay' : 'chat replay';
-    addMsg('system',
-      'Seeded ' + seeded + ' turn(s) via ' + modeLabel +
-      (data.flush_count != null ? (' · flushes=' + String(data.flush_count || 0)) : '') +
-      ' · queue_idle=' + String(!!data.queue_idle)
-    );
     refreshMemory();
   } catch (err) {
     alert('Seed failed: ' + err.message);
+  } finally {
+    if (seedBtn) {
+      seedBtn.disabled = false;
+      seedBtn.textContent = prevSeedLabel || 'Seed';
+    }
   }
 }
 
