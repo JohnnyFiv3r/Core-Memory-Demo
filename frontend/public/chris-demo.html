@@ -539,9 +539,15 @@
           <input id="seed-wipe-memory" type="checkbox" onchange="saveSeedResetPrefs()">
           <span>Clear memory store too</span>
         </label>
+        <label class="session-pop-check" title="When enabled, each Seed run resumes story-pack replay from the next unseeded turn.">
+          <input id="seed-continue-story" type="checkbox" checked onchange="saveSeedResetPrefs()">
+          <span>Continue story-pack from last turn</span>
+        </label>
+        <div id="story-cursor-label" style="font-size:11px;color:var(--text-dim);margin:-2px 0 8px 0;">Story cursor: turn 0</div>
         <div class="session-pop-actions">
           <button class="btn" type="button" onclick="startFreshSessionNow(false)">New Session Now</button>
           <button class="btn btn-warn" type="button" onclick="startFreshSessionNow(true)">Hard Reset Now</button>
+          <button class="btn" type="button" onclick="resetStoryCursor(false)">Reset Story Cursor</button>
         </div>
       </div>
     </div>
@@ -680,30 +686,73 @@ let claimsAsOf = '';
 const AUTO_FLUSH_THRESHOLD_PCT = 85;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
+const PREF_SEED_CONTINUE_STORY_KEY = 'cm_seed_continue_story';
+const PREF_STORY_CURSOR_TURN_KEY = 'cm_story_pack_last_turn';
+
+function getStoryCursorTurn() {
+  try {
+    const raw = Number(localStorage.getItem(PREF_STORY_CURSOR_TURN_KEY) || 0);
+    return Number.isFinite(raw) ? Math.max(0, Math.floor(raw)) : 0;
+  } catch (_) {
+    return 0;
+  }
+}
+
+function setStoryCursorTurn(turnNo) {
+  const n = Number(turnNo || 0);
+  const v = Number.isFinite(n) ? Math.max(0, Math.floor(n)) : 0;
+  try {
+    localStorage.setItem(PREF_STORY_CURSOR_TURN_KEY, String(v));
+  } catch (_) {
+    // best effort only
+  }
+  refreshStoryCursorLabel();
+}
+
+function refreshStoryCursorLabel() {
+  const label = document.getElementById('story-cursor-label');
+  if (!label) return;
+  label.textContent = 'Story cursor: turn ' + String(getStoryCursorTurn());
+}
+
+function resetStoryCursor(silent) {
+  setStoryCursorTurn(0);
+  if (!silent) {
+    addMsg('system', 'Story-pack cursor reset. Next Seed starts at turn 1.');
+  }
+}
 
 function loadSeedResetPrefs() {
   let resetBeforeRun = true;
   let wipeMemory = false;
+  let continueStory = true;
   try {
     const resetRaw = localStorage.getItem(PREF_SEED_RESET_KEY);
     if (resetRaw === '0' || resetRaw === 'false') resetBeforeRun = false;
     const wipeRaw = localStorage.getItem(PREF_SEED_WIPE_KEY);
     if (wipeRaw === '1' || wipeRaw === 'true') wipeMemory = true;
+    const continueRaw = localStorage.getItem(PREF_SEED_CONTINUE_STORY_KEY);
+    if (continueRaw === '0' || continueRaw === 'false') continueStory = false;
   } catch (_) {
     // best effort only
   }
   const resetEl = document.getElementById('seed-reset-before-run');
   const wipeEl = document.getElementById('seed-wipe-memory');
+  const continueEl = document.getElementById('seed-continue-story');
   if (resetEl) resetEl.checked = !!resetBeforeRun;
   if (wipeEl) wipeEl.checked = !!wipeMemory;
+  if (continueEl) continueEl.checked = !!continueStory;
+  refreshStoryCursorLabel();
 }
 
 function saveSeedResetPrefs() {
   const resetEl = document.getElementById('seed-reset-before-run');
   const wipeEl = document.getElementById('seed-wipe-memory');
+  const continueEl = document.getElementById('seed-continue-story');
   try {
     localStorage.setItem(PREF_SEED_RESET_KEY, resetEl && resetEl.checked ? '1' : '0');
     localStorage.setItem(PREF_SEED_WIPE_KEY, wipeEl && wipeEl.checked ? '1' : '0');
+    localStorage.setItem(PREF_SEED_CONTINUE_STORY_KEY, continueEl && continueEl.checked ? '1' : '0');
   } catch (_) {
     // best effort only
   }
@@ -762,6 +811,9 @@ async function resetSessionForSeed(opts = {}) {
 async function startFreshSessionNow(wipeMemory) {
   try {
     const out = await resetSessionForSeed({wipeMemory: !!wipeMemory});
+    if (wipeMemory) {
+      setStoryCursorTurn(0);
+    }
     addMsg(
       'system',
       'Fresh session started: ' + String(out.new_session || 'n/a') +
@@ -1936,6 +1988,9 @@ async function seedMemory() {
 
     if (resetBeforeRun) {
       const resetOut = await resetSessionForSeed({wipeMemory: wipeBeforeRun});
+      if (wipeBeforeRun) {
+        setStoryCursorTurn(0);
+      }
       addMsg(
         'system',
         'Seed prep: fresh session ' + String(resetOut.new_session || 'n/a') +
@@ -1946,45 +2001,70 @@ async function seedMemory() {
     const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
     const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
     const preloadMax = Number.isFinite(preloadRaw) ? Math.max(1, Math.floor(preloadRaw)) : 200;
+    const continueStory = !!document.getElementById('seed-continue-story')?.checked;
     let data = null;
 
     if (preloadEnabled) {
-      const progress = addMsg('system', 'Seeding story-pack... Message 0 of ' + preloadMax);
-      let seededTotal = 0;
-      let queueIdle = true;
-      let fallbackTurns = 0;
-      for (let i = 1; i <= preloadMax; i++) {
-        progress.textContent = 'Seeding story-pack... Message ' + i + ' of ' + preloadMax;
-        const res = await fetch('/api/story-pack/replay', {
-          method: 'POST',
-          headers: {'Content-Type': 'application/json'},
-          body: JSON.stringify({
-            start_turn: i,
-            end_turn: i,
-            max_turns: 1,
-            run_checkpoints: false,
-            reset_session: false,
-            use_manifest_sessions: false,
-            wait_for_idle: true,
-            idle_timeout_ms: 30000,
-            idle_poll_ms: 250,
-          }),
-        });
-        const row = await res.json();
-        if (!res.ok || !row.ok) {
-          const err =
-            (Array.isArray(row.errors) && row.errors.length > 0 && (row.errors[0].error || JSON.stringify(row.errors[0]))) ||
-            row.error ||
-            ('HTTP ' + res.status);
-          throw new Error('Message ' + i + ' failed: ' + String(err));
-        }
-        seededTotal += Number(row.seeded || row.seeded_turns || 0);
-        queueIdle = queueIdle && !!row.queue_idle;
-        fallbackTurns += Number(row.fallback_turns || 0);
-        data = row;
+      let startTurn = 1;
+      if (continueStory) {
+        startTurn = Math.max(1, getStoryCursorTurn() + 1);
       }
+
+      let totalTurns = 0;
+      try {
+        const metaRes = await fetch('/api/story-pack/meta');
+        const meta = await metaRes.json();
+        if (metaRes.ok && meta && meta.ok) {
+          totalTurns = Number(meta.loaded_turns || meta.total_turns || 0) || 0;
+        }
+      } catch (_) {
+        totalTurns = 0;
+      }
+
+      if (totalTurns > 0 && startTurn > totalTurns) {
+        addMsg('system', 'Story-pack cursor is already at the end (turn ' + totalTurns + '). Reset cursor to seed from turn 1 again.');
+        return;
+      }
+
+      const progress = addMsg('system', 'Seeding story-pack... starting at turn ' + startTurn);
+      const res = await fetch('/api/story-pack/replay', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({
+          start_turn: startTurn,
+          max_turns: preloadMax,
+          run_checkpoints: false,
+          reset_session: false,
+          use_manifest_sessions: false,
+          wait_for_idle: true,
+          idle_timeout_ms: 30000,
+          idle_poll_ms: 250,
+        }),
+      });
+      data = await res.json();
+      if (!res.ok || !data.ok) {
+        const err =
+          (Array.isArray(data.errors) && data.errors.length > 0 && (data.errors[0].error || JSON.stringify(data.errors[0]))) ||
+          data.error ||
+          ('HTTP ' + res.status);
+        throw new Error(String(err));
+      }
+
+      const seededTotal = Number(data.seeded || data.seeded_turns || 0);
+      const queueIdle = !!data.queue_idle;
+      const fallbackTurns = Number(data.fallback_turns || 0);
+      const range = data.turn_range || {};
+      const firstTurn = Number(range.first || startTurn || 0) || 0;
+      const lastTurn = Number(range.last || (firstTurn + Math.max(0, seededTotal - 1))) || 0;
+
+      if (continueStory && seededTotal > 0 && lastTurn > 0) {
+        setStoryCursorTurn(lastTurn);
+      }
+
       progress.textContent =
-        'Seeded ' + seededTotal + ' turn(s) via story-pack replay · queue_idle=' + String(queueIdle) +
+        'Seeded ' + seededTotal + ' turn(s) via story-pack replay' +
+        (firstTurn > 0 && lastTurn > 0 ? (' · range=' + firstTurn + '-' + lastTurn) : '') +
+        ' · queue_idle=' + String(queueIdle) +
         (fallbackTurns > 0 ? (' · fallback=' + fallbackTurns) : '');
       if (fallbackTurns > 0) {
         const ferr = data && data.fallback_error_counts ? Object.entries(data.fallback_error_counts).sort((a,b)=>Number(b[1])-Number(a[1]))[0] : null;
