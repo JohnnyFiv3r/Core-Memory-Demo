@@ -143,7 +143,7 @@ async def seed(request: Request):
 
     auto_flush = bool((body or {}).get('auto_flush', True))
     flush_threshold_ratio_raw = (body or {}).get('flush_threshold_ratio')
-    flush_threshold_ratio = float(flush_threshold_ratio_raw) if isinstance(flush_threshold_ratio_raw, (int, float)) else 0.85
+    flush_threshold_ratio = float(flush_threshold_ratio_raw) if isinstance(flush_threshold_ratio_raw, (int, float)) else 0.80
 
     flush_every_turns_raw = (body or {}).get('flush_every_turns')
     flush_every_turns = int(flush_every_turns_raw) if isinstance(flush_every_turns_raw, int) and flush_every_turns_raw > 0 else 0

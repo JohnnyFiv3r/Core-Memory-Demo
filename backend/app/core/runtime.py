@@ -247,6 +247,74 @@ def detect_model() -> str:
     return ""
 
 
+def _model_context_window_tokens(model_id: str) -> int | None:
+    configured_override_keys = [
+        "CORE_MEMORY_DEMO_MODEL_CONTEXT_WINDOW",
+        "DEMO_MODEL_CONTEXT_WINDOW",
+        "CORE_MEMORY_SOURCE_MODEL_CONTEXT_WINDOW",
+    ]
+    for key in configured_override_keys:
+        raw = str(os.getenv(key) or "").strip()
+        if not raw:
+            continue
+        try:
+            value = int(raw)
+        except Exception:
+            continue
+        if value > 0:
+            return value
+
+    mid = str(model_id or "").strip().lower()
+    if not mid:
+        return None
+
+    # Provider/model-family conservative defaults.
+    if "gpt-4o" in mid:
+        return 128_000
+    if "gpt-4.1" in mid:
+        return 1_000_000
+    if "gpt-5" in mid:
+        return 400_000
+    if "claude-sonnet-4" in mid or "claude-3.7" in mid or "claude-3-7" in mid:
+        return 200_000
+    if "claude-3.5" in mid or "claude-3-5" in mid:
+        return 200_000
+    if "gemini-2.5" in mid:
+        return 1_048_576
+    if "gemini-1.5" in mid:
+        return 1_000_000
+
+    provider = _provider_from_model_id(mid)
+    if provider == "openai":
+        return 128_000
+    if provider in {"anthropic"}:
+        return 200_000
+    if provider in {"google", "gemini", "google-gla"}:
+        return 1_000_000
+    return None
+
+
+def _resolved_context_budget_tokens() -> int:
+    model_id = detect_model()
+    inferred = _model_context_window_tokens(model_id)
+    if inferred and int(inferred) > 0:
+        return int(inferred)
+
+    configured = int(getattr(settings, "demo_context_budget", 0) or 0)
+    if configured > 0:
+        return configured
+    return 10_000
+
+
+def _sync_session_context_budget() -> int:
+    budget = max(1_000, int(_resolved_context_budget_tokens()))
+    SESSION.context_budget = budget
+    return budget
+
+
+_sync_session_context_budget()
+
+
 def create_agent(model_id: str):
     from pydantic_ai import Agent
 
@@ -382,6 +450,7 @@ If unsure, omit the edge.
 
 def get_agent() -> Any:
     global _AGENT
+    _sync_session_context_budget()
     if _AGENT is not None:
         return _AGENT
     model = detect_model()
@@ -1132,6 +1201,7 @@ def _build_fallback_answer(message: str, retrieval: dict[str, Any] | None = None
 
 async def run_chat(message: str) -> dict[str, Any]:
     global LAST_TURN_DIAGNOSTICS
+    _sync_session_context_budget()
     turn_id = uuid.uuid4().hex[:12]
     fallback_error = ""
     seed_updates = _seed_crawler_updates(user_query=message, turn_id=turn_id)
@@ -1212,6 +1282,7 @@ async def run_chat(message: str) -> dict[str, Any]:
 
 
 def run_flush(*, new_session_id: str | None = None) -> dict[str, Any]:
+    _sync_session_context_budget()
     out = process_flush(
         root=settings.core_memory_root,
         session_id=SESSION.session_id,
@@ -1224,6 +1295,7 @@ def run_flush(*, new_session_id: str | None = None) -> dict[str, Any]:
     forced_session = str(new_session_id or "").strip()
     SESSION.session_id = forced_session or _new_session_id()
     SESSION.token_usage = 0
+    _sync_session_context_budget()
     return {
         "flushed_session": old,
         "new_session": SESSION.session_id,
@@ -1249,6 +1321,7 @@ def reset_test_session(*, wipe_memory: bool = False) -> dict[str, Any]:
 
     SESSION.session_id = _new_session_id()
     SESSION.token_usage = 0
+    _sync_session_context_budget()
     LAST_TURN_DIAGNOSTICS = {}
 
     return {
@@ -1344,7 +1417,7 @@ async def seed_demo_history(
     idle_timeout_ms: int = 20000,
     idle_poll_ms: int = 250,
     auto_flush: bool = True,
-    flush_threshold_ratio: float = 0.85,
+    flush_threshold_ratio: float = 0.80,
     flush_every_turns: int = 0,
     max_compaction_per_pass: int = 2,
     max_side_effects_per_pass: int = 8,
