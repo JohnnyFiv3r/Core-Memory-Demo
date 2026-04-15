@@ -526,7 +526,7 @@
   <h1><span>Core Memory</span> Live Demo</h1>
   <div class="header-controls">
     <div class="session-chip-wrap">
-      <button class="session-badge session-badge-btn" id="session-badge" type="button" onclick="toggleSessionPopover(event)">session: ---</button>
+      <button class="session-badge session-badge-btn" id="session-badge" type="button" onclick="toggleSessionPopover(event)">session: --- ▾</button>
       <div class="session-popover" id="session-popover" onclick="event.stopPropagation()">
         <div class="session-pop-title">Session Controls</div>
         <label class="session-pop-check" title="Resets session before each seed run so replay starts at turn 1 in a clean session.">
@@ -717,6 +717,15 @@ function toggleSessionPopover(evt) {
   const pop = document.getElementById('session-popover');
   if (!pop) return;
   pop.classList.toggle('open');
+}
+
+function bindSessionPopoverControls() {
+  const badge = document.getElementById('session-badge');
+  if (!badge) return;
+  badge.style.cursor = 'pointer';
+  if (badge.__cmPopoverBound) return;
+  badge.addEventListener('click', (e) => toggleSessionPopover(e));
+  badge.__cmPopoverBound = true;
 }
 
 async function resetSessionForSeed(opts = {}) {
@@ -1865,7 +1874,7 @@ async function refreshMemory() {
     const windowPct = budget > 0 ? ((totalUsedTokens / budget) * 100) : 0;
     document.getElementById('stat-tokens').textContent = Math.round(totalUsedTokens);
     document.getElementById('stat-budget').textContent = budget;
-    document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || statsCompat.session_id || '---');
+    document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || statsCompat.session_id || '---') + ' ▾';
 
     const fill = document.getElementById('budget-fill');
     fill.style.width = windowPct.toFixed(1) + '%';
@@ -2112,6 +2121,7 @@ function switchTab(name) {
 
 loadClaimsStateFromUrl();
 loadSeedResetPrefs();
+bindSessionPopoverControls();
 refreshMemory();
 setInterval(refreshMemory, 2500);
 document.addEventListener('click', e => {
