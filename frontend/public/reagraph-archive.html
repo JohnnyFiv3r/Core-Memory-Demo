@@ -148,7 +148,7 @@
       <label><input id="auto-refresh" type="checkbox" checked /> auto</label>
       <button id="refresh-btn" type="button">Refresh</button>
       <button id="fit-btn" type="button">Fit</button>
-      <button id="open-demo-btn" type="button">Back to Demo</button>
+      <button id="open-demo-btn" type="button" onclick="goBackToDemo()">Back to Demo</button>
     </div>
   </header>
   <div class="layout">
@@ -456,12 +456,19 @@ fitBtn.addEventListener('click', () => {
 });
 
 openDemoBtn.addEventListener('click', () => {
+  goBackToDemo();
+});
+
+function goBackToDemo() {
   const params = new URLSearchParams();
   const base = String(window.__CORE_MEMORY_API_BASE || '').trim();
   if (base) params.set('api_base', base);
   const q = params.toString();
-  window.location.href = '/chris-demo.html' + (q ? ('?' + q) : '');
-});
+  const rel = './chris-demo.html' + (q ? ('?' + q) : '');
+  const abs = new URL(rel, window.location.href).toString();
+  window.location.assign(abs);
+}
+window.goBackToDemo = goBackToDemo;
 
 [relFilterEl, confFilterEl, searchFilterEl].forEach((el) => {
   el.addEventListener('change', () => renderGraph());

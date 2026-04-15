@@ -972,7 +972,8 @@ function openReagraphArchive() {
   const apiBase = String(window.__CORE_MEMORY_API_BASE || '').trim();
   if (apiBase) params.set('api_base', apiBase);
   const q = params.toString();
-  const url = '/reagraph-archive.html' + (q ? ('?' + q) : '');
+  const rel = './reagraph-archive.html' + (q ? ('?' + q) : '');
+  const url = new URL(rel, window.location.href).toString();
   window.open(url, '_blank', 'noopener,noreferrer');
 }
 
