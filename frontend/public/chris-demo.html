@@ -7,7 +7,10 @@
   const q = (params.get('api_base') || '').trim();
   let s = '';
   try { s = (localStorage.getItem('CORE_MEMORY_API_BASE') || '').trim(); } catch {}
-  const apiBase = (q || s || '').replace(/\/+$/, '');
+  const defaultApiBase = window.location.hostname === 'demo.usecorememory.com'
+    ? 'https://core-memory-demo.onrender.com'
+    : '';
+  const apiBase = (q || s || defaultApiBase || '').replace(/\/+$/, '');
   if (apiBase) {
     try { localStorage.setItem('CORE_MEMORY_API_BASE', apiBase); } catch {}
   }
@@ -968,11 +971,7 @@ function refreshStoryCursorLabel() {
 }
 
 function openReagraphArchive() {
-  const params = new URLSearchParams();
-  const apiBase = String(window.__CORE_MEMORY_API_BASE || '').trim();
-  if (apiBase) params.set('api_base', apiBase);
-  const q = params.toString();
-  const rel = './reagraph-archive.html' + (q ? ('?' + q) : '');
+  const rel = './graph';
   const url = new URL(rel, window.location.href).toString();
   window.open(url, '_blank', 'noopener,noreferrer');
 }

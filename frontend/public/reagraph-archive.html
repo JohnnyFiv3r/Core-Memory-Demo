@@ -7,7 +7,10 @@
   const q = (params.get('api_base') || '').trim();
   let s = '';
   try { s = (localStorage.getItem('CORE_MEMORY_API_BASE') || '').trim(); } catch {}
-  const apiBase = (q || s || '').replace(/\/+$/, '');
+  const defaultApiBase = window.location.hostname === 'demo.usecorememory.com'
+    ? 'https://core-memory-demo.onrender.com'
+    : '';
+  const apiBase = (q || s || defaultApiBase || '').replace(/\/+$/, '');
   if (apiBase) {
     try { localStorage.setItem('CORE_MEMORY_API_BASE', apiBase); } catch {}
   }
@@ -432,9 +435,7 @@ function setupAutoRefresh() {
     refreshTimer = setInterval(() => {
       refreshData().catch((err) => {
         metaEl.textContent = 'refresh error: ' + String(err && err.message || err);
-        detailEl.textContent = 'Runtime error while refreshing graph. Check api_base and CDN access.
-
-' + String(err && err.stack || err);
+        detailEl.textContent = 'Runtime error while refreshing graph. Check api_base and CDN access.\n\n' + String(err && err.stack || err);
       });
     }, 4000);
   }
@@ -443,9 +444,7 @@ function setupAutoRefresh() {
 refreshBtn.addEventListener('click', () => {
   refreshData().catch((err) => {
     metaEl.textContent = 'refresh error: ' + String(err && err.message || err);
-    detailEl.textContent = 'Runtime error while refreshing graph. Check api_base and CDN access.
-
-' + String(err && err.stack || err);
+    detailEl.textContent = 'Runtime error while refreshing graph. Check api_base and CDN access.\n\n' + String(err && err.stack || err);
   });
 });
 
@@ -460,12 +459,7 @@ openDemoBtn.addEventListener('click', () => {
 });
 
 function goBackToDemo() {
-  const params = new URLSearchParams();
-  const base = String(window.__CORE_MEMORY_API_BASE || '').trim();
-  if (base) params.set('api_base', base);
-  const q = params.toString();
-  const rel = './chris-demo.html' + (q ? ('?' + q) : '');
-  const abs = new URL(rel, window.location.href).toString();
+  const abs = new URL('./', window.location.href).toString();
   window.location.assign(abs);
 }
 window.goBackToDemo = goBackToDemo;
@@ -479,9 +473,7 @@ autoRefreshEl.addEventListener('change', setupAutoRefresh);
 
 refreshData().catch((err) => {
   metaEl.textContent = 'load error: ' + String(err && err.message || err);
-  detailEl.textContent = 'Failed to initialize Reagraph runtime.
-
-' + String(err && err.stack || err);
+  detailEl.textContent = 'Failed to initialize Reagraph runtime.\n\n' + String(err && err.stack || err);
 });
 setupAutoRefresh();
 </script>

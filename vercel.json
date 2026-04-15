@@ -3,5 +3,11 @@
   "framework": "vite",
   "installCommand": "cd frontend && npm install --include=dev",
   "buildCommand": "cd frontend && npm run build",
-  "outputDirectory": "frontend/dist"
+  "outputDirectory": "frontend/dist",
+  "rewrites": [
+    {
+      "source": "/graph",
+      "destination": "/reagraph-archive.html"
+    }
+  ]
 }
