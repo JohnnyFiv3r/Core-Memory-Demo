@@ -648,6 +648,34 @@ def run_flush(*, new_session_id: str | None = None) -> dict[str, Any]:
     }
 
 
+def reset_test_session(*, wipe_memory: bool = False) -> dict[str, Any]:
+    global LAST_TURN_DIAGNOSTICS
+
+    old_session = str(SESSION.session_id or "")
+    wiped = False
+
+    if bool(wipe_memory):
+        root = Path(settings.core_memory_root)
+        if root.exists():
+            shutil.rmtree(root, ignore_errors=True)
+        wiped = True
+
+    for root in settings.roots:
+        Path(root).mkdir(parents=True, exist_ok=True)
+
+    SESSION.session_id = _new_session_id()
+    SESSION.token_usage = 0
+    LAST_TURN_DIAGNOSTICS = {}
+
+    return {
+        "ok": True,
+        "wiped_memory": bool(wiped),
+        "old_session": old_session,
+        "new_session": SESSION.session_id,
+        "context_budget": int(SESSION.context_budget),
+    }
+
+
 def _normalize_seed_messages(messages: list[Any] | None) -> list[str]:
     rows = list(messages or [])
     out: list[str] = []

@@ -17,6 +17,7 @@ from app.core.runtime import (
     run_benchmark,
     run_chat,
     run_flush,
+    reset_test_session,
     seed_demo_history,
     suggest_entity_merges,
     LAST_BENCHMARK_REPORT,
@@ -110,6 +111,16 @@ async def chat(request: Request):
 def flush():
     try:
         return run_flush()
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+
+
+@router.post('/session/reset')
+async def session_reset(request: Request):
+    body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
+    wipe_memory = bool((body or {}).get('wipe_memory', False))
+    try:
+        return reset_test_session(wipe_memory=wipe_memory)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 

@@ -104,6 +104,10 @@
     accent-color: var(--accent);
   }
 
+  .session-chip-wrap {
+    position: relative;
+  }
+
   .session-badge {
     font-family: var(--font);
     font-size: 11px;
@@ -111,6 +115,59 @@
     background: var(--surface2);
     padding: 4px 10px;
     border-radius: 12px;
+    border: 1px solid var(--border);
+  }
+
+  .session-badge-btn {
+    cursor: pointer;
+    transition: all 0.15s;
+  }
+  .session-badge-btn:hover {
+    color: var(--text);
+    border-color: var(--accent);
+    background: var(--accent-glow);
+  }
+
+  .session-popover {
+    display: none;
+    position: absolute;
+    top: calc(100% + 8px);
+    right: 0;
+    width: 280px;
+    z-index: 50;
+    background: var(--surface);
+    border: 1px solid var(--border);
+    border-radius: 10px;
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+    padding: 10px;
+  }
+  .session-popover.open { display: block; }
+
+  .session-pop-title {
+    font-size: 11px;
+    color: var(--text-dim);
+    font-family: var(--font);
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    margin-bottom: 8px;
+  }
+
+  .session-pop-check {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    font-size: 12px;
+    color: var(--text);
+    margin-bottom: 8px;
+  }
+  .session-pop-check input[type="checkbox"] {
+    accent-color: var(--accent);
+  }
+
+  .session-pop-actions {
+    display: grid;
+    grid-template-columns: 1fr;
+    gap: 6px;
   }
 
   .btn {
@@ -468,7 +525,24 @@
 <header>
   <h1><span>Core Memory</span> Live Demo</h1>
   <div class="header-controls">
-    <span class="session-badge" id="session-badge">session: ---</span>
+    <div class="session-chip-wrap">
+      <button class="session-badge session-badge-btn" id="session-badge" type="button" onclick="toggleSessionPopover(event)">session: ---</button>
+      <div class="session-popover" id="session-popover" onclick="event.stopPropagation()">
+        <div class="session-pop-title">Session Controls</div>
+        <label class="session-pop-check" title="Resets session before each seed run so replay starts at turn 1 in a clean session.">
+          <input id="seed-reset-before-run" type="checkbox" checked onchange="saveSeedResetPrefs()">
+          <span>Start fresh session before Seed</span>
+        </label>
+        <label class="session-pop-check" title="Also clears demo memory store before seeding.">
+          <input id="seed-wipe-memory" type="checkbox" onchange="saveSeedResetPrefs()">
+          <span>Clear memory store too</span>
+        </label>
+        <div class="session-pop-actions">
+          <button class="btn" type="button" onclick="startFreshSessionNow(false)">New Session Now</button>
+          <button class="btn btn-warn" type="button" onclick="startFreshSessionNow(true)">Hard Reset Now</button>
+        </div>
+      </div>
+    </div>
     <button class="btn btn-warn" onclick="flushSession()">Flush Session</button>
   </div>
 </header>
@@ -602,6 +676,84 @@ let lastBenchmarkHistory = [];
 let selectedClaimSlot = null;
 let claimsAsOf = '';
 const AUTO_FLUSH_THRESHOLD_PCT = 85;
+const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
+const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
+
+function loadSeedResetPrefs() {
+  let resetBeforeRun = true;
+  let wipeMemory = false;
+  try {
+    const resetRaw = localStorage.getItem(PREF_SEED_RESET_KEY);
+    if (resetRaw === '0' || resetRaw === 'false') resetBeforeRun = false;
+    const wipeRaw = localStorage.getItem(PREF_SEED_WIPE_KEY);
+    if (wipeRaw === '1' || wipeRaw === 'true') wipeMemory = true;
+  } catch (_) {
+    // best effort only
+  }
+  const resetEl = document.getElementById('seed-reset-before-run');
+  const wipeEl = document.getElementById('seed-wipe-memory');
+  if (resetEl) resetEl.checked = !!resetBeforeRun;
+  if (wipeEl) wipeEl.checked = !!wipeMemory;
+}
+
+function saveSeedResetPrefs() {
+  const resetEl = document.getElementById('seed-reset-before-run');
+  const wipeEl = document.getElementById('seed-wipe-memory');
+  try {
+    localStorage.setItem(PREF_SEED_RESET_KEY, resetEl && resetEl.checked ? '1' : '0');
+    localStorage.setItem(PREF_SEED_WIPE_KEY, wipeEl && wipeEl.checked ? '1' : '0');
+  } catch (_) {
+    // best effort only
+  }
+}
+
+function closeSessionPopover() {
+  const pop = document.getElementById('session-popover');
+  if (pop) pop.classList.remove('open');
+}
+
+function toggleSessionPopover(evt) {
+  if (evt) evt.stopPropagation();
+  const pop = document.getElementById('session-popover');
+  if (!pop) return;
+  pop.classList.toggle('open');
+}
+
+async function resetSessionForSeed(opts = {}) {
+  const wipeMemory = !!opts.wipeMemory;
+  if (wipeMemory) {
+    const ok = window.confirm('Hard reset will clear demo memory data before creating a new session. Continue?');
+    if (!ok) {
+      throw new Error('Hard reset canceled');
+    }
+  }
+  const res = await fetch('/api/session/reset', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({wipe_memory: !!wipeMemory}),
+  });
+  const data = await res.json();
+  if (!res.ok || !data.ok) {
+    throw new Error(data.error || ('HTTP ' + res.status));
+  }
+  return data;
+}
+
+async function startFreshSessionNow(wipeMemory) {
+  try {
+    const out = await resetSessionForSeed({wipeMemory: !!wipeMemory});
+    addMsg(
+      'system',
+      'Fresh session started: ' + String(out.new_session || 'n/a') +
+      (out.wiped_memory ? ' (memory cleared)' : '')
+    );
+    closeSessionPopover();
+    refreshMemory();
+  } catch (err) {
+    if (String(err && err.message || '') === 'Hard reset canceled') return;
+    alert('Failed to reset session: ' + err.message);
+  }
+}
 
 function loadClaimsStateFromUrl() {
   try {
@@ -1759,6 +1911,18 @@ async function seedMemory() {
   }
 
   try {
+    const resetBeforeRun = !!document.getElementById('seed-reset-before-run')?.checked;
+    const wipeBeforeRun = !!document.getElementById('seed-wipe-memory')?.checked;
+
+    if (resetBeforeRun) {
+      const resetOut = await resetSessionForSeed({wipeMemory: wipeBeforeRun});
+      addMsg(
+        'system',
+        'Seed prep: fresh session ' + String(resetOut.new_session || 'n/a') +
+        (resetOut.wiped_memory ? ' (memory cleared)' : '')
+      );
+    }
+
     const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
     const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
     const preloadMax = Number.isFinite(preloadRaw) ? Math.max(1, Math.floor(preloadRaw)) : 200;
@@ -1841,6 +2005,7 @@ async function seedMemory() {
 
     refreshMemory();
   } catch (err) {
+    if (String(err && err.message || '') === 'Hard reset canceled') return;
     alert('Seed failed: ' + err.message);
   } finally {
     if (seedBtn) {
@@ -1946,9 +2111,22 @@ function switchTab(name) {
 }
 
 loadClaimsStateFromUrl();
+loadSeedResetPrefs();
 refreshMemory();
 setInterval(refreshMemory, 2500);
-document.addEventListener('keydown', e => { if (e.key === 'Escape') closeModal(); });
+document.addEventListener('click', e => {
+  const wrap = document.querySelector('.session-chip-wrap');
+  if (!wrap) return;
+  if (!wrap.contains(e.target)) {
+    closeSessionPopover();
+  }
+});
+document.addEventListener('keydown', e => {
+  if (e.key === 'Escape') {
+    closeModal();
+    closeSessionPopover();
+  }
+});
 </script>
 </body>
 </html>
