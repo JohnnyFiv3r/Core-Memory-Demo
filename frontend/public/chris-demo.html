@@ -522,6 +522,32 @@
   .graph-edge {
     stroke: rgba(139, 143, 163, 0.55);
     stroke-linecap: round;
+    cursor: pointer;
+  }
+
+  .graph-legend {
+    display: flex;
+    align-items: center;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-bottom: 8px;
+  }
+
+  .graph-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--border);
+    border-radius: 999px;
+    padding: 2px 8px;
+    font-size: 10px;
+    color: var(--text-dim);
+    background: rgba(139, 143, 163, 0.08);
+  }
+
+  .graph-chip-count {
+    color: var(--text);
+    font-weight: 600;
   }
 
   .graph-node { cursor: pointer; }
@@ -1195,7 +1221,35 @@ function applyGraphFilters(edges, beadMap) {
   });
 }
 
-function renderGraphCanvas(el, edges, beadMap) {
+function renderGraphLegend(el, edges) {
+  const wrap = document.createElement('div');
+  wrap.className = 'graph-legend';
+
+  const counts = {};
+  (edges || []).forEach(e => {
+    const rel = String((e || {}).relationship || 'associated_with');
+    counts[rel] = Number(counts[rel] || 0) + 1;
+  });
+
+  const rows = Object.entries(counts).sort((a, b) => Number(b[1]) - Number(a[1]));
+  rows.slice(0, 14).forEach(([rel, n]) => {
+    const chip = document.createElement('span');
+    chip.className = 'graph-chip';
+    chip.innerHTML = escapeHtml(String(rel)) + ' <span class="graph-chip-count">' + String(n) + '</span>';
+    wrap.appendChild(chip);
+  });
+
+  if (rows.length > 14) {
+    const more = document.createElement('span');
+    more.className = 'graph-chip';
+    more.textContent = '+' + String(rows.length - 14) + ' more';
+    wrap.appendChild(more);
+  }
+
+  el.appendChild(wrap);
+}
+
+function renderGraphCanvas(el, edges, beadMap, onEdgeClick) {
   const svgNs = 'http://www.w3.org/2000/svg';
   const wrap = document.createElement('div');
   wrap.className = 'graph-canvas-wrap';
@@ -1257,6 +1311,11 @@ function renderGraphCanvas(el, edges, beadMap) {
     const sw = 0.9 + ((edge.confidence === null ? 0.2 : edge.confidence) * 2.1);
     line.setAttribute('stroke-width', String(sw.toFixed(2)));
 
+    line.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      if (typeof onEdgeClick === 'function') onEdgeClick(edge);
+    });
+
     const tt = document.createElementNS(svgNs, 'title');
     tt.textContent = String(edge.relationship || 'associated_with') +
       ' · conf=' + String(edge.confidence === null ? 'n/a' : Number(edge.confidence).toFixed(2)) +
@@ -1305,7 +1364,7 @@ function renderGraphCanvas(el, edges, beadMap) {
     '<div><strong>Graph view</strong></div>' +
     '<div style="margin-top:2px;color:var(--text-dim)">nodes=' + String(nodeIds.length) +
     ' · edges=' + String(limitedEdges.length) +
-    ' · click a node to open bead details.</div>';
+    ' · click a node or edge for details.</div>';
   el.appendChild(note);
 }
 
@@ -1418,7 +1477,43 @@ function renderGraph(beads, assocs) {
       return;
     }
 
-    renderGraphCanvas(el, filtered, beadMap);
+    renderGraphLegend(el, filtered);
+
+    const edgeDetail = document.createElement('div');
+    edgeDetail.className = 'runtime-card';
+    edgeDetail.innerHTML =
+      '<div><strong>Edge details</strong></div>' +
+      '<div style="margin-top:2px;color:var(--text-dim)">Click an edge in graph view to inspect and jump to source/target beads.</div>';
+
+    renderGraphCanvas(el, filtered, beadMap, (edge) => {
+      const src = String((edge || {}).source || '');
+      const dst = String((edge || {}).target || '');
+      const srcTitle = graphNodeTitle(beadMap, src);
+      const dstTitle = graphNodeTitle(beadMap, dst);
+      const conf = edge && edge.confidence !== null ? Number(edge.confidence).toFixed(2) : 'n/a';
+      const reason = String((edge || {}).reason_text || '').trim();
+      edgeDetail.innerHTML =
+        '<div><strong>' + escapeHtml(String((edge || {}).relationship || 'associated_with')) + '</strong></div>' +
+        '<div style="margin-top:2px;color:var(--text-dim)">source: ' + escapeHtml(srcTitle) + '</div>' +
+        '<div style="margin-top:2px;color:var(--text-dim)">target: ' + escapeHtml(dstTitle) + '</div>' +
+        '<div style="margin-top:2px;color:var(--text-dim)">confidence: ' + escapeHtml(conf) + '</div>' +
+        (reason ? ('<div style="margin-top:4px">' + escapeHtml(reason) + '</div>') : '') +
+        '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">' +
+          (src ? '<button class="btn" data-edge-open="src">Open source</button>' : '') +
+          (dst ? '<button class="btn" data-edge-open="dst">Open target</button>' : '') +
+        '</div>';
+
+      edgeDetail.querySelectorAll('button[data-edge-open]').forEach(btn => {
+        btn.addEventListener('click', (ev) => {
+          ev.stopPropagation();
+          const which = btn.getAttribute('data-edge-open') || '';
+          const id = which === 'src' ? src : (which === 'dst' ? dst : '');
+          if (id) showBead(id);
+        });
+      });
+    });
+
+    el.appendChild(edgeDetail);
     return;
   }
 
