@@ -1,7 +1,14 @@
 import { useMemo } from 'react'
 import { getApiBase } from './api'
+import { ReactParityApp } from './ReactParityApp'
 
 export function App() {
+  const reactMode = typeof window !== 'undefined' && window.location.hash === '#react'
+
+  if (reactMode) {
+    return <ReactParityApp />
+  }
+
   const apiBase = getApiBase()
   const src = useMemo(() => {
     if (!apiBase) return '/chris-demo.html'
