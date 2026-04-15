@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import time
 import uuid
@@ -66,6 +67,120 @@ DEFAULT_SEED_USER_MESSAGES: list[str] = [
     "What project goal is pending?",
     "Why FastAPI?",
 ]
+
+STORY_PACK_DIR = Path(__file__).resolve().parents[3] / "demo" / "story-pack"
+TURN_HEADER_RE = re.compile(r"^##\s*Turn\s+(\d{3})\s*:\s*(.+?)\s*$", re.MULTILINE)
+SEND_PROMPT_RE = re.compile(r"^\*\*Send:\*\*\s*`([^`]+)`\s*$", re.MULTILINE)
+
+
+def _load_story_pack_bundle(*, pack_dir: Path | None = None) -> dict[str, Any]:
+    base = Path(pack_dir or STORY_PACK_DIR)
+    manifest_path = base / "replay-order.json"
+    if not manifest_path.exists():
+        raise FileNotFoundError(f"story_pack_manifest_not_found: {manifest_path}")
+
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    acts_cfg = list(manifest.get("acts") or [])
+    all_turns: list[dict[str, Any]] = []
+    checkpoints: dict[int, list[dict[str, Any]]] = {}
+
+    for act in acts_cfg:
+        rel = str(act.get("file") or "").strip()
+        if not rel:
+            continue
+        act_path = base / rel
+        if not act_path.exists():
+            raise FileNotFoundError(f"story_pack_act_not_found: {act_path}")
+
+        text = act_path.read_text(encoding="utf-8")
+        headers = list(TURN_HEADER_RE.finditer(text))
+        turns: list[dict[str, Any]] = []
+        for i, header in enumerate(headers):
+            turn_no = int(header.group(1))
+            title = str(header.group(2) or "").strip()
+            start = header.end()
+            end = headers[i + 1].start() if (i + 1) < len(headers) else len(text)
+            block = text[start:end]
+            send_match = SEND_PROMPT_RE.search(block)
+            if not send_match:
+                raise ValueError(f"story_pack_missing_send_prompt: {act_path.name} turn {turn_no:03d}")
+            turns.append(
+                {
+                    "turn": turn_no,
+                    "title": title,
+                    "prompt": str(send_match.group(1) or "").strip(),
+                    "act": str(act.get("act") or ""),
+                    "act_title": str(act.get("title") or ""),
+                    "session_hint": str(act.get("default_session") or ""),
+                    "file": rel,
+                }
+            )
+
+        if turns:
+            expected_start = int(act.get("turn_start") or turns[0]["turn"])
+            expected_end = int(act.get("turn_end") or turns[-1]["turn"])
+            if turns[0]["turn"] != expected_start or turns[-1]["turn"] != expected_end:
+                raise ValueError(
+                    f"story_pack_turn_range_mismatch: {act_path.name}"
+                    f" expected={expected_start:03d}-{expected_end:03d}"
+                    f" parsed={turns[0]['turn']:03d}-{turns[-1]['turn']:03d}"
+                )
+            all_turns.extend(turns)
+
+        for cp in list(act.get("checkpoints") or []):
+            after_turn = int(cp.get("after_turn") or 0)
+            if after_turn <= 0:
+                continue
+            row = dict(cp or {})
+            row["act"] = str(act.get("act") or "")
+            row["act_title"] = str(act.get("title") or "")
+            checkpoints.setdefault(after_turn, []).append(row)
+
+    all_turns = sorted(all_turns, key=lambda x: int(x.get("turn") or 0))
+    turn_numbers = [int(x.get("turn") or 0) for x in all_turns]
+    if turn_numbers:
+        expected = list(range(turn_numbers[0], turn_numbers[-1] + 1))
+        if turn_numbers != expected:
+            raise ValueError("story_pack_turns_not_contiguous")
+
+    return {
+        "manifest": manifest,
+        "pack_dir": str(base),
+        "turns": all_turns,
+        "checkpoints": checkpoints,
+    }
+
+
+def get_story_pack_meta() -> dict[str, Any]:
+    bundle = _load_story_pack_bundle()
+    manifest = dict(bundle.get("manifest") or {})
+    turns = list(bundle.get("turns") or [])
+    checkpoints = dict(bundle.get("checkpoints") or {})
+
+    first_turn = int(turns[0].get("turn") or 0) if turns else 0
+    last_turn = int(turns[-1].get("turn") or 0) if turns else 0
+    checkpoint_count = sum(len(list(v or [])) for v in checkpoints.values())
+
+    return {
+        "ok": True,
+        "pack_name": str(manifest.get("pack_name") or "story-pack"),
+        "format_version": int(manifest.get("format_version") or 1),
+        "total_turns": int(manifest.get("total_turns") or len(turns)),
+        "loaded_turns": int(len(turns)),
+        "turn_range": {"first": first_turn, "last": last_turn},
+        "checkpoints": int(checkpoint_count),
+        "sessions": dict(manifest.get("sessions") or {}),
+        "acts": [
+            {
+                "act": str(a.get("act") or ""),
+                "title": str(a.get("title") or ""),
+                "turn_start": int(a.get("turn_start") or 0),
+                "turn_end": int(a.get("turn_end") or 0),
+                "file": str(a.get("file") or ""),
+            }
+            for a in list(manifest.get("acts") or [])
+        ],
+    }
 
 
 def detect_model() -> str:
@@ -235,7 +350,7 @@ async def run_chat(message: str) -> dict[str, Any]:
     }
 
 
-def run_flush() -> dict[str, Any]:
+def run_flush(*, new_session_id: str | None = None) -> dict[str, Any]:
     out = process_flush(
         root=settings.core_memory_root,
         session_id=SESSION.session_id,
@@ -245,7 +360,8 @@ def run_flush() -> dict[str, Any]:
         source="core_memory_demo_backend",
     )
     old = SESSION.session_id
-    SESSION.session_id = _new_session_id()
+    forced_session = str(new_session_id or "").strip()
+    SESSION.session_id = forced_session or _new_session_id()
     SESSION.token_usage = 0
     return {
         "flushed_session": old,
@@ -438,6 +554,199 @@ async def seed_demo_history(
         "auto_flush": bool(auto_flush),
         "flush_count": len(flush_events),
         "flushes": flush_events[-20:],
+        "session": {
+            "session_id": SESSION.session_id,
+            "token_usage": SESSION.token_usage,
+            "context_budget": SESSION.context_budget,
+        },
+    }
+
+
+async def replay_story_pack(
+    *,
+    max_turns: int | None = None,
+    start_turn: int | None = None,
+    end_turn: int | None = None,
+    wait_for_idle: bool = True,
+    idle_timeout_ms: int = 20000,
+    idle_poll_ms: int = 250,
+    max_compaction_per_pass: int = 2,
+    max_side_effects_per_pass: int = 8,
+    run_checkpoints: bool = True,
+    reset_session: bool = True,
+    use_manifest_sessions: bool = True,
+    benchmark_semantic_mode: str = "required",
+    benchmark_limit: int | None = None,
+) -> dict[str, Any]:
+    bundle = _load_story_pack_bundle()
+    manifest = dict(bundle.get("manifest") or {})
+    turns = list(bundle.get("turns") or [])
+    checkpoints_by_turn = dict(bundle.get("checkpoints") or {})
+
+    start_at = int(start_turn or 0)
+    end_at = int(end_turn or 0)
+    if start_at > 0:
+        turns = [t for t in turns if int(t.get("turn") or 0) >= start_at]
+    if end_at > 0:
+        turns = [t for t in turns if int(t.get("turn") or 0) <= end_at]
+    if isinstance(max_turns, int) and max_turns > 0:
+        turns = turns[: max_turns]
+
+    if not turns:
+        return {
+            "ok": False,
+            "error": "story_pack_no_turns_selected",
+            "pack_name": str(manifest.get("pack_name") or "story-pack"),
+        }
+
+    sessions_cfg = dict(manifest.get("sessions") or {})
+    if reset_session:
+        initial_sid = str(sessions_cfg.get("initial") or "").strip() if use_manifest_sessions else ""
+        SESSION.session_id = initial_sid or _new_session_id()
+        SESSION.token_usage = 0
+
+    selected_turns = {int(t.get("turn") or 0) for t in turns}
+    executed_checkpoints: list[dict[str, Any]] = []
+    queue_waits: list[dict[str, Any]] = []
+    errors: list[dict[str, Any]] = []
+    seeded = 0
+
+    for row in turns:
+        turn_no = int(row.get("turn") or 0)
+        prompt = str(row.get("prompt") or "").strip()
+        if not prompt:
+            continue
+
+        try:
+            await run_chat(prompt)
+            seeded += 1
+
+            if wait_for_idle:
+                wait_result = _drain_async_until_idle(
+                    timeout_ms=idle_timeout_ms,
+                    poll_ms=idle_poll_ms,
+                    max_compaction=max_compaction_per_pass,
+                    max_side_effects=max_side_effects_per_pass,
+                )
+                queue_waits.append({"turn": turn_no, **wait_result})
+                if not bool(wait_result.get("idle")):
+                    errors.append(
+                        {
+                            "turn": turn_no,
+                            "error": "queue_not_idle_timeout",
+                            "details": {
+                                "elapsed_ms": wait_result.get("elapsed_ms"),
+                                "passes": wait_result.get("passes"),
+                                "pending_total": ((wait_result.get("status") or {}).get("pending_total")),
+                            },
+                        }
+                    )
+                    break
+
+            if not run_checkpoints:
+                continue
+
+            for cp in list(checkpoints_by_turn.get(turn_no) or []):
+                cp_type = str(cp.get("type") or "").strip().lower()
+                if cp_type == "session_flush":
+                    forced_next = str(cp.get("next_session") or "").strip() if use_manifest_sessions else ""
+                    flush_out = run_flush(new_session_id=(forced_next or None))
+                    event = {
+                        "after_turn": turn_no,
+                        "type": "session_flush",
+                        "mode": str(cp.get("mode") or ""),
+                        "ok": bool(flush_out.get("flush_ok")),
+                        "new_session": str(flush_out.get("new_session") or ""),
+                        "flushed_session": str(flush_out.get("flushed_session") or ""),
+                    }
+                    executed_checkpoints.append(event)
+
+                    if wait_for_idle:
+                        post_wait = _drain_async_until_idle(
+                            timeout_ms=idle_timeout_ms,
+                            poll_ms=idle_poll_ms,
+                            max_compaction=max_compaction_per_pass,
+                            max_side_effects=max_side_effects_per_pass,
+                        )
+                        queue_waits.append({"turn": turn_no, "after_flush": True, **post_wait})
+                        if not bool(post_wait.get("idle")):
+                            errors.append(
+                                {
+                                    "turn": turn_no,
+                                    "error": "queue_not_idle_timeout_after_flush",
+                                    "details": {
+                                        "elapsed_ms": post_wait.get("elapsed_ms"),
+                                        "passes": post_wait.get("passes"),
+                                        "pending_total": ((post_wait.get("status") or {}).get("pending_total")),
+                                    },
+                                }
+                            )
+                            break
+                elif cp_type == "benchmark":
+                    mode_raw = str(cp.get("mode") or "snapshot").strip().lower()
+                    root_mode = "clean" if mode_raw == "clean" else "snapshot"
+                    bench = run_benchmark(
+                        semantic_mode_name=str(benchmark_semantic_mode or "required"),
+                        root_mode=root_mode,
+                        preload_from_demo=False,
+                        preload_turns_max=0,
+                        limit=benchmark_limit,
+                    )
+                    summary = dict(bench.get("summary") or {})
+                    executed_checkpoints.append(
+                        {
+                            "after_turn": turn_no,
+                            "type": "benchmark",
+                            "mode": root_mode,
+                            "ok": bool(bench.get("ok")),
+                            "run_id": str(summary.get("run_id") or ""),
+                            "accuracy": summary.get("accuracy"),
+                            "cases": int(summary.get("cases") or 0),
+                            "pass": int(summary.get("pass") or 0),
+                            "fail": int(summary.get("fail") or 0),
+                        }
+                    )
+                else:
+                    executed_checkpoints.append(
+                        {
+                            "after_turn": turn_no,
+                            "type": cp_type or "unknown",
+                            "ok": False,
+                            "error": "unsupported_checkpoint_type",
+                        }
+                    )
+
+            if errors:
+                break
+        except Exception as exc:
+            errors.append(
+                {
+                    "turn": turn_no,
+                    "error": str(exc),
+                    "prompt": prompt[:200],
+                }
+            )
+            break
+
+    final_queue = async_jobs_status(root=settings.core_memory_root)
+    first_turn = int(turns[0].get("turn") or 0)
+    last_turn = int(turns[-1].get("turn") or 0)
+
+    return {
+        "ok": seeded > 0 and not errors,
+        "pack_name": str(manifest.get("pack_name") or "story-pack"),
+        "seeded": seeded,
+        "requested_turns": int(len(turns)),
+        "turn_range": {"first": first_turn, "last": last_turn},
+        "selected_turns": sorted(selected_turns),
+        "run_checkpoints": bool(run_checkpoints),
+        "checkpoint_count": int(len(executed_checkpoints)),
+        "checkpoints": executed_checkpoints,
+        "errors": errors[:20],
+        "wait_for_idle": bool(wait_for_idle),
+        "queue_idle": bool(_queue_idle(final_queue)),
+        "queue": final_queue,
+        "queue_wait_checks": queue_waits[-40:],
         "session": {
             "session_id": SESSION.session_id,
             "token_usage": SESSION.token_usage,

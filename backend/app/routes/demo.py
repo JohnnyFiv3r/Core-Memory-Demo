@@ -6,12 +6,14 @@ from fastapi.responses import JSONResponse
 from app.core.runtime import (
     compare_benchmark_runs,
     decide_entity_merge,
+    get_story_pack_meta,
     inspect_bead_hydration_payload,
     inspect_bead_payload,
     inspect_claim_slot_payload,
     inspect_state_payload,
     inspect_turns_payload,
     read_benchmark_history,
+    replay_story_pack,
     run_benchmark,
     run_chat,
     run_flush,
@@ -156,6 +158,71 @@ async def seed(request: Request):
         state = inspect_state_payload()
         out['stats'] = state.get('stats') or {}
         return out
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+
+
+@router.get('/story-pack/meta')
+def story_pack_meta():
+    try:
+        return get_story_pack_meta()
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+
+
+@router.post('/story-pack/replay')
+async def story_pack_replay(request: Request):
+    body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
+
+    max_turns_raw = (body or {}).get('max_turns')
+    max_turns = int(max_turns_raw) if isinstance(max_turns_raw, int) and max_turns_raw > 0 else None
+
+    start_turn_raw = (body or {}).get('start_turn')
+    start_turn = int(start_turn_raw) if isinstance(start_turn_raw, int) and start_turn_raw > 0 else None
+
+    end_turn_raw = (body or {}).get('end_turn')
+    end_turn = int(end_turn_raw) if isinstance(end_turn_raw, int) and end_turn_raw > 0 else None
+
+    wait_for_idle = bool((body or {}).get('wait_for_idle', True))
+
+    idle_timeout_ms_raw = (body or {}).get('idle_timeout_ms')
+    idle_timeout_ms = int(idle_timeout_ms_raw) if isinstance(idle_timeout_ms_raw, int) and idle_timeout_ms_raw > 0 else 20000
+
+    idle_poll_ms_raw = (body or {}).get('idle_poll_ms')
+    idle_poll_ms = int(idle_poll_ms_raw) if isinstance(idle_poll_ms_raw, int) and idle_poll_ms_raw > 0 else 250
+
+    max_compaction_per_pass_raw = (body or {}).get('max_compaction_per_pass')
+    max_compaction_per_pass = int(max_compaction_per_pass_raw) if isinstance(max_compaction_per_pass_raw, int) and max_compaction_per_pass_raw > 0 else 2
+
+    max_side_effects_per_pass_raw = (body or {}).get('max_side_effects_per_pass')
+    max_side_effects_per_pass = int(max_side_effects_per_pass_raw) if isinstance(max_side_effects_per_pass_raw, int) and max_side_effects_per_pass_raw > 0 else 8
+
+    run_checkpoints = bool((body or {}).get('run_checkpoints', True))
+    reset_session = bool((body or {}).get('reset_session', True))
+    use_manifest_sessions = bool((body or {}).get('use_manifest_sessions', True))
+    benchmark_semantic_mode = str((body or {}).get('benchmark_semantic_mode') or 'required').strip() or 'required'
+
+    benchmark_limit_raw = (body or {}).get('benchmark_limit')
+    benchmark_limit = int(benchmark_limit_raw) if isinstance(benchmark_limit_raw, int) and benchmark_limit_raw > 0 else None
+
+    try:
+        out = await replay_story_pack(
+            max_turns=max_turns,
+            start_turn=start_turn,
+            end_turn=end_turn,
+            wait_for_idle=wait_for_idle,
+            idle_timeout_ms=idle_timeout_ms,
+            idle_poll_ms=idle_poll_ms,
+            max_compaction_per_pass=max_compaction_per_pass,
+            max_side_effects_per_pass=max_side_effects_per_pass,
+            run_checkpoints=run_checkpoints,
+            reset_session=reset_session,
+            use_manifest_sessions=use_manifest_sessions,
+            benchmark_semantic_mode=benchmark_semantic_mode,
+            benchmark_limit=benchmark_limit,
+        )
+        code = 200 if bool(out.get('ok')) else 400
+        return JSONResponse(out, status_code=code)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 

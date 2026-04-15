@@ -26,9 +26,21 @@ class TestApiSmoke(unittest.TestCase):
             self.assertEqual(200, c.get("/api/meta").status_code)
             self.assertEqual(200, c.get("/api/demo/state").status_code)
             self.assertEqual(200, c.get("/v1/memory/inspect/state").status_code)
+            self.assertEqual(200, c.get("/api/story-pack/meta").status_code)
 
             self.assertEqual(200, c.post("/api/seed").status_code)
             self.assertEqual(200, c.post("/api/flush").status_code)
+            self.assertEqual(
+                200,
+                c.post(
+                    "/api/story-pack/replay",
+                    json={
+                        "max_turns": 1,
+                        "run_checkpoints": False,
+                        "wait_for_idle": False,
+                    },
+                ).status_code,
+            )
             self.assertEqual(200, c.post("/api/benchmark-run", json={"limit": 2, "root_mode": "clean"}).status_code)
 
 

@@ -1,0 +1,140 @@
+{
+  "pack_name": "core-memory-demo-story-pack",
+  "format_version": 1,
+  "total_turns": 204,
+  "authority_note": "Read behavior should be validated through public inspect and observability surfaces such as Claims, Graph, Entities, Runtime, hydration, and Benchmark. Do not rely on direct store or file inspection.",
+  "sessions": {
+    "initial": "cm-story-s1",
+    "post_flush": "cm-story-s2"
+  },
+  "acts": [
+    {
+      "act": "01",
+      "title": "Cold Start and First Durable Facts",
+      "file": "acts/01-cold-start-and-first-durable-facts.md",
+      "turn_start": 1,
+      "turn_end": 16,
+      "default_session": "cm-story-s1"
+    },
+    {
+      "act": "02",
+      "title": "Architecture Expansion",
+      "file": "acts/02-architecture-expansion.md",
+      "turn_start": 17,
+      "turn_end": 34,
+      "default_session": "cm-story-s1"
+    },
+    {
+      "act": "03",
+      "title": "Entity Seeding and Naming Drift",
+      "file": "acts/03-entity-seeding-and-naming-drift.md",
+      "turn_start": 35,
+      "turn_end": 52,
+      "default_session": "cm-story-s1"
+    },
+    {
+      "act": "04",
+      "title": "First Flush and Reset-Proof Recall",
+      "file": "acts/04-first-flush-and-reset-proof-recall.md",
+      "turn_start": 53,
+      "turn_end": 66,
+      "default_session": "mixed",
+      "checkpoints": [
+        {
+          "after_turn": 58,
+          "type": "session_flush",
+          "counted_as_turn": false,
+          "next_session": "cm-story-s2"
+        }
+      ]
+    },
+    {
+      "act": "05",
+      "title": "Compliance Churn and Claim History",
+      "file": "acts/05-compliance-churn-and-claim-history.md",
+      "turn_start": 67,
+      "turn_end": 86,
+      "default_session": "cm-story-s2"
+    },
+    {
+      "act": "06",
+      "title": "Search and Semantic Strategy Debate",
+      "file": "acts/06-search-and-semantic-strategy-debate.md",
+      "turn_start": 87,
+      "turn_end": 104,
+      "default_session": "cm-story-s2"
+    },
+    {
+      "act": "07",
+      "title": "Degraded Retrieval Week",
+      "file": "acts/07-degraded-retrieval-week.md",
+      "turn_start": 105,
+      "turn_end": 120,
+      "default_session": "cm-story-s2",
+      "observability_focus": "runtime"
+    },
+    {
+      "act": "08",
+      "title": "Queue Backpressure Postmortem",
+      "file": "acts/08-queue-backpressure-postmortem.md",
+      "turn_start": 121,
+      "turn_end": 138,
+      "default_session": "cm-story-s2",
+      "observability_focus": "runtime"
+    },
+    {
+      "act": "09",
+      "title": "Rebrand and Merge Review",
+      "file": "acts/09-rebrand-and-merge-review.md",
+      "turn_start": 139,
+      "turn_end": 156,
+      "default_session": "cm-story-s2"
+    },
+    {
+      "act": "10",
+      "title": "Historical Reconciliation",
+      "file": "acts/10-historical-reconciliation.md",
+      "turn_start": 157,
+      "turn_end": 174,
+      "default_session": "cm-story-s2"
+    },
+    {
+      "act": "11",
+      "title": "Snapshot Benchmark Pass",
+      "file": "acts/11-snapshot-benchmark-pass.md",
+      "turn_start": 175,
+      "turn_end": 186,
+      "default_session": "cm-story-s2",
+      "checkpoints": [
+        {
+          "after_turn": 186,
+          "type": "benchmark",
+          "mode": "snapshot",
+          "counted_as_turn": false
+        }
+      ]
+    },
+    {
+      "act": "12",
+      "title": "Launch, Clean Benchmark, Final Flush",
+      "file": "acts/12-launch-clean-benchmark-final-flush.md",
+      "turn_start": 187,
+      "turn_end": 204,
+      "default_session": "cm-story-s2",
+      "checkpoints": [
+        {
+          "after_turn": 200,
+          "type": "benchmark",
+          "mode": "clean",
+          "counted_as_turn": false
+        },
+        {
+          "after_turn": 204,
+          "type": "session_flush",
+          "mode": "final",
+          "counted_as_turn": false
+        }
+      ]
+    }
+  ]
+}
