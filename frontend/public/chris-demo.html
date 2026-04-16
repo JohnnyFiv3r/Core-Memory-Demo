@@ -67,8 +67,24 @@
     background: var(--surface);
   }
 
-  header h1 { font-size: 16px; font-weight: 600; letter-spacing: -0.02em; }
-  header h1 span { color: var(--accent); }
+  header h1 {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    font-size: 16px;
+    font-weight: 600;
+    letter-spacing: -0.02em;
+  }
+  .header-logo {
+    height: 22px;
+    width: auto;
+    display: block;
+  }
+  .header-title-tail {
+    color: var(--text-dim);
+    font-size: 13px;
+    font-weight: 500;
+  }
 
   .header-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 
@@ -182,8 +198,8 @@
     transition: all 0.15s;
   }
   .btn:hover { border-color: var(--accent); background: var(--accent-glow); }
-  .btn-accent { background: var(--accent); color: #fff; border-color: var(--accent); }
-  .btn-accent:hover { opacity: 0.9; }
+  .btn-accent { background: #2f6d45; color: #fff; border-color: #4f9c51; }
+  .btn-accent:hover { background: #3e8555; border-color: #6ae276; }
   .btn-warn { border-color: var(--amber); color: var(--amber); }
   .btn-warn:hover { background: rgba(251, 191, 36, 0.1); }
 
@@ -203,7 +219,7 @@
     max-width: 85%; padding: 10px 14px; border-radius: var(--radius);
     font-size: 14px; line-height: 1.55; white-space: pre-wrap; word-break: break-word;
   }
-  .msg-user { align-self: flex-end; background: var(--accent); color: #fff; border-bottom-right-radius: 2px; }
+  .msg-user { align-self: flex-end; background: #1d3f24; border: 1px solid #2f6d45; color: #fff; border-bottom-right-radius: 2px; }
   .msg-assistant { align-self: flex-start; background: var(--surface2); border: 1px solid var(--border); border-bottom-left-radius: 2px; }
   .msg-system { align-self: center; background: transparent; border: 1px dashed var(--border); color: var(--text-dim); font-size: 12px; max-width: 100%; text-align: center; }
   .msg-meta { font-size: 10px; color: var(--text-dim); margin-top: 4px; }
@@ -720,7 +736,7 @@
   }
   .budget-fill {
     height: 100%; width: 0%; border-radius: 4px;
-    background: var(--accent); transition: width 0.4s, background 0.4s;
+    background: #6ae276; transition: width 0.4s, background 0.4s;
   }
   .budget-fill.warn { background: var(--amber); }
   .budget-fill.critical { background: var(--red); }
@@ -734,7 +750,10 @@
 <body>
 
 <header>
-  <h1><span>Core Memory</span> Live Demo</h1>
+  <h1>
+    <img class="header-logo" src="/core-memory-banner.svg" alt="Core Memory">
+    <span class="header-title-tail">Live Demo</span>
+  </h1>
   <div class="header-controls">
     <div class="session-chip-wrap">
       <button class="session-badge session-badge-btn" id="session-badge" type="button" style="cursor:pointer;user-select:none">session: --- ▾</button>
