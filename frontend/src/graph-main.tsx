@@ -79,6 +79,19 @@ function App(): React.JSX.Element {
   const [detail, setDetail] = useState<string>('Select a node or edge.')
   const [meta, setMeta] = useState<string>('loading...')
 
+  const closeGraphView = useCallback(() => {
+    try {
+      window.close()
+    } catch {
+      // ignore
+    }
+    if (window.history.length > 1) {
+      window.history.back()
+      return
+    }
+    window.location.assign('./')
+  }, [])
+
   const refresh = useCallback(async () => {
     setMeta('loading data...')
     let data: InspectStateResponse | null = null
@@ -314,6 +327,9 @@ function App(): React.JSX.Element {
           >
             Fit
           </button>
+          <button type="button" onClick={closeGraphView}>
+            Close Graph
+          </button>
           <a href="./">Back to Demo</a>
         </div>
       </header>
@@ -328,9 +344,9 @@ function App(): React.JSX.Element {
               nodes={graphData.nodes}
               edges={graphData.edges}
               layoutType="forceDirected3d"
-              cameraMode="orbit"
+              cameraMode="rotate"
               draggable
-              animated
+              animated={false}
               labelType="all"
               edgeLabelPosition="inline"
               theme={{
