@@ -1010,6 +1010,33 @@ let authReady = false;
 let authClient = null;
 let refreshTimerId = null;
 let authRedirecting = false;
+const AUTH_LOOP_GUARD_KEY = 'CM_AUTH_LOOP_GUARD';
+
+function readAuthLoopGuard() {
+  try {
+    const raw = sessionStorage.getItem(AUTH_LOOP_GUARD_KEY) || '{}';
+    const row = JSON.parse(raw);
+    return {
+      count: Number(row.count || 0),
+      ts: Number(row.ts || 0),
+      lastError: String(row.lastError || ''),
+    };
+  } catch (_) {
+    return { count: 0, ts: 0, lastError: '' };
+  }
+}
+
+function writeAuthLoopGuard(next) {
+  try {
+    sessionStorage.setItem(AUTH_LOOP_GUARD_KEY, JSON.stringify(next || {}));
+  } catch (_) {
+    // best effort only
+  }
+}
+
+function clearAuthLoopGuard() {
+  writeAuthLoopGuard({ count: 0, ts: 0, lastError: '' });
+}
 
 function setAuthStatus(text) {
   if (!authStatusEl) return;
@@ -1030,6 +1057,8 @@ function setAuthButton(label, onClick) {
 
 async function redirectToLogin(forcePrompt) {
   if (!authClient) return;
+  const guard = readAuthLoopGuard();
+  writeAuthLoopGuard({ count: guard.count + 1, ts: Date.now(), lastError: guard.lastError || '' });
   const qp = new URLSearchParams(window.location.search);
   const next = String(qp.get('next') || (window.location.pathname + window.location.search) || '/').trim();
   const loginOpts = {
@@ -1086,6 +1115,7 @@ async function initAuthGate() {
     if (qp.get('error')) {
       const err = String(qp.get('error') || 'auth_error');
       const desc = String(qp.get('error_description') || '').trim();
+      writeAuthLoopGuard({ count: 2, ts: Date.now(), lastError: desc || err });
       setAuthStatus('Auth error: ' + err + (desc ? (' (' + desc + ')') : ''));
       setAuthButton('Sign in', () => redirectToLogin(true));
       return false;
@@ -1110,7 +1140,20 @@ async function initAuthGate() {
 
     const isAuthenticated = await authClient.isAuthenticated();
     if (!isAuthenticated) {
+      const guard = readAuthLoopGuard();
+      const recent = (Date.now() - Number(guard.ts || 0)) < 90000;
+      const tooMany = recent && Number(guard.count || 0) >= 2;
       window.__CORE_MEMORY_SET_TOKEN('');
+      if (tooMany) {
+        const msg = guard.lastError || 'Repeated login redirects detected.';
+        setAuthStatus('Auth paused: ' + msg);
+        setAuthButton('Retry login', () => {
+          clearAuthLoopGuard();
+          redirectToLogin(true);
+        });
+        return false;
+      }
+
       setAuthStatus('Redirecting to login...');
       setAuthButton('Sign in', () => redirectToLogin(true));
       if (!authRedirecting) {
@@ -1122,6 +1165,7 @@ async function initAuthGate() {
 
     const token = await authClient.getTokenSilently();
     window.__CORE_MEMORY_SET_TOKEN(token || '');
+    clearAuthLoopGuard();
     const user = await authClient.getUser();
     const email = String((user && user.email) || '').trim();
     setAuthStatus(email ? ('Signed in: ' + email) : 'Signed in');
