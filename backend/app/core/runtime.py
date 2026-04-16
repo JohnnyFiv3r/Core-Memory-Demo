@@ -32,6 +32,7 @@ from core_memory.integrations.pydanticai.memory_tools import (
 )
 from core_memory.integrations.pydanticai.run import run_with_memory
 from core_memory.retrieval.tools import memory as memory_tools
+from core_memory.retrieval.normalize import classify_intent
 from core_memory.persistence.store import MemoryStore
 from core_memory.persistence.store_claim_ops import write_claim_updates_to_bead, write_claims_to_bead
 from core_memory.runtime.engine import process_flush, process_turn_finalized
@@ -84,6 +85,7 @@ DEFAULT_SEED_USER_MESSAGES: list[str] = [
 # Demo defaults to keep claim/association surfaces active unless explicitly overridden.
 os.environ.setdefault("CORE_MEMORY_CLAIM_LAYER", "1")
 os.environ.setdefault("CORE_MEMORY_CLAIM_EXTRACTION_MODE", "heuristic")
+os.environ.setdefault("CORE_MEMORY_CLAIM_RESOLUTION", "1")
 os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_PROMOTION", "1")
 os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_ALLOW_SHARED_TAG", "1")
 
@@ -1261,18 +1263,32 @@ async def run_chat(message: str) -> dict[str, Any]:
 
     record_turn_tokens(message, answer)
 
-    req = {"query": message, "intent": "remember", "k": 8}
+    intent_probe = classify_intent(str(message or "")) or {}
+    intent_class = str(intent_probe.get("intent_class") or "").strip().lower()
+
+    req: dict[str, Any] = {"query": message, "k": 8}
+    if intent_class in {"causal", "why", "what_changed"}:
+        req["intent"] = "causal"
+
     with semantic_mode(str(os.getenv("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "degraded_allowed")):
         retrieval = memory_tools.execute(req, root=settings.core_memory_root, explain=False)
+
+    top_result = (retrieval.get("results") or [{}])[0] if (retrieval.get("results") or []) else {}
+    retrieval_mode = str(
+        retrieval.get("retrieval_mode")
+        or ((retrieval.get("request") or {}).get("grounding_mode") if isinstance(retrieval.get("request"), dict) else "")
+        or "unknown"
+    )
+
     LAST_TURN_DIAGNOSTICS = {
         "ok": True,
         "turn_id": turn_id,
         "diagnostics": {
             "ok": bool(retrieval.get("ok")),
             "answer_outcome": str(retrieval.get("next_action") or "answered"),
-            "retrieval_mode": str(retrieval.get("backend") or "unknown"),
+            "retrieval_mode": retrieval_mode,
             "source_surface": "memory_execute",
-            "anchor_reason": "retrieved",
+            "anchor_reason": str((top_result or {}).get("anchor_reason") or "retrieved"),
             "result_count": int(len(list(retrieval.get("results") or []))),
             "top_bead_ids": [str(r.get("bead_id") or "") for r in list(retrieval.get("results") or [])[:5]],
             "chain_count": int(len(list(retrieval.get("chains") or []))),
