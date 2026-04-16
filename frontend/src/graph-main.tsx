@@ -58,7 +58,11 @@ async function apiFetchJson<T>(path: string): Promise<T> {
   const res = await fetch(url, { headers })
 
   if (res.status === 401 || res.status === 403) {
-    throw new Error('Authentication required. Sign in on the demo page first, then reopen Graph View.')
+    const loginUrl = new URL('./', window.location.href)
+    loginUrl.searchParams.set('login', '1')
+    loginUrl.searchParams.set('next', `${window.location.pathname}${window.location.search}`)
+    window.location.assign(loginUrl.toString())
+    throw new Error('Redirecting to login...')
   }
 
   const body = await res.json()

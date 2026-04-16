@@ -1003,6 +1003,7 @@ let authEnabled = false;
 let authReady = false;
 let authClient = null;
 let refreshTimerId = null;
+let authRedirecting = false;
 
 function setAuthStatus(text) {
   if (!authStatusEl) return;
@@ -1060,15 +1061,34 @@ async function initAuthGate() {
 
     const qp = new URLSearchParams(window.location.search);
     if (qp.get('code') && qp.get('state')) {
-      await authClient.handleRedirectCallback();
+      const cb = await authClient.handleRedirectCallback();
+      const returnTo = String(((cb || {}).appState || {}).returnTo || '').trim();
       window.history.replaceState({}, document.title, window.location.pathname);
+      if (returnTo) {
+        try {
+          const target = new URL(returnTo, window.location.origin);
+          if (target.origin === window.location.origin && target.pathname !== window.location.pathname) {
+            window.location.assign(target.toString());
+            return false;
+          }
+        } catch (_) {
+          // ignore invalid return targets
+        }
+      }
     }
 
     const isAuthenticated = await authClient.isAuthenticated();
     if (!isAuthenticated) {
       window.__CORE_MEMORY_SET_TOKEN('');
-      setAuthStatus('Sign in required');
+      setAuthStatus('Redirecting to login...');
       setAuthButton('Sign in', () => authClient.loginWithRedirect());
+      if (!authRedirecting) {
+        authRedirecting = true;
+        const next = String(qp.get('next') || (window.location.pathname + window.location.search) || '/').trim();
+        await authClient.loginWithRedirect({
+          appState: { returnTo: next },
+        });
+      }
       return false;
     }
 
