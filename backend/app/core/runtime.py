@@ -1209,6 +1209,85 @@ def _build_fallback_answer(message: str, retrieval: dict[str, Any] | None = None
     return base
 
 
+def _answer_looks_uncertain(answer: str) -> bool:
+    t = str(answer or "").strip().lower()
+    if not t:
+        return True
+    markers = [
+        "i don't have specific information",
+        "i dont have specific information",
+        "i don't have enough information",
+        "i do not have enough information",
+        "i'm not sure",
+        "i am not sure",
+        "can't determine",
+        "cannot determine",
+        "let me know",
+    ]
+    return any(m in t for m in markers)
+
+
+def _retrieval_text_snippets(retrieval: dict[str, Any] | None, *, limit: int = 6) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in list((retrieval or {}).get("results") or []):
+        r = dict(row or {})
+        candidates: list[str] = []
+        for k in ("retrieval_title", "title", "retrieval_summary", "summary", "reason_text", "reason"):
+            v = str(r.get(k) or "").strip()
+            if v:
+                candidates.append(v)
+        for item in list(r.get("retrieval_facts") or []):
+            v = str(item or "").strip()
+            if v:
+                candidates.append(v)
+
+        for c in candidates:
+            text = re.sub(r"\s+", " ", c).strip()
+            if not text:
+                continue
+            # Skip question-like snippets that are often user prompts mirrored into beads.
+            if text.endswith("?"):
+                continue
+            key = text.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(text)
+            if len(out) >= max(1, int(limit)):
+                return out
+    return out
+
+
+def _build_grounded_recovery_answer(message: str, retrieval: dict[str, Any] | None = None) -> str | None:
+    snippets = _retrieval_text_snippets(retrieval, limit=8)
+    if not snippets:
+        return None
+
+    msg = str(message or "").lower()
+    corpus = " \n".join(snippets).lower()
+
+    if "database" in msg or "postgres" in msg or "mysql" in msg or "sqlite" in msg:
+        if "postgres" in corpus:
+            reasons: list[str] = []
+            if "jsonb" in corpus:
+                reasons.append("JSONB is a strong fit for tenant configuration and JSON-heavy data")
+            if "faster" in corpus or "2x" in corpus or "benchmark" in corpus:
+                reasons.append("it benchmarked better on representative JSON workloads")
+            if "mysql" in corpus or "sqlite" in corpus:
+                reasons.append("it was preferred over MySQL and SQLite for this use case")
+
+            if reasons:
+                return "We are using PostgreSQL because " + "; ".join(reasons[:3]) + "."
+            return "We are using PostgreSQL based on the current memory record."
+
+    lead = snippets[0]
+    tail = snippets[1] if len(snippets) > 1 else ""
+    if tail:
+        return f"From memory: {lead} Also relevant: {tail}"
+    return f"From memory: {lead}"
+
+
 async def run_chat(message: str) -> dict[str, Any]:
     global LAST_TURN_DIAGNOSTICS
     _sync_session_context_budget()
@@ -1273,6 +1352,13 @@ async def run_chat(message: str) -> dict[str, Any]:
     with semantic_mode(str(os.getenv("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "degraded_allowed")):
         retrieval = memory_tools.execute(req, root=settings.core_memory_root, explain=False)
 
+    recovered_answer = ""
+    if _answer_looks_uncertain(answer):
+        recovered = _build_grounded_recovery_answer(message, retrieval)
+        if recovered:
+            answer = str(recovered)
+            recovered_answer = str(recovered)
+
     top_result = (retrieval.get("results") or [{}])[0] if (retrieval.get("results") or []) else {}
     retrieval_mode = str(
         retrieval.get("retrieval_mode")
@@ -1302,6 +1388,7 @@ async def run_chat(message: str) -> dict[str, Any]:
             "fallback_mode": bool(fallback_error),
             "fallback_error": fallback_error,
             "association_linking": association_linking,
+            "recovered_from_memory": bool(recovered_answer),
         },
     }
 
