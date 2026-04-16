@@ -1142,14 +1142,6 @@ async function initAuthGate() {
     }
   }
   if (!meta || !meta.auth) {
-    const cachedToken = window.__CORE_MEMORY_GET_TOKEN();
-    if (cachedToken) {
-      authEnabled = false;
-      authReady = true;
-      setAuthStatus('Using cached auth token.');
-      setAuthButton('', null);
-      return true;
-    }
     authEnabled = true;
     authReady = false;
     setAuthStatus('Auth configuration unavailable. Retry in a moment.');
@@ -1231,13 +1223,19 @@ async function initAuthGate() {
       const tooMany = recent && Number(guard.count || 0) >= 2;
       window.__CORE_MEMORY_SET_TOKEN('');
       if (tooMany) {
-        const msg = guard.lastError || 'Repeated login redirects detected.';
-        setAuthStatus('Auth paused: ' + msg);
-        setAuthButton('Retry login', () => {
+        const hasCachedToken = !!window.__CORE_MEMORY_GET_TOKEN();
+        const explicitLogin = String(qp.get('login') || '').trim() === '1';
+        if (explicitLogin || !hasCachedToken) {
           clearAuthLoopGuard();
-          redirectToLogin(true);
-        });
-        return false;
+        } else {
+          const msg = guard.lastError || 'Repeated login redirects detected.';
+          setAuthStatus('Auth paused: ' + msg);
+          setAuthButton('Retry login', () => {
+            clearAuthLoopGuard();
+            redirectToLogin(true);
+          });
+          return false;
+        }
       }
 
       setAuthStatus('Redirecting to login...');
@@ -1251,6 +1249,16 @@ async function initAuthGate() {
 
     const token = await window.__CORE_MEMORY_REFRESH_TOKEN();
     window.__CORE_MEMORY_SET_TOKEN(token || '');
+    if (!token) {
+      setAuthStatus('Session expired. Redirecting to login...');
+      setAuthButton('Sign in', () => redirectToLogin(true));
+      if (!authRedirecting) {
+        authRedirecting = true;
+        clearAuthLoopGuard();
+        await redirectToLogin(true);
+      }
+      return false;
+    }
     clearAuthLoopGuard();
 
     if (!callbackReturnTo && requestedNext) {
@@ -1292,7 +1300,18 @@ async function initAuthGate() {
   } catch (err) {
     window.__CORE_MEMORY_SET_TOKEN('');
     window.__CORE_MEMORY_REFRESH_TOKEN = async () => '';
-    setAuthStatus('Auth error: ' + String((err && err.message) || err || 'unknown'));
+    const emsg = String((err && err.message) || err || 'unknown');
+    if (/login_required|consent_required|interaction_required/i.test(emsg)) {
+      setAuthStatus('Session expired. Redirecting to login...');
+      setAuthButton('Sign in', () => redirectToLogin(true));
+      if (!authRedirecting) {
+        authRedirecting = true;
+        clearAuthLoopGuard();
+        try { await redirectToLogin(true); } catch (_) {}
+      }
+      return false;
+    }
+    setAuthStatus('Auth error: ' + emsg);
     setAuthButton('Sign in', () => redirectToLogin(true));
     return false;
   }
