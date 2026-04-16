@@ -6,8 +6,12 @@
   "outputDirectory": "frontend/dist",
   "rewrites": [
     {
+      "source": "/reagraph-archive.html",
+      "destination": "/graph.html"
+    },
+    {
       "source": "/graph",
-      "destination": "/reagraph-archive.html"
+      "destination": "/graph.html"
     }
   ]
 }
