@@ -60,12 +60,12 @@ async function apiFetchJson<T>(path: string): Promise<T> {
 function typeColor(type: string | undefined): string {
   const t = String(type || '').toLowerCase()
   if (t === 'decision') return '#6ae276'
-  if (t === 'evidence') return '#6da773'
-  if (t === 'lesson') return '#4f9c51'
-  if (t === 'goal') return '#8bdf95'
-  if (t === 'outcome') return '#356b31'
-  if (t === 'context') return '#7ea985'
-  return '#5f8f66'
+  if (t === 'evidence') return '#6ecfe0'
+  if (t === 'lesson') return '#8bc894'
+  if (t === 'goal') return '#f2d56b'
+  if (t === 'outcome') return '#f08a7a'
+  if (t === 'context') return '#8d96a9'
+  return '#7ca0ab'
 }
 
 function App(): React.JSX.Element {
@@ -350,27 +350,27 @@ function App(): React.JSX.Element {
               labelType="all"
               edgeLabelPosition="inline"
               theme={{
-                canvas: { background: '#102417' },
-                arrow: { fill: '#4f9c51', activeFill: '#6ae276' },
+                canvas: { background: '#05070c' },
+                arrow: { fill: '#5b6a8a', activeFill: '#6ae276' },
                 node: {
-                  fill: '#6da773',
+                  fill: '#7ca0ab',
                   activeFill: '#6ae276',
                   opacity: 0.95,
                   selectedOpacity: 1,
                   inactiveOpacity: 0.2,
-                  label: { color: '#ddf6e0', stroke: '#102417', activeColor: '#ffffff' },
-                  subLabel: { color: '#9acfa0', stroke: 'transparent', activeColor: '#ddf6e0' },
+                  label: { color: '#e1e4ed', stroke: '#05070c', activeColor: '#ffffff' },
+                  subLabel: { color: '#8b8fa3', stroke: 'transparent', activeColor: '#e1e4ed' },
                 },
                 edge: {
-                  fill: '#4f9c51',
+                  fill: '#5b6a8a',
                   activeFill: '#6ae276',
                   opacity: 0.7,
                   selectedOpacity: 1,
                   inactiveOpacity: 0.2,
-                  label: { color: '#bde8c2', stroke: '#102417', activeColor: '#ffffff' },
+                  label: { color: '#b8c0d8', stroke: '#05070c', activeColor: '#ffffff' },
                 },
                 lasso: { border: '1px solid #6ae276', background: 'rgba(106,226,118,0.18)' },
-                ring: { fill: '#1d3f24', activeFill: '#6ae276' },
+                ring: { fill: '#1f2838', activeFill: '#6ae276' },
               }}
               onNodeClick={onNodeClick}
               onEdgeClick={onEdgeClick}
