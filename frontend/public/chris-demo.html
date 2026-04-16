@@ -1180,13 +1180,15 @@ async function sendMessage() {
     typing.remove();
     addMsg('assistant', (data.assistant || data.response || ''), data.turn_id);
     if (data.last_answer) {
-      const d = data.last_answer;
+      const d = (data.last_answer && data.last_answer.diagnostics) ? data.last_answer.diagnostics : data.last_answer;
+      const gLevel = String(d.grounding_level || 'n/a');
       addMsg(
         'system',
         'Answer diagnostics: outcome=' + (d.answer_outcome || 'n/a') +
         ', surface=' + (d.source_surface || 'n/a') +
         ', anchor=' + (d.anchor_reason || 'n/a') +
-        ', mode=' + (d.retrieval_mode || 'n/a')
+        ', mode=' + (d.retrieval_mode || 'n/a') +
+        ', grounding=' + gLevel
       );
     }
     if (data.auto_flushed) {
@@ -2515,6 +2517,13 @@ function renderRuntime(runtime, lastTurn) {
     '<div style="margin-top:2px;color:var(--text-dim)">results: ' + String(p.result_count ?? 0) +
     ' · chains: ' + String(p.chain_count ?? 0) +
     ' · warnings: ' + String(warnCount) + '</div>' +
+    '<div style="margin-top:2px;color:var(--text-dim)">grounding: ' + String(p.grounding_level || 'n/a') +
+    ' · required=' + String(!!p.grounding_required) +
+    ' · achieved=' + String(!!p.grounding_achieved) +
+    (p.intent_class ? (' · intent=' + escapeHtml(String(p.intent_class))) : '') + '</div>' +
+    (p.grounding_reason
+      ? ('<div style="margin-top:2px;color:var(--text-dim)">grounding reason: ' + escapeHtml(String(p.grounding_reason)) + '</div>')
+      : '') +
     (topIds.length
       ? ('<div style="margin-top:2px;color:var(--text-dim)">top beads: ' + escapeHtml(topIds.join(', ')) + '</div>')
       : '') +

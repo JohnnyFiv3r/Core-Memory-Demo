@@ -1280,6 +1280,7 @@ async def run_chat(message: str) -> dict[str, Any]:
         or "unknown"
     )
 
+    grounding = dict(retrieval.get("grounding") or {})
     LAST_TURN_DIAGNOSTICS = {
         "ok": True,
         "turn_id": turn_id,
@@ -1292,6 +1293,11 @@ async def run_chat(message: str) -> dict[str, Any]:
             "result_count": int(len(list(retrieval.get("results") or []))),
             "top_bead_ids": [str(r.get("bead_id") or "") for r in list(retrieval.get("results") or [])[:5]],
             "chain_count": int(len(list(retrieval.get("chains") or []))),
+            "grounding_level": str(grounding.get("level") or "none"),
+            "grounding_required": bool(grounding.get("required")),
+            "grounding_achieved": bool(grounding.get("achieved")),
+            "grounding_reason": str(grounding.get("reason") or ""),
+            "intent_class": intent_class or "remember",
             "warnings": list(retrieval.get("warnings") or []),
             "fallback_mode": bool(fallback_error),
             "fallback_error": fallback_error,
