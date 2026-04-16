@@ -125,8 +125,14 @@ async def require_admin(request: Request, authorization: str | None = Header(def
         request.state.principal = principal
         return principal
 
-    token = _extract_bearer(authorization)
-    claims = _decode_token(token)
-    principal = _validate_admin_claims(claims, token)
+    try:
+        token = _extract_bearer(authorization)
+        claims = _decode_token(token)
+        principal = _validate_admin_claims(claims, token)
+    except HTTPException:
+        raise
+    except Exception as exc:
+        raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"auth_unexpected:{exc}")
+
     request.state.principal = principal
     return principal

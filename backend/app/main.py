@@ -1,7 +1,10 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.requests import Request
+from fastapi.responses import JSONResponse
 
 from app.core.config import settings
+from app.core.state_fallback import safe_state_fallback
 from app.routes.health import router as health_router
 from app.routes.demo import public_router as demo_public_router
 from app.routes.demo import router as demo_router
@@ -34,6 +37,23 @@ app.include_router(health_router)
 app.include_router(demo_public_router)
 app.include_router(demo_router)
 app.include_router(inspect_router)
+
+STATE_PATHS = {'/api/demo/state', '/v1/memory/inspect/state'}
+
+
+@app.middleware('http')
+async def state_error_fallback_middleware(request: Request, call_next):
+    path = request.url.path
+    try:
+        response = await call_next(request)
+    except Exception as exc:
+        if path in STATE_PATHS:
+            return JSONResponse(safe_state_fallback(f'unhandled:{exc}'), status_code=200)
+        raise
+
+    if path in STATE_PATHS and int(getattr(response, 'status_code', 200) or 200) >= 500:
+        return JSONResponse(safe_state_fallback(f'http_{response.status_code}'), status_code=200)
+    return response
 
 
 @app.on_event('startup')
