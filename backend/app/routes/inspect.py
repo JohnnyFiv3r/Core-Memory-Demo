@@ -5,6 +5,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.abuse import rate_limit_general
 from app.core.auth import require_admin
+from app.core.config import settings
 from app.core.runtime import (
     inspect_bead_hydration_payload,
     inspect_bead_payload,
@@ -21,7 +22,50 @@ def inspect_state(as_of: str | None = None):
     try:
         return inspect_state_payload(as_of=as_of)
     except Exception as exc:
-        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+        fallback = {
+            'ok': True,
+            'warning': 'state_unavailable',
+            'error': str(exc),
+            'memory': {
+                'beads': [],
+                'associations': [],
+                'rolling_window': [],
+            },
+            'claims': {'slots': []},
+            'entities': {'rows': []},
+            'beads': [],
+            'associations': [],
+            'rolling_window': [],
+            'claim_state': [],
+            'session': {
+                'session_id': 'unavailable',
+                'token_usage': 0,
+                'context_budget': int(settings.demo_context_budget or 128000),
+                'rolling_window_token_estimate': 0,
+                'rolling_window_token_budget': 0,
+                'rolling_window_record_count': 0,
+            },
+            'stats': {
+                'total_beads': 0,
+                'total_associations': 0,
+                'rolling_window_size': 0,
+                'rolling_window_token_estimate': 0,
+                'rolling_window_token_budget': 0,
+                'rolling_window_record_count': 0,
+                'claim_slot_count': 0,
+                'entity_count': 0,
+                'session_id': 'unavailable',
+                'token_usage': 0,
+                'context_budget': int(settings.demo_context_budget or 128000),
+            },
+            'last_turn': {},
+            'benchmark': {
+                'last_summary': {},
+                'has_last_report': False,
+                'history': [],
+            },
+        }
+        return JSONResponse(fallback, status_code=200)
 
 
 @router.get('/beads/{bead_id}')
