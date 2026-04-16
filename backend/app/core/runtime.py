@@ -91,6 +91,8 @@ os.environ.setdefault("CORE_MEMORY_CLAIM_EXTRACTION_MODE", "off")
 os.environ.setdefault("CORE_MEMORY_CLAIM_RESOLUTION", "0")
 os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_PROMOTION", "1")
 os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_ALLOW_SHARED_TAG", "1")
+os.environ.setdefault("CORE_MEMORY_SEMANTIC_BUILD_ON_READ", "0")
+os.environ.setdefault("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE", "degraded_allowed")
 
 STORY_PACK_DIR = Path(__file__).resolve().parents[3] / "demo" / "story-pack"
 TURN_HEADER_RE = re.compile(r"^##\s*Turn\s+(\d{3})\s*:\s*(.+?)\s*$", re.MULTILINE)
@@ -1214,8 +1216,7 @@ def _build_fallback_answer(message: str, retrieval: dict[str, Any] | None = None
 
 def _chat_semantic_mode_name() -> str:
     demo_mode = str(os.getenv("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "").strip().lower()
-    canonical_mode = str(os.getenv("CORE_MEMORY_CANONICAL_SEMANTIC_MODE") or "").strip().lower()
-    mode = demo_mode or canonical_mode or "degraded_allowed"
+    mode = demo_mode or "degraded_allowed"
     return mode if mode in {"required", "degraded_allowed"} else "degraded_allowed"
 
 
@@ -1458,7 +1459,7 @@ async def seed_demo_history(
     *,
     messages: list[Any] | None = None,
     max_turns: int | None = None,
-    wait_for_idle: bool = True,
+    wait_for_idle: bool = False,
     idle_timeout_ms: int = 20000,
     idle_poll_ms: int = 250,
     auto_flush: bool = True,
@@ -1583,7 +1584,7 @@ async def replay_story_pack(
     max_turns: int | None = None,
     start_turn: int | None = None,
     end_turn: int | None = None,
-    wait_for_idle: bool = True,
+    wait_for_idle: bool = False,
     idle_timeout_ms: int = 20000,
     idle_poll_ms: int = 250,
     max_compaction_per_pass: int = 2,

@@ -147,7 +147,7 @@ async def seed(request: Request):
     if isinstance(max_turns, int) and max_turns > 0:
         max_turns = min(max_turns, max(1, int(settings.seed_max_turns)))
 
-    wait_for_idle = bool((body or {}).get('wait_for_idle', True))
+    wait_for_idle = bool((body or {}).get('wait_for_idle', False))
     idle_timeout_ms_raw = (body or {}).get('idle_timeout_ms')
     idle_timeout_ms = int(idle_timeout_ms_raw) if isinstance(idle_timeout_ms_raw, int) and idle_timeout_ms_raw > 0 else 120000
 
@@ -213,7 +213,7 @@ async def story_pack_replay(request: Request):
     if isinstance(max_turns, int) and max_turns > 0:
         max_turns = min(max_turns, max_allowed_replay)
 
-    wait_for_idle = bool((body or {}).get('wait_for_idle', True))
+    wait_for_idle = bool((body or {}).get('wait_for_idle', False))
 
     idle_timeout_ms_raw = (body or {}).get('idle_timeout_ms')
     idle_timeout_ms = int(idle_timeout_ms_raw) if isinstance(idle_timeout_ms_raw, int) and idle_timeout_ms_raw > 0 else 120000
