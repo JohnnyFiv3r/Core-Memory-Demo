@@ -76,8 +76,8 @@ function App(): React.JSX.Element {
   const [minConf, setMinConf] = useState<number>(0)
   const [search, setSearch] = useState<string>('')
   const [auto, setAuto] = useState<boolean>(true)
-  const [detail, setDetail] = useState<string>('Select a node or edge.')
-  const [meta, setMeta] = useState<string>('loading...')
+  const [detail, setDetail] = useState<string>('')
+  const [meta, setMeta] = useState<string>('')
 
   const closeGraphView = useCallback(() => {
     try {
@@ -93,7 +93,7 @@ function App(): React.JSX.Element {
   }, [])
 
   const refresh = useCallback(async () => {
-    setMeta('loading data...')
+    setMeta('')
     let data: InspectStateResponse | null = null
     let lastErr: unknown = null
 
@@ -231,11 +231,6 @@ function App(): React.JSX.Element {
       },
     }))
 
-    const renderer = 'Reagraph (bundled)'
-    setMeta(
-      `renderer=${renderer} · session beads=${beads.length} · associations=${edgesRaw.length} · showing nodes=${nodes.length} edges=${edges.length}`,
-    )
-
     return { nodes, edges }
   }, [beads, edgesRaw, minConf, relation, search])
 
@@ -272,7 +267,7 @@ function App(): React.JSX.Element {
       <header className="graph-header">
         <div className="graph-title">
           <img className="graph-brand" src="/core-memory-banner.svg" alt="Core Memory" />
-          <span className="graph-subtitle">Reagraph Archive Viewer</span>
+          <span className="graph-subtitle">Causal Graph</span>
         </div>
         <div className="graph-controls">
           <label>relation</label>
@@ -379,9 +374,15 @@ function App(): React.JSX.Element {
         </div>
 
         <div className="graph-panel graph-side">
-          <div className="graph-meta">{meta}</div>
-          <pre className="graph-detail">{detail}</pre>
-          <div className="graph-hint">This page renders from the demo bead archive via /v1/memory/inspect/state.</div>
+          {meta ? <div className="graph-meta">{meta}</div> : null}
+          {detail ? (
+            <pre className="graph-detail">{detail}</pre>
+          ) : (
+            <div className="graph-empty-state">
+              <div className="graph-empty-state-icon">◌</div>
+              <div>Select a node or edge.</div>
+            </div>
+          )}
         </div>
       </div>
     </div>
