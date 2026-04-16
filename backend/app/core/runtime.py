@@ -1212,6 +1212,13 @@ def _build_fallback_answer(message: str, retrieval: dict[str, Any] | None = None
     return base
 
 
+def _chat_semantic_mode_name() -> str:
+    demo_mode = str(os.getenv("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "").strip().lower()
+    canonical_mode = str(os.getenv("CORE_MEMORY_CANONICAL_SEMANTIC_MODE") or "").strip().lower()
+    mode = demo_mode or canonical_mode or "degraded_allowed"
+    return mode if mode in {"required", "degraded_allowed"} else "degraded_allowed"
+
+
 async def run_chat(message: str) -> dict[str, Any]:
     global LAST_TURN_DIAGNOSTICS
     _sync_session_context_budget()
@@ -1222,10 +1229,11 @@ async def run_chat(message: str) -> dict[str, Any]:
         "source": "core_memory_demo_backend",
         "crawler_updates": seed_updates,
     }
+    chat_semantic_mode = _chat_semantic_mode_name()
 
     try:
         agent = get_agent()
-        with semantic_mode(str(os.getenv("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "degraded_allowed")):
+        with semantic_mode(chat_semantic_mode):
             result = await run_with_memory(
                 agent,
                 message,
@@ -1238,7 +1246,7 @@ async def run_chat(message: str) -> dict[str, Any]:
     except Exception as exc:
         err = str(exc or "").strip()
         fallback_error = err or "model_unavailable"
-        with semantic_mode(str(os.getenv("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "degraded_allowed")):
+        with semantic_mode(chat_semantic_mode):
             retrieval_preview = memory_tools.execute({"query": message, "intent": "remember", "k": 8}, root=settings.core_memory_root, explain=False)
         answer = _build_fallback_answer(message, retrieval_preview)
         process_turn_finalized(
@@ -1273,7 +1281,7 @@ async def run_chat(message: str) -> dict[str, Any]:
     if intent_class in {"causal", "why", "what_changed"}:
         req["intent"] = "causal"
 
-    with semantic_mode(str(os.getenv("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "degraded_allowed")):
+    with semantic_mode(chat_semantic_mode):
         retrieval = memory_tools.execute(req, root=settings.core_memory_root, explain=False)
 
     top_result = (retrieval.get("results") or [{}])[0] if (retrieval.get("results") or []) else {}
@@ -1300,6 +1308,7 @@ async def run_chat(message: str) -> dict[str, Any]:
             "grounding_required": bool(grounding.get("required")),
             "grounding_achieved": bool(grounding.get("achieved")),
             "grounding_reason": str(grounding.get("reason") or ""),
+            "semantic_mode": chat_semantic_mode,
             "intent_class": intent_class or "remember",
             "warnings": list(retrieval.get("warnings") or []),
             "fallback_mode": bool(fallback_error),
