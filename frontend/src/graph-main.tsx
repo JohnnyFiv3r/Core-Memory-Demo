@@ -47,7 +47,6 @@ if (apiBase) {
 }
 
 const AUTH_TOKEN_KEY = 'CORE_MEMORY_AUTH_TOKEN'
-const GRAPH_AUTH_REDIRECT_GUARD_KEY = 'CM_GRAPH_AUTH_REDIRECT_AT'
 
 class AuthRequiredError extends Error {
   status: number
@@ -69,33 +68,6 @@ function getStoredToken(): string {
   } catch {
     return ''
   }
-}
-
-function clearGraphAuthRedirectGuard(): void {
-  try {
-    sessionStorage.removeItem(GRAPH_AUTH_REDIRECT_GUARD_KEY)
-  } catch {
-    // best effort only
-  }
-}
-
-function redirectToLoginFromGraph(): boolean {
-  const now = Date.now()
-  try {
-    const prev = Number(sessionStorage.getItem(GRAPH_AUTH_REDIRECT_GUARD_KEY) || 0)
-    if (Number.isFinite(prev) && now - prev < 15000) {
-      return false
-    }
-    sessionStorage.setItem(GRAPH_AUTH_REDIRECT_GUARD_KEY, String(now))
-  } catch {
-    // best effort only
-  }
-
-  const loginUrl = new URL('/', window.location.origin)
-  loginUrl.searchParams.set('login', '1')
-  loginUrl.searchParams.set('next', `${window.location.pathname}${window.location.search}`)
-  window.location.assign(loginUrl.toString())
-  return true
 }
 
 async function apiFetchJson<T>(path: string): Promise<T> {
@@ -182,10 +154,7 @@ function App(): React.JSX.Element {
 
     if (!data) {
       if (authErrorCount >= stateUrls.length) {
-        if (redirectToLoginFromGraph()) {
-          throw new Error('Redirecting to login...')
-        }
-        throw new Error('Authentication required. Open the demo page and sign in again.')
+        throw new Error('Authentication required (403). Return to the demo page and sign in again.')
       } else {
         throw lastErr instanceof Error ? lastErr : new Error('state_fetch_failed')
       }
@@ -195,7 +164,6 @@ function App(): React.JSX.Element {
     const nextAssoc = Array.isArray(data.memory?.associations) ? data.memory?.associations || [] : []
     setBeads(nextBeads)
     setAssociations(nextAssoc)
-    clearGraphAuthRedirectGuard()
   }, [])
 
   useEffect(() => {
@@ -203,6 +171,9 @@ function App(): React.JSX.Element {
       const msg = err instanceof Error ? err.stack || err.message : String(err)
       setMeta(`load error: ${msg}`)
       setDetail(`Failed to load graph data.\n\n${msg}`)
+      if (/Authentication required|Failed to fetch|CORS/i.test(msg)) {
+        setAuto(false)
+      }
     })
   }, [refresh])
 
@@ -213,6 +184,9 @@ function App(): React.JSX.Element {
         const msg = err instanceof Error ? err.stack || err.message : String(err)
         setMeta(`refresh error: ${msg}`)
         setDetail(`Runtime error while refreshing graph.\n\n${msg}`)
+        if (/Authentication required|Failed to fetch|CORS/i.test(msg)) {
+          setAuto(false)
+        }
       })
     }, 4000)
     return () => window.clearInterval(id)
