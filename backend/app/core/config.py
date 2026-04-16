@@ -54,7 +54,7 @@ class Settings(BaseSettings):
         raw = str(self.allowed_origin or '').strip()
         out: list[str] = []
         for part in raw.split(','):
-            v = part.strip().rstrip('/')
+            v = part.strip().strip('"').strip("'").rstrip('/')
             if v and v not in out:
                 out.append(v)
         if not out:

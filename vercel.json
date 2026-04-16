@@ -6,6 +6,14 @@
   "outputDirectory": "frontend/dist",
   "rewrites": [
     {
+      "source": "/api/:path*",
+      "destination": "https://core-memory-demo.onrender.com/api/:path*"
+    },
+    {
+      "source": "/v1/:path*",
+      "destination": "https://core-memory-demo.onrender.com/v1/:path*"
+    },
+    {
       "source": "/reagraph-archive.html",
       "destination": "/graph.html"
     },

@@ -36,14 +36,15 @@ try {
 } catch {
   localBase = ''
 }
-const defaultBase = window.location.hostname === 'demo.usecorememory.com' ? 'https://core-memory-demo.onrender.com' : ''
-const apiBase = (queryBase || localBase || defaultBase || '').replace(/\/+$/, '')
-if (apiBase) {
-  try {
-    localStorage.setItem('CORE_MEMORY_API_BASE', apiBase)
-  } catch {
-    // best effort only
-  }
+const isHostedDemo = window.location.hostname === 'demo.usecorememory.com'
+const hostedBase = ''
+const apiBase = (queryBase || (isHostedDemo ? hostedBase : localBase) || '').replace(/\/+$/, '')
+try {
+  if (queryBase) localStorage.setItem('CORE_MEMORY_API_BASE', apiBase)
+  else if (isHostedDemo) localStorage.removeItem('CORE_MEMORY_API_BASE')
+  else if (apiBase) localStorage.setItem('CORE_MEMORY_API_BASE', apiBase)
+} catch {
+  // best effort only
 }
 
 const AUTH_TOKEN_KEY = 'CORE_MEMORY_AUTH_TOKEN'
@@ -74,7 +75,16 @@ async function apiFetchJson<T>(path: string): Promise<T> {
   const url = apiBase && path.startsWith('/') ? `${apiBase}${path}` : path
   const token = getStoredToken()
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined
-  const res = await fetch(url, { headers })
+  let res: Response
+  try {
+    res = await fetch(url, { headers })
+  } catch (err) {
+    if (apiBase && path.startsWith('/')) {
+      res = await fetch(path, { headers })
+    } else {
+      throw err
+    }
+  }
 
   if (res.status === 401 || res.status === 403) {
     throw new AuthRequiredError(res.status)

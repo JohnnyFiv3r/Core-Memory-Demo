@@ -8,19 +8,20 @@
   const q = (params.get('api_base') || '').trim();
   let s = '';
   try { s = (localStorage.getItem('CORE_MEMORY_API_BASE') || '').trim(); } catch {}
-  const defaultApiBase = window.location.hostname === 'demo.usecorememory.com'
-    ? 'https://core-memory-demo.onrender.com'
-    : '';
-  const apiBase = (q || s || defaultApiBase || '').replace(/\/+$/, '');
+  const isHostedDemo = window.location.hostname === 'demo.usecorememory.com';
+  const defaultApiBase = isHostedDemo ? '' : '';
+  const apiBase = (q || (isHostedDemo ? defaultApiBase : s) || '').replace(/\/+$/, '');
   if (window.self === window.top && /\/chris-demo\.html$/.test(window.location.pathname)) {
     const rootUrl = new URL('/', window.location.origin);
     if (window.location.search) rootUrl.search = window.location.search;
     window.location.replace(rootUrl.toString());
     return;
   }
-  if (apiBase) {
-    try { localStorage.setItem('CORE_MEMORY_API_BASE', apiBase); } catch {}
-  }
+  try {
+    if (q) localStorage.setItem('CORE_MEMORY_API_BASE', apiBase);
+    else if (isHostedDemo) localStorage.removeItem('CORE_MEMORY_API_BASE');
+    else if (apiBase) localStorage.setItem('CORE_MEMORY_API_BASE', apiBase);
+  } catch {}
   const nativeFetch = window.fetch.bind(window);
   window.__CORE_MEMORY_SET_TOKEN = (token) => {
     try {
@@ -47,7 +48,13 @@
     if (apiBase && typeof input === 'string' && input.startsWith('/')) {
       input = apiBase + input;
     }
-    return nativeFetch(input, nextInit);
+    return nativeFetch(input, nextInit).catch((err) => {
+      if (apiBase && typeof input === 'string' && input.startsWith(apiBase + '/')) {
+        const fallback = input.slice(apiBase.length);
+        return nativeFetch(fallback, nextInit);
+      }
+      throw err;
+    });
   };
   window.__CORE_MEMORY_API_BASE = apiBase;
 })();
