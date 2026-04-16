@@ -46,6 +46,49 @@ if (apiBase) {
   }
 }
 
+const GRAPH_AUTH_REDIRECT_GUARD_KEY = 'CM_GRAPH_AUTH_REDIRECT_AT'
+
+class AuthRequiredError extends Error {
+  status: number
+
+  constructor(status: number) {
+    super('Authentication required')
+    this.name = 'AuthRequiredError'
+    this.status = status
+  }
+}
+
+function isAuthRequiredError(err: unknown): err is AuthRequiredError {
+  return err instanceof AuthRequiredError || (err instanceof Error && err.name === 'AuthRequiredError')
+}
+
+function clearGraphAuthRedirectGuard(): void {
+  try {
+    sessionStorage.removeItem(GRAPH_AUTH_REDIRECT_GUARD_KEY)
+  } catch {
+    // best effort only
+  }
+}
+
+function redirectToLoginFromGraph(): boolean {
+  const now = Date.now()
+  try {
+    const prev = Number(sessionStorage.getItem(GRAPH_AUTH_REDIRECT_GUARD_KEY) || 0)
+    if (Number.isFinite(prev) && now - prev < 15000) {
+      return false
+    }
+    sessionStorage.setItem(GRAPH_AUTH_REDIRECT_GUARD_KEY, String(now))
+  } catch {
+    // best effort only
+  }
+
+  const loginUrl = new URL('/', window.location.origin)
+  loginUrl.searchParams.set('login', '1')
+  loginUrl.searchParams.set('next', `${window.location.pathname}${window.location.search}`)
+  window.location.assign(loginUrl.toString())
+  return true
+}
+
 async function apiFetchJson<T>(path: string): Promise<T> {
   const url = apiBase && path.startsWith('/') ? `${apiBase}${path}` : path
   let token = ''
@@ -58,11 +101,7 @@ async function apiFetchJson<T>(path: string): Promise<T> {
   const res = await fetch(url, { headers })
 
   if (res.status === 401 || res.status === 403) {
-    const loginUrl = new URL('./', window.location.href)
-    loginUrl.searchParams.set('login', '1')
-    loginUrl.searchParams.set('next', `${window.location.pathname}${window.location.search}`)
-    window.location.assign(loginUrl.toString())
-    throw new Error('Redirecting to login...')
+    throw new AuthRequiredError(res.status)
   }
 
   const body = await res.json()
@@ -124,22 +163,34 @@ function App(): React.JSX.Element {
     setMeta('')
     let data: InspectStateResponse | null = null
     let lastErr: unknown = null
+    const stateUrls = ['/v1/memory/inspect/state', '/api/demo/state']
+    let authErrorCount = 0
 
-    for (const stateUrl of ['/v1/memory/inspect/state', '/api/demo/state']) {
+    for (const stateUrl of stateUrls) {
       try {
         data = await apiFetchJson<InspectStateResponse>(stateUrl)
         break
       } catch (err) {
         lastErr = err
+        if (isAuthRequiredError(err)) authErrorCount += 1
       }
     }
 
-    if (!data) throw lastErr instanceof Error ? lastErr : new Error('state_fetch_failed')
+    if (!data) {
+      if (authErrorCount >= stateUrls.length) {
+        if (redirectToLoginFromGraph()) {
+          throw new Error('Redirecting to login...')
+        }
+        throw new Error('Authentication required. Please sign in again.')
+      }
+      throw lastErr instanceof Error ? lastErr : new Error('state_fetch_failed')
+    }
 
     const nextBeads = Array.isArray(data.memory?.beads) ? data.memory?.beads || [] : []
     const nextAssoc = Array.isArray(data.memory?.associations) ? data.memory?.associations || [] : []
     setBeads(nextBeads)
     setAssociations(nextAssoc)
+    clearGraphAuthRedirectGuard()
   }, [])
 
   useEffect(() => {
