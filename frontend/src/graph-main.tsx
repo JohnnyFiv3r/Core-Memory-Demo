@@ -82,7 +82,6 @@ function App(): React.JSX.Element {
   const closeGraphView = useCallback(() => {
     try {
       window.close()
-      return
     } catch {
       // ignore
     }
