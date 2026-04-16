@@ -11,6 +11,7 @@
   const isHostedDemo = window.location.hostname === 'demo.usecorememory.com';
   const defaultApiBase = isHostedDemo ? '' : '';
   const hostedDirectBase = isHostedDemo ? 'https://core-memory-demo.onrender.com' : '';
+  window.__CORE_MEMORY_HOSTED_DIRECT_BASE = hostedDirectBase;
   const apiBase = (q || (isHostedDemo ? defaultApiBase : s) || '').replace(/\/+$/, '');
   if (window.self === window.top && /\/chris-demo\.html$/.test(window.location.pathname)) {
     const rootUrl = new URL('/', window.location.origin);
@@ -1116,12 +1117,32 @@ async function redirectToLogin(forcePrompt) {
 async function initAuthGate() {
   let callbackReturnTo = '';
   let requestedNext = '';
-  let meta = {};
+  const directBase = String(window.__CORE_MEMORY_HOSTED_DIRECT_BASE || '').trim();
+  let meta = null;
   try {
     const res = await fetch('/api/meta');
-    meta = await res.json();
+    if (res.ok) {
+      meta = await res.json();
+    }
   } catch (_) {
-    meta = {};
+    meta = null;
+  }
+  if ((!meta || !meta.auth) && directBase) {
+    try {
+      const res = await fetch(directBase + '/api/meta');
+      if (res.ok) {
+        meta = await res.json();
+      }
+    } catch (_) {
+      // ignore fallback errors
+    }
+  }
+  if (!meta || !meta.auth) {
+    authEnabled = true;
+    authReady = false;
+    setAuthStatus('Auth configuration unavailable. Retry in a moment.');
+    setAuthButton('Retry', () => window.location.reload());
+    return false;
   }
 
   const auth = (meta && meta.auth) || {};
@@ -1491,6 +1512,10 @@ async function sendMessage() {
       body: JSON.stringify({message: text}),
     });
     const data = await res.json();
+    if (!res.ok || !data || data.ok === false) {
+      const detail = String((data && (data.error || data.detail || data.message)) || ('HTTP ' + res.status));
+      throw new Error(detail);
+    }
     typing.remove();
     addMsg('assistant', (data.assistant || data.response || ''), data.turn_id);
     if (data.last_answer) {
