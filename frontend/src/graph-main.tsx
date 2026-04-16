@@ -28,30 +28,6 @@ type InspectStateResponse = {
   }
 }
 
-type MetaResponse = {
-  auth?: {
-    enabled?: boolean
-    domain?: string
-    client_id?: string
-    audience?: string
-  }
-}
-
-type Auth0ClientLike = {
-  isAuthenticated: () => Promise<boolean>
-  getTokenSilently: () => Promise<string>
-  loginWithRedirect: (opts?: Record<string, unknown>) => Promise<void>
-  handleRedirectCallback: () => Promise<{ appState?: { returnTo?: string } }>
-}
-
-declare global {
-  interface Window {
-    auth0?: {
-      createAuth0Client?: (opts: Record<string, unknown>) => Promise<Auth0ClientLike>
-    }
-  }
-}
-
 const params = new URLSearchParams(window.location.search)
 const queryBase = (params.get('api_base') || '').trim()
 let localBase = ''
@@ -72,8 +48,6 @@ if (apiBase) {
 
 const AUTH_TOKEN_KEY = 'CORE_MEMORY_AUTH_TOKEN'
 const GRAPH_AUTH_REDIRECT_GUARD_KEY = 'CM_GRAPH_AUTH_REDIRECT_AT'
-let graphMetaPromise: Promise<MetaResponse['auth'] | null> | null = null
-let graphAuthClientPromise: Promise<Auth0ClientLike | null> | null = null
 
 class AuthRequiredError extends Error {
   status: number
@@ -94,15 +68,6 @@ function getStoredToken(): string {
     return (localStorage.getItem(AUTH_TOKEN_KEY) || '').trim()
   } catch {
     return ''
-  }
-}
-
-function setStoredToken(token: string): void {
-  try {
-    if (token) localStorage.setItem(AUTH_TOKEN_KEY, String(token))
-    else localStorage.removeItem(AUTH_TOKEN_KEY)
-  } catch {
-    // best effort only
   }
 }
 
@@ -131,106 +96,6 @@ function redirectToLoginFromGraph(): boolean {
   loginUrl.searchParams.set('next', `${window.location.pathname}${window.location.search}`)
   window.location.assign(loginUrl.toString())
   return true
-}
-
-async function fetchAuthMeta(): Promise<MetaResponse['auth'] | null> {
-  if (!graphMetaPromise) {
-    graphMetaPromise = (async () => {
-      try {
-        const metaUrl = apiBase ? `${apiBase}/api/meta` : '/api/meta'
-        const res = await fetch(metaUrl)
-        if (!res.ok) return null
-        const body = (await res.json()) as MetaResponse
-        return body?.auth || null
-      } catch {
-        return null
-      }
-    })()
-  }
-  return graphMetaPromise
-}
-
-async function getGraphAuthClient(): Promise<Auth0ClientLike | null> {
-  if (!graphAuthClientPromise) {
-    graphAuthClientPromise = (async () => {
-      const auth = await fetchAuthMeta()
-      const enabled = !!auth?.enabled
-      const domain = String(auth?.domain || '').trim()
-      const clientId = String(auth?.client_id || '').trim()
-      const audience = String(auth?.audience || '').trim()
-      const createClient = window.auth0?.createAuth0Client
-      if (!enabled || !domain || !clientId || typeof createClient !== 'function') return null
-
-      const redirectUri = window.location.origin.replace(/\/$/, '') + '/'
-      return createClient({
-        domain,
-        clientId,
-        authorizationParams: {
-          audience,
-          scope: 'openid profile email',
-          redirect_uri: redirectUri,
-        },
-        cacheLocation: 'localstorage',
-        useRefreshTokens: true,
-      })
-    })()
-  }
-  return graphAuthClientPromise
-}
-
-async function ensureGraphToken(interactive: boolean): Promise<string> {
-  const existing = getStoredToken()
-  if (existing) return existing
-
-  const auth = await fetchAuthMeta()
-  if (!auth?.enabled) return ''
-
-  const qp = new URLSearchParams(window.location.search)
-  if (qp.get('error')) {
-    const err = String(qp.get('error') || 'auth_error').trim()
-    const desc = String(qp.get('error_description') || '').trim()
-    throw new Error(desc ? `Auth error: ${err} (${desc})` : `Auth error: ${err}`)
-  }
-
-  const client = await getGraphAuthClient()
-  if (!client) {
-    if (interactive && redirectToLoginFromGraph()) throw new Error('Redirecting to login...')
-    return ''
-  }
-
-  if (qp.get('code') && qp.get('state')) {
-    const cb = await client.handleRedirectCallback()
-    window.history.replaceState({}, document.title, window.location.pathname)
-    const returnTo = String(cb?.appState?.returnTo || '').trim()
-    if (returnTo) {
-      try {
-        const target = new URL(returnTo, window.location.origin)
-        const current = `${window.location.pathname}${window.location.search}`
-        if (target.origin === window.location.origin && `${target.pathname}${target.search}` !== current) {
-          window.location.assign(target.toString())
-          return ''
-        }
-      } catch {
-        // ignore invalid return target
-      }
-    }
-  }
-
-  const isAuthenticated = await client.isAuthenticated()
-  if (!isAuthenticated) {
-    if (interactive) {
-      await client.loginWithRedirect({
-        appState: { returnTo: `${window.location.pathname}${window.location.search}` },
-        authorizationParams: { prompt: 'login', scope: 'openid profile email' },
-      })
-      throw new Error('Redirecting to login...')
-    }
-    return ''
-  }
-
-  const token = String((await client.getTokenSilently()) || '').trim()
-  if (token) setStoredToken(token)
-  return token
 }
 
 async function apiFetchJson<T>(path: string): Promise<T> {
@@ -300,12 +165,6 @@ function App(): React.JSX.Element {
 
   const refresh = useCallback(async () => {
     setMeta('')
-    try {
-      await ensureGraphToken(false)
-    } catch {
-      // best effort preflight only
-    }
-
     let data: InspectStateResponse | null = null
     let lastErr: unknown = null
     const stateUrls = ['/v1/memory/inspect/state', '/api/demo/state']
@@ -323,29 +182,10 @@ function App(): React.JSX.Element {
 
     if (!data) {
       if (authErrorCount >= stateUrls.length) {
-        setStoredToken('')
-        try {
-          await ensureGraphToken(true)
-          authErrorCount = 0
-          for (const stateUrl of stateUrls) {
-            try {
-              data = await apiFetchJson<InspectStateResponse>(stateUrl)
-              break
-            } catch (err) {
-              lastErr = err
-              if (isAuthRequiredError(err)) authErrorCount += 1
-            }
-          }
-        } catch (err) {
-          throw err instanceof Error ? err : new Error(String(err))
+        if (redirectToLoginFromGraph()) {
+          throw new Error('Redirecting to login...')
         }
-
-        if (!data) {
-          if (authErrorCount >= stateUrls.length && redirectToLoginFromGraph()) {
-            throw new Error('Redirecting to login...')
-          }
-          throw new Error('Authentication required. Please sign in again.')
-        }
+        throw new Error('Authentication required. Open the demo page and sign in again.')
       } else {
         throw lastErr instanceof Error ? lastErr : new Error('state_fetch_failed')
       }
