@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, Request
+from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
 from app.core.abuse import heavy_operation_slot, rate_limit_chat, rate_limit_general, rate_limit_heavy
@@ -30,6 +30,14 @@ from app.core.runtime import (
 
 public_router = APIRouter(prefix='/api', tags=['demo-public'])
 router = APIRouter(prefix='/api', tags=['demo'], dependencies=[Depends(require_admin), Depends(rate_limit_general)])
+
+
+def _http_exc_response(exc: HTTPException) -> JSONResponse:
+    detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
+    payload: dict[str, object] = {'ok': False, 'error': detail}
+    if detail == 'heavy_operation_in_progress':
+        payload['hint'] = 'heavy endpoints are single-flight; use one seed request with max_turns instead of parallel seed calls'
+    return JSONResponse(payload, status_code=int(exc.status_code), headers=dict(exc.headers or {}))
 
 
 @public_router.get('/meta')
@@ -117,26 +125,32 @@ async def chat(request: Request):
 
 
 @router.post('/flush')
-def flush():
+async def flush(request: Request):
     try:
         with heavy_operation_slot():
+            await rate_limit_heavy(request)
             return run_flush()
+    except HTTPException as exc:
+        return _http_exc_response(exc)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
-@router.post('/session/reset', dependencies=[Depends(rate_limit_heavy)])
+@router.post('/session/reset')
 async def session_reset(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
     wipe_memory = bool((body or {}).get('wipe_memory', False))
     try:
         with heavy_operation_slot():
+            await rate_limit_heavy(request)
             return reset_test_session(wipe_memory=wipe_memory)
+    except HTTPException as exc:
+        return _http_exc_response(exc)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
-@router.post('/seed', dependencies=[Depends(rate_limit_heavy)])
+@router.post('/seed')
 async def seed(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
     messages = (body or {}).get('messages')
@@ -168,6 +182,7 @@ async def seed(request: Request):
     max_side_effects_per_pass = int(max_side_effects_per_pass_raw) if isinstance(max_side_effects_per_pass_raw, int) and max_side_effects_per_pass_raw > 0 else 8
     try:
         with heavy_operation_slot():
+            await rate_limit_heavy(request)
             out = await seed_demo_history(
                 messages=messages if isinstance(messages, list) else None,
                 max_turns=max_turns,
@@ -184,6 +199,8 @@ async def seed(request: Request):
         out['stats'] = state.get('stats') or {}
         code = 200 if bool(out.get('ok')) else 400
         return JSONResponse(out, status_code=code)
+    except HTTPException as exc:
+        return _http_exc_response(exc)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
@@ -196,7 +213,7 @@ def story_pack_meta():
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
-@router.post('/story-pack/replay', dependencies=[Depends(rate_limit_heavy)])
+@router.post('/story-pack/replay')
 async def story_pack_replay(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
 
@@ -244,6 +261,7 @@ async def story_pack_replay(request: Request):
 
     try:
         with heavy_operation_slot():
+            await rate_limit_heavy(request)
             out = await replay_story_pack(
                 max_turns=max_turns,
                 start_turn=start_turn,
@@ -264,11 +282,13 @@ async def story_pack_replay(request: Request):
             )
         code = 200 if bool(out.get('ok')) else 400
         return JSONResponse(out, status_code=code)
+    except HTTPException as exc:
+        return _http_exc_response(exc)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
-@router.post('/benchmark-run', dependencies=[Depends(rate_limit_heavy)])
+@router.post('/benchmark-run')
 async def benchmark_run(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
     subset = str((body or {}).get('subset') or 'local').strip().lower() or 'local'
@@ -288,6 +308,7 @@ async def benchmark_run(request: Request):
 
     try:
         with heavy_operation_slot():
+            await rate_limit_heavy(request)
             out = run_benchmark(
                 subset=subset,
                 semantic_mode_name=semantic_mode,
@@ -297,6 +318,8 @@ async def benchmark_run(request: Request):
                 limit=limit,
             )
         return out
+    except HTTPException as exc:
+        return _http_exc_response(exc)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 

@@ -101,7 +101,11 @@ async def rate_limit_heavy(request: Request) -> None:
 @contextmanager
 def heavy_operation_slot() -> None:
     if not _HEAVY_GATE.acquire():
-        raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail="heavy_operation_in_progress")
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail="heavy_operation_in_progress",
+            headers={"Retry-After": "2"},
+        )
     try:
         yield
     finally:
