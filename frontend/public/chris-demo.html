@@ -25,6 +25,7 @@
     else if (apiBase) localStorage.setItem('CORE_MEMORY_API_BASE', apiBase);
   } catch {}
   const nativeFetch = window.fetch.bind(window);
+  window.__CORE_MEMORY_NATIVE_FETCH = nativeFetch;
   window.__CORE_MEMORY_SET_TOKEN = (token) => {
     try {
       if (token) localStorage.setItem(AUTH_TOKEN_KEY, String(token));
@@ -1118,9 +1119,12 @@ async function initAuthGate() {
   let callbackReturnTo = '';
   let requestedNext = '';
   const directBase = String(window.__CORE_MEMORY_HOSTED_DIRECT_BASE || '').trim();
+  const rawFetch = typeof window.__CORE_MEMORY_NATIVE_FETCH === 'function'
+    ? window.__CORE_MEMORY_NATIVE_FETCH
+    : window.fetch.bind(window);
   let meta = null;
   try {
-    const res = await fetch('/api/meta');
+    const res = await rawFetch('/api/meta');
     if (res.ok) {
       meta = await res.json();
     }
@@ -1129,7 +1133,7 @@ async function initAuthGate() {
   }
   if ((!meta || !meta.auth) && directBase) {
     try {
-      const res = await fetch(directBase + '/api/meta');
+      const res = await rawFetch(directBase + '/api/meta');
       if (res.ok) {
         meta = await res.json();
       }
@@ -1138,6 +1142,14 @@ async function initAuthGate() {
     }
   }
   if (!meta || !meta.auth) {
+    const cachedToken = window.__CORE_MEMORY_GET_TOKEN();
+    if (cachedToken) {
+      authEnabled = false;
+      authReady = true;
+      setAuthStatus('Using cached auth token.');
+      setAuthButton('', null);
+      return true;
+    }
     authEnabled = true;
     authReady = false;
     setAuthStatus('Auth configuration unavailable. Retry in a moment.');
