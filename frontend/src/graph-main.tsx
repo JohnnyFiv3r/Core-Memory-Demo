@@ -82,14 +82,27 @@ function App(): React.JSX.Element {
   const closeGraphView = useCallback(() => {
     try {
       window.close()
+      return
     } catch {
       // ignore
     }
-    if (window.history.length > 1) {
-      window.history.back()
-      return
+
+    const nonce = String(Date.now())
+
+    try {
+      const ref = document.referrer ? new URL(document.referrer, window.location.href) : null
+      if (ref && ref.origin === window.location.origin && !/^\/graph(?:\.html)?$/.test(ref.pathname)) {
+        ref.searchParams.set('v', nonce)
+        window.location.assign(ref.toString())
+        return
+      }
+    } catch {
+      // ignore
     }
-    window.location.assign('./')
+
+    const home = new URL('./', window.location.href)
+    home.searchParams.set('v', nonce)
+    window.location.assign(home.toString())
   }, [])
 
   const refresh = useCallback(async () => {
