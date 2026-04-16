@@ -150,6 +150,18 @@
     border-top: 1px solid var(--border);
   }
 </style>
+<script type="importmap">
+{
+  "imports": {
+    "https://cdn.jsdelivr.net/npm/react@19.2.4/+esm": "https://cdn.jsdelivr.net/npm/react@19.2.3/+esm",
+    "https://cdn.jsdelivr.net/npm/react-dom@19.2.4/client/+esm": "https://cdn.jsdelivr.net/npm/react-dom@19.2.3/client/+esm",
+    "/npm/react@19.2.4/+esm": "https://cdn.jsdelivr.net/npm/react@19.2.3/+esm",
+    "/npm/react@19.2.4/jsx-runtime/+esm": "https://cdn.jsdelivr.net/npm/react@19.2.3/jsx-runtime/+esm",
+    "/npm/react-dom@19.2.4/+esm": "https://cdn.jsdelivr.net/npm/react-dom@19.2.3/+esm",
+    "/npm/react-dom@19.2.4/client/+esm": "https://cdn.jsdelivr.net/npm/react-dom@19.2.3/client/+esm"
+  }
+}
+</script>
 </head>
 <body>
   <header>
@@ -196,6 +208,34 @@ let associations = [];
 let refreshTimer = null;
 let lastGraph = { nodes: [], edges: [] };
 
+function fallbackFromRuntimeError(err) {
+  runtimeError = err || new Error('reagraph_runtime_render_error');
+  runtime = null;
+  try {
+    if (graphRoot && typeof graphRoot.unmount === 'function') graphRoot.unmount();
+  } catch (_) {}
+  graphRoot = null;
+  graphRef = null;
+  renderGraph();
+}
+
+window.addEventListener('error', (ev) => {
+  if (!runtime) return;
+  const msg = String((ev && ev.error && ev.error.message) || (ev && ev.message) || '');
+  if (/useMemo|react-three-fiber|multiple instances of three/i.test(msg)) {
+    fallbackFromRuntimeError(ev && (ev.error || new Error(msg)));
+  }
+});
+
+window.addEventListener('unhandledrejection', (ev) => {
+  if (!runtime) return;
+  const reason = ev && ev.reason;
+  const msg = String((reason && reason.message) || reason || '');
+  if (/useMemo|react-three-fiber|multiple instances of three/i.test(msg)) {
+    fallbackFromRuntimeError(reason instanceof Error ? reason : new Error(msg));
+  }
+});
+
 const theme = {
   canvas: { background: '#060a16' },
   node: {
@@ -227,10 +267,7 @@ window.__cmSetReagraphRuntime = function (rt) {
     if (!graphRoot) graphRoot = rt.createRoot(host);
     renderGraph();
   } catch (err) {
-    runtimeError = err;
-    runtime = null;
-    graphRoot = null;
-    renderGraph();
+    fallbackFromRuntimeError(err);
   }
 };
 
@@ -495,9 +532,8 @@ function renderGraph() {
       );
       return;
     } catch (err) {
-      runtimeError = err;
-      runtime = null;
-      graphRoot = null;
+      fallbackFromRuntimeError(err);
+      return;
     }
   }
 
@@ -577,8 +613,8 @@ refreshData().catch((err) => {
 setupAutoRefresh();
 </script>
 <script type="module">
-import React from 'https://cdn.jsdelivr.net/npm/react@19.2.4/+esm';
-import { createRoot } from 'https://cdn.jsdelivr.net/npm/react-dom@19.2.4/client/+esm';
+import React from 'https://cdn.jsdelivr.net/npm/react@19.2.3/+esm';
+import { createRoot } from 'https://cdn.jsdelivr.net/npm/react-dom@19.2.3/client/+esm';
 import { GraphCanvas } from 'https://cdn.jsdelivr.net/npm/reagraph@4.30.8/+esm';
 if (window.__cmSetReagraphRuntime) {
   window.__cmSetReagraphRuntime({ name: 'jsdelivr', React, createRoot, GraphCanvas });

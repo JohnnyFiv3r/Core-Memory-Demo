@@ -2426,6 +2426,11 @@ function renderRuntime(runtime, lastTurn) {
   const mode = String(s.mode || 'degraded_allowed');
   const usable = !!s.usable_backend;
   const strictMode = mode === 'required';
+  const warningText = String(s.concurrency_warning || '').trim();
+  const showBackendWarning = !!(
+    warningText &&
+    !(mode === 'degraded_allowed' && /No semantic backend is currently active/i.test(warningText))
+  );
 
   const c1 = document.createElement('div');
   c1.className = 'runtime-card';
@@ -2473,8 +2478,8 @@ function renderRuntime(runtime, lastTurn) {
       ? ('<div style="margin-top:2px;color:var(--amber)">connectivity_error: ' + escapeHtml(String(s.connectivity_error || 'unknown')) + '</div>')
       : '') +
     '<div style="margin-top:4px;color:var(--text-dim)">next: ' + escapeHtml(String(s.next_step || 'n/a')) + '</div>' +
-    ((s.concurrency_warning && String(s.concurrency_warning).trim())
-      ? ('<div style="margin-top:2px;color:var(--amber)">warning: ' + escapeHtml(String(s.concurrency_warning)) + '</div>')
+    (showBackendWarning
+      ? ('<div style="margin-top:2px;color:var(--amber)">warning: ' + escapeHtml(warningText) + '</div>')
       : '');
   el.appendChild(c2);
 
