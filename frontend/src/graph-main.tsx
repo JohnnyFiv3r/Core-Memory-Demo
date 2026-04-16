@@ -80,12 +80,22 @@ async function apiFetchJson<T>(path: string): Promise<T> {
     throw new AuthRequiredError(res.status)
   }
 
-  const body = await res.json()
+  const raw = await res.text()
+  let body: Record<string, unknown> | null = null
+  try {
+    body = raw ? (JSON.parse(raw) as Record<string, unknown>) : null
+  } catch {
+    body = null
+  }
+
   if (!res.ok) {
-    const msg = (body && (body.error || body.message)) || `HTTP ${res.status}`
+    const msg =
+      (body && (body.error || body.message || body.detail)) ||
+      (raw && raw.trim().slice(0, 400)) ||
+      `HTTP ${res.status}`
     throw new Error(String(msg))
   }
-  return body as T
+  return (body || {}) as T
 }
 
 function typeColor(type: string | undefined): string {

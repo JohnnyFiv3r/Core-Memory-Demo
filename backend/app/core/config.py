@@ -8,7 +8,7 @@ class Settings(BaseSettings):
     app_name: str = 'Core Memory Demo API'
     app_env: str = 'dev'
 
-    allowed_origin: str = 'http://localhost:5173'
+    allowed_origin: str = 'http://localhost:5173,https://demo.usecorememory.com'
 
     core_memory_root: str = './var/core-memory'
     core_memory_demo_benchmark_root: str = './var/core-memory-bench'
@@ -22,7 +22,7 @@ class Settings(BaseSettings):
     demo_auth0_audience: str = ''
     demo_auth0_client_id: str = ''
     demo_auth0_issuer: str = ''
-    demo_auth_require_verified_email: bool = True
+    demo_auth_require_verified_email: bool = False
     demo_admin_emails: str = ''
     demo_auth_jwt_leeway_seconds: int = 30
 
@@ -48,6 +48,18 @@ class Settings(BaseSettings):
             Path(self.core_memory_demo_benchmark_root),
             Path(self.core_memory_demo_artifacts_root),
         ]
+
+    @property
+    def cors_allowed_origins(self) -> list[str]:
+        raw = str(self.allowed_origin or '').strip()
+        out: list[str] = []
+        for part in raw.split(','):
+            v = part.strip().rstrip('/')
+            if v and v not in out:
+                out.append(v)
+        if not out:
+            out = ['http://localhost:5173', 'https://demo.usecorememory.com']
+        return out
 
     @property
     def auth0_issuer(self) -> str:

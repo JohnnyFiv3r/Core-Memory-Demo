@@ -18,7 +18,10 @@ router = APIRouter(prefix='/v1/memory/inspect', tags=['inspect'], dependencies=[
 
 @router.get('/state')
 def inspect_state(as_of: str | None = None):
-    return inspect_state_payload(as_of=as_of)
+    try:
+        return inspect_state_payload(as_of=as_of)
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
 @router.get('/beads/{bead_id}')
