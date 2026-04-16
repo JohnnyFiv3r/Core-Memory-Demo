@@ -1848,6 +1848,30 @@ def _append_history(row: dict[str, Any]) -> None:
     with f.open("a", encoding="utf-8") as out:
         out.write(json.dumps(row, ensure_ascii=False) + "\n")
 
+    max_rows = max(10, int(settings.benchmark_history_max_rows))
+    try:
+        lines = [ln for ln in f.read_text(encoding="utf-8").splitlines() if str(ln or "").strip()]
+        if len(lines) > max_rows:
+            f.write_text("\n".join(lines[-max_rows:]) + "\n", encoding="utf-8")
+    except Exception:
+        # best effort only
+        pass
+
+
+def _prune_benchmark_run_dirs() -> None:
+    root = Path(settings.core_memory_demo_benchmark_root)
+    if not root.exists():
+        return
+    max_keep = max(10, int(settings.benchmark_runs_max_keep))
+    try:
+        dirs = [d for d in root.iterdir() if d.is_dir() and d.name.startswith("bench-")]
+        dirs.sort(key=lambda p: p.stat().st_mtime, reverse=True)
+        for old in dirs[max_keep:]:
+            shutil.rmtree(old, ignore_errors=True)
+    except Exception:
+        # best effort only
+        pass
+
 
 def read_benchmark_history(limit: int = 20) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
@@ -2291,6 +2315,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
     }
     LAST_BENCHMARK_HISTORY = ([history_row] + list(LAST_BENCHMARK_HISTORY or []))[:100]
     _append_history(history_row)
+    _prune_benchmark_run_dirs()
 
     return {"ok": True, "summary": summary, "report": report}
 

@@ -1,8 +1,10 @@
 from __future__ import annotations
 
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 from fastapi.responses import JSONResponse
 
+from app.core.abuse import rate_limit_general
+from app.core.auth import require_admin
 from app.core.runtime import (
     inspect_bead_hydration_payload,
     inspect_bead_payload,
@@ -11,7 +13,7 @@ from app.core.runtime import (
     inspect_turns_payload,
 )
 
-router = APIRouter(prefix='/v1/memory/inspect', tags=['inspect'])
+router = APIRouter(prefix='/v1/memory/inspect', tags=['inspect'], dependencies=[Depends(require_admin), Depends(rate_limit_general)])
 
 
 @router.get('/state')

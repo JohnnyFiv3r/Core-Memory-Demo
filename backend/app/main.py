@@ -1,9 +1,9 @@
-from pathlib import Path
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.core.config import settings
 from app.routes.health import router as health_router
+from app.routes.demo import public_router as demo_public_router
 from app.routes.demo import router as demo_router
 from app.routes.inspect import router as inspect_router
 
@@ -30,6 +30,7 @@ app.add_middleware(
 )
 
 app.include_router(health_router)
+app.include_router(demo_public_router)
 app.include_router(demo_router)
 app.include_router(inspect_router)
 
@@ -44,6 +45,5 @@ def root():
     return {
         'ok': True,
         'service': settings.app_name,
-        'env': settings.app_env,
-        'roots': [str(Path(p)) for p in settings.roots],
+        'auth_enabled': bool(settings.demo_auth_enabled),
     }

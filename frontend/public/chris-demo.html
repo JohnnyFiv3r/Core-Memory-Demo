@@ -3,6 +3,7 @@
 <head>
 <script>
 (function () {
+  const AUTH_TOKEN_KEY = 'CORE_MEMORY_AUTH_TOKEN';
   const params = new URLSearchParams(window.location.search);
   const q = (params.get('api_base') || '').trim();
   let s = '';
@@ -15,15 +16,37 @@
     try { localStorage.setItem('CORE_MEMORY_API_BASE', apiBase); } catch {}
   }
   const nativeFetch = window.fetch.bind(window);
+  window.__CORE_MEMORY_SET_TOKEN = (token) => {
+    try {
+      if (token) localStorage.setItem(AUTH_TOKEN_KEY, String(token));
+      else localStorage.removeItem(AUTH_TOKEN_KEY);
+    } catch {}
+  };
+  window.__CORE_MEMORY_GET_TOKEN = () => {
+    try { return (localStorage.getItem(AUTH_TOKEN_KEY) || '').trim(); } catch { return ''; }
+  };
   window.fetch = (input, init) => {
+    const nextInit = Object.assign({}, init || {});
+    const inheritedHeaders = (!nextInit.headers && input && typeof input !== 'string' && input.headers)
+      ? input.headers
+      : undefined;
+    const headers = new Headers(nextInit.headers || inheritedHeaders || undefined);
+
+    const token = window.__CORE_MEMORY_GET_TOKEN();
+    if (token && !headers.has('Authorization')) {
+      headers.set('Authorization', 'Bearer ' + token);
+    }
+
+    nextInit.headers = headers;
     if (apiBase && typeof input === 'string' && input.startsWith('/')) {
       input = apiBase + input;
     }
-    return nativeFetch(input, init);
+    return nativeFetch(input, nextInit);
   };
   window.__CORE_MEMORY_API_BASE = apiBase;
 })();
 </script>
+<script src="https://cdn.auth0.com/js/auth0-spa-js/2.1/auth0-spa-js.production.js"></script>
 
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -87,6 +110,15 @@
   }
 
   .header-controls { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+  .auth-status {
+    font-size: 11px;
+    color: var(--text-dim);
+    max-width: 220px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   .control-label {
     font-size: 10px;
@@ -755,6 +787,8 @@
     <span class="header-title-tail">Live Demo</span>
   </h1>
   <div class="header-controls">
+    <button class="btn" id="auth-btn" type="button" style="display:none">Sign in</button>
+    <span class="auth-status" id="auth-status" style="display:none"></span>
     <div class="session-chip-wrap">
       <button class="session-badge session-badge-btn" id="session-badge" type="button" style="cursor:pointer;user-select:none">session: --- ▾</button>
       <div class="session-popover" id="session-popover" onclick="event.stopPropagation()">
@@ -963,6 +997,102 @@ function saveGraphPrefs() {
 
 loadGraphPrefs();
 
+const authBtnEl = document.getElementById('auth-btn');
+const authStatusEl = document.getElementById('auth-status');
+let authEnabled = false;
+let authReady = false;
+let authClient = null;
+let refreshTimerId = null;
+
+function setAuthStatus(text) {
+  if (!authStatusEl) return;
+  authStatusEl.style.display = authEnabled ? 'inline' : 'none';
+  authStatusEl.textContent = String(text || '');
+}
+
+function setAuthButton(label, onClick) {
+  if (!authBtnEl) return;
+  if (!authEnabled) {
+    authBtnEl.style.display = 'none';
+    return;
+  }
+  authBtnEl.style.display = 'inline-block';
+  authBtnEl.textContent = String(label || 'Sign in');
+  authBtnEl.onclick = typeof onClick === 'function' ? onClick : null;
+}
+
+async function initAuthGate() {
+  let meta = {};
+  try {
+    const res = await fetch('/api/meta');
+    meta = await res.json();
+  } catch (_) {
+    meta = {};
+  }
+
+  const auth = (meta && meta.auth) || {};
+  authEnabled = !!auth.enabled;
+  if (!authEnabled) {
+    authReady = true;
+    return true;
+  }
+
+  const domain = String(auth.domain || '').trim();
+  const clientId = String(auth.client_id || '').trim();
+  const audience = String(auth.audience || '').trim();
+  if (!domain || !clientId || !window.auth0 || typeof window.auth0.createAuth0Client !== 'function') {
+    setAuthStatus('Auth is enabled but not fully configured.');
+    setAuthButton('Sign in', null);
+    return false;
+  }
+
+  try {
+    authClient = await window.auth0.createAuth0Client({
+      domain,
+      clientId,
+      authorizationParams: {
+        audience,
+        redirect_uri: window.location.origin + window.location.pathname,
+      },
+      cacheLocation: 'localstorage',
+      useRefreshTokens: true,
+    });
+
+    const qp = new URLSearchParams(window.location.search);
+    if (qp.get('code') && qp.get('state')) {
+      await authClient.handleRedirectCallback();
+      window.history.replaceState({}, document.title, window.location.pathname);
+    }
+
+    const isAuthenticated = await authClient.isAuthenticated();
+    if (!isAuthenticated) {
+      window.__CORE_MEMORY_SET_TOKEN('');
+      setAuthStatus('Sign in required');
+      setAuthButton('Sign in', () => authClient.loginWithRedirect());
+      return false;
+    }
+
+    const token = await authClient.getTokenSilently();
+    window.__CORE_MEMORY_SET_TOKEN(token || '');
+    const user = await authClient.getUser();
+    const email = String((user && user.email) || '').trim();
+    setAuthStatus(email ? ('Signed in: ' + email) : 'Signed in');
+    setAuthButton('Sign out', () => {
+      window.__CORE_MEMORY_SET_TOKEN('');
+      authClient.logout({
+        logoutParams: { returnTo: window.location.origin + window.location.pathname },
+      });
+    });
+    authReady = true;
+    return true;
+  } catch (err) {
+    window.__CORE_MEMORY_SET_TOKEN('');
+    setAuthStatus('Auth error: ' + String((err && err.message) || err || 'unknown'));
+    setAuthButton('Sign in', () => authClient && authClient.loginWithRedirect());
+    return false;
+  }
+}
+
 function getStoryCursorTurn() {
   try {
     const raw = Number(localStorage.getItem(PREF_STORY_CURSOR_TURN_KEY) || 0);
@@ -1163,6 +1293,10 @@ function showTyping() {
 }
 
 async function sendMessage() {
+  if (authEnabled && !authReady) {
+    addMsg('system', 'Sign in required before sending messages.');
+    return;
+  }
   const text = inputEl.value.trim();
   if (!text) return;
   inputEl.value = '';
@@ -2812,6 +2946,7 @@ function renderBenchmark(summary, report, benchmarkMeta) {
 }
 
 async function refreshMemory() {
+  if (authEnabled && !authReady) return;
   try {
     const stateUrl = claimsAsOf
       ? ('/v1/memory/inspect/state?as_of=' + encodeURIComponent(claimsAsOf))
@@ -3167,11 +3302,22 @@ function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(t => t.classList.toggle('active', t.id === 'tab-' + name));
 }
 
-loadClaimsStateFromUrl();
-loadSeedResetPrefs();
-bindSessionPopoverControls();
-refreshMemory();
-setInterval(refreshMemory, 2500);
+function startDemoUi() {
+  loadClaimsStateFromUrl();
+  loadSeedResetPrefs();
+  bindSessionPopoverControls();
+  refreshMemory();
+  if (refreshTimerId) clearInterval(refreshTimerId);
+  refreshTimerId = setInterval(refreshMemory, 2500);
+}
+
+async function bootstrapDemo() {
+  const ok = await initAuthGate();
+  if (!ok) return;
+  startDemoUi();
+}
+
+bootstrapDemo();
 document.addEventListener('click', e => {
   const wrap = document.querySelector('.session-chip-wrap');
   if (!wrap) return;

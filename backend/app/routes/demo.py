@@ -1,8 +1,11 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Request
+from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse
 
+from app.core.abuse import heavy_operation_slot, rate_limit_chat, rate_limit_general, rate_limit_heavy
+from app.core.auth import auth_meta_payload, require_admin
+from app.core.config import settings
 from app.core.runtime import (
     compare_benchmark_runs,
     decide_entity_merge,
@@ -24,15 +27,17 @@ from app.core.runtime import (
     LAST_BENCHMARK_SUMMARY,
 )
 
-router = APIRouter(prefix='/api', tags=['demo'])
+public_router = APIRouter(prefix='/api', tags=['demo-public'])
+router = APIRouter(prefix='/api', tags=['demo'], dependencies=[Depends(require_admin), Depends(rate_limit_general)])
 
 
-@router.get('/meta')
+@public_router.get('/meta')
 def meta():
     return {
         'ok': True,
         'message': 'Core Memory Demo backend active',
         'contract_status': 't2_in_progress',
+        'auth': auth_meta_payload(),
     }
 
 
@@ -94,7 +99,7 @@ def demo_turns(session_id: str | None = None, limit: int = 200, cursor: str | No
     return inspect_turns_payload(session_id, max(1, int(limit)), cursor)
 
 
-@router.post('/chat')
+@router.post('/chat', dependencies=[Depends(rate_limit_chat)])
 async def chat(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
     message = str((body or {}).get('message') or (body or {}).get('query') or '').strip()
@@ -110,22 +115,24 @@ async def chat(request: Request):
 @router.post('/flush')
 def flush():
     try:
-        return run_flush()
+        with heavy_operation_slot():
+            return run_flush()
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
-@router.post('/session/reset')
+@router.post('/session/reset', dependencies=[Depends(rate_limit_heavy)])
 async def session_reset(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
     wipe_memory = bool((body or {}).get('wipe_memory', False))
     try:
-        return reset_test_session(wipe_memory=wipe_memory)
+        with heavy_operation_slot():
+            return reset_test_session(wipe_memory=wipe_memory)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
-@router.post('/seed')
+@router.post('/seed', dependencies=[Depends(rate_limit_heavy)])
 async def seed(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
     messages = (body or {}).get('messages')
@@ -133,6 +140,8 @@ async def seed(request: Request):
     max_turns = None
     if isinstance(max_turns_raw, int) and max_turns_raw > 0:
         max_turns = int(max_turns_raw)
+    if isinstance(max_turns, int) and max_turns > 0:
+        max_turns = min(max_turns, max(1, int(settings.seed_max_turns)))
 
     wait_for_idle = bool((body or {}).get('wait_for_idle', True))
     idle_timeout_ms_raw = (body or {}).get('idle_timeout_ms')
@@ -154,18 +163,19 @@ async def seed(request: Request):
     max_side_effects_per_pass_raw = (body or {}).get('max_side_effects_per_pass')
     max_side_effects_per_pass = int(max_side_effects_per_pass_raw) if isinstance(max_side_effects_per_pass_raw, int) and max_side_effects_per_pass_raw > 0 else 8
     try:
-        out = await seed_demo_history(
-            messages=messages if isinstance(messages, list) else None,
-            max_turns=max_turns,
-            wait_for_idle=wait_for_idle,
-            idle_timeout_ms=idle_timeout_ms,
-            idle_poll_ms=idle_poll_ms,
-            auto_flush=auto_flush,
-            flush_threshold_ratio=flush_threshold_ratio,
-            flush_every_turns=flush_every_turns,
-            max_compaction_per_pass=max_compaction_per_pass,
-            max_side_effects_per_pass=max_side_effects_per_pass,
-        )
+        with heavy_operation_slot():
+            out = await seed_demo_history(
+                messages=messages if isinstance(messages, list) else None,
+                max_turns=max_turns,
+                wait_for_idle=wait_for_idle,
+                idle_timeout_ms=idle_timeout_ms,
+                idle_poll_ms=idle_poll_ms,
+                auto_flush=auto_flush,
+                flush_threshold_ratio=flush_threshold_ratio,
+                flush_every_turns=flush_every_turns,
+                max_compaction_per_pass=max_compaction_per_pass,
+                max_side_effects_per_pass=max_side_effects_per_pass,
+            )
         state = inspect_state_payload()
         out['stats'] = state.get('stats') or {}
         code = 200 if bool(out.get('ok')) else 400
@@ -182,7 +192,7 @@ def story_pack_meta():
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
-@router.post('/story-pack/replay')
+@router.post('/story-pack/replay', dependencies=[Depends(rate_limit_heavy)])
 async def story_pack_replay(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
 
@@ -194,6 +204,10 @@ async def story_pack_replay(request: Request):
 
     end_turn_raw = (body or {}).get('end_turn')
     end_turn = int(end_turn_raw) if isinstance(end_turn_raw, int) and end_turn_raw > 0 else None
+
+    max_allowed_replay = max(1, int(settings.replay_max_turns))
+    if isinstance(max_turns, int) and max_turns > 0:
+        max_turns = min(max_turns, max_allowed_replay)
 
     wait_for_idle = bool((body or {}).get('wait_for_idle', True))
 
@@ -221,33 +235,36 @@ async def story_pack_replay(request: Request):
 
     benchmark_limit_raw = (body or {}).get('benchmark_limit')
     benchmark_limit = int(benchmark_limit_raw) if isinstance(benchmark_limit_raw, int) and benchmark_limit_raw > 0 else None
+    if isinstance(benchmark_limit, int) and benchmark_limit > 0:
+        benchmark_limit = min(benchmark_limit, max(1, int(settings.benchmark_limit_max_cases)))
 
     try:
-        out = await replay_story_pack(
-            max_turns=max_turns,
-            start_turn=start_turn,
-            end_turn=end_turn,
-            wait_for_idle=wait_for_idle,
-            idle_timeout_ms=idle_timeout_ms,
-            idle_poll_ms=idle_poll_ms,
-            max_compaction_per_pass=max_compaction_per_pass,
-            max_side_effects_per_pass=max_side_effects_per_pass,
-            run_checkpoints=run_checkpoints,
-            reset_session=reset_session,
-            use_manifest_sessions=use_manifest_sessions,
-            auto_flush=auto_flush,
-            flush_threshold_ratio=flush_threshold_ratio,
-            flush_every_turns=flush_every_turns,
-            benchmark_semantic_mode=benchmark_semantic_mode,
-            benchmark_limit=benchmark_limit,
-        )
+        with heavy_operation_slot():
+            out = await replay_story_pack(
+                max_turns=max_turns,
+                start_turn=start_turn,
+                end_turn=end_turn,
+                wait_for_idle=wait_for_idle,
+                idle_timeout_ms=idle_timeout_ms,
+                idle_poll_ms=idle_poll_ms,
+                max_compaction_per_pass=max_compaction_per_pass,
+                max_side_effects_per_pass=max_side_effects_per_pass,
+                run_checkpoints=run_checkpoints,
+                reset_session=reset_session,
+                use_manifest_sessions=use_manifest_sessions,
+                auto_flush=auto_flush,
+                flush_threshold_ratio=flush_threshold_ratio,
+                flush_every_turns=flush_every_turns,
+                benchmark_semantic_mode=benchmark_semantic_mode,
+                benchmark_limit=benchmark_limit,
+            )
         code = 200 if bool(out.get('ok')) else 400
         return JSONResponse(out, status_code=code)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
-@router.post('/benchmark-run')
+@router.post('/benchmark-run', dependencies=[Depends(rate_limit_heavy)])
 async def benchmark_run(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
     subset = str((body or {}).get('subset') or 'local').strip().lower() or 'local'
@@ -259,18 +276,22 @@ async def benchmark_run(request: Request):
         root_mode = 'snapshot'
     preload_from_demo = bool((body or {}).get('preload_from_demo', False))
     preload_turns_max = int((body or {}).get('preload_turns_max') or 200)
+    preload_turns_max = min(max(1, preload_turns_max), max(1, int(settings.benchmark_preload_turns_max)))
     limit_raw = (body or {}).get('limit')
     limit = int(limit_raw) if isinstance(limit_raw, int) and limit_raw > 0 else None
+    if isinstance(limit, int) and limit > 0:
+        limit = min(limit, max(1, int(settings.benchmark_limit_max_cases)))
 
     try:
-        out = run_benchmark(
-            subset=subset,
-            semantic_mode_name=semantic_mode,
-            root_mode=root_mode,
-            preload_from_demo=preload_from_demo,
-            preload_turns_max=preload_turns_max,
-            limit=limit,
-        )
+        with heavy_operation_slot():
+            out = run_benchmark(
+                subset=subset,
+                semantic_mode_name=semantic_mode,
+                root_mode=root_mode,
+                preload_from_demo=preload_from_demo,
+                preload_turns_max=preload_turns_max,
+                limit=limit,
+            )
         return out
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
@@ -307,7 +328,7 @@ def benchmark_compare(left_run_id: str, right_run_id: str):
     return JSONResponse(out, status_code=status)
 
 
-@router.post('/demo/entities/merge/suggest')
+@router.post('/demo/entities/merge/suggest', dependencies=[Depends(rate_limit_heavy)])
 async def merge_suggest(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
     min_score = float((body or {}).get('min_score') or 0.86)
@@ -320,7 +341,7 @@ async def merge_suggest(request: Request):
         return {'ok': False, 'error': str(exc)}
 
 
-@router.post('/demo/entities/merge/decide')
+@router.post('/demo/entities/merge/decide', dependencies=[Depends(rate_limit_heavy)])
 async def merge_decide(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
     proposal_id = str((body or {}).get('proposal_id') or '').strip()

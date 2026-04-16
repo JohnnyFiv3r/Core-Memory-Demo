@@ -17,6 +17,30 @@ class Settings(BaseSettings):
     demo_model_id: str = ''
     demo_context_budget: int = 10000
 
+    demo_auth_enabled: bool = False
+    demo_auth0_domain: str = ''
+    demo_auth0_audience: str = ''
+    demo_auth0_client_id: str = ''
+    demo_auth0_issuer: str = ''
+    demo_auth_require_verified_email: bool = True
+    demo_admin_emails: str = ''
+    demo_auth_jwt_leeway_seconds: int = 30
+
+    abuse_general_max_requests: int = 300
+    abuse_general_window_seconds: int = 60
+    abuse_chat_max_requests: int = 120
+    abuse_chat_window_seconds: int = 60
+    abuse_heavy_max_requests: int = 40
+    abuse_heavy_window_seconds: int = 300
+    abuse_heavy_max_concurrent: int = 1
+
+    seed_max_turns: int = 500
+    replay_max_turns: int = 500
+    benchmark_limit_max_cases: int = 50
+    benchmark_preload_turns_max: int = 400
+    benchmark_history_max_rows: int = 300
+    benchmark_runs_max_keep: int = 80
+
     @property
     def roots(self) -> list[Path]:
         return [
@@ -24,6 +48,24 @@ class Settings(BaseSettings):
             Path(self.core_memory_demo_benchmark_root),
             Path(self.core_memory_demo_artifacts_root),
         ]
+
+    @property
+    def auth0_issuer(self) -> str:
+        if str(self.demo_auth0_issuer or '').strip():
+            issuer = str(self.demo_auth0_issuer or '').strip()
+        else:
+            domain = str(self.demo_auth0_domain or '').strip().strip('/')
+            issuer = f'https://{domain}/' if domain else ''
+        if issuer and not issuer.endswith('/'):
+            issuer += '/'
+        return issuer
+
+    @property
+    def admin_emails(self) -> set[str]:
+        raw = str(self.demo_admin_emails or '').strip()
+        if not raw:
+            return set()
+        return {x.strip().lower() for x in raw.split(',') if x.strip()}
 
 
 settings = Settings()

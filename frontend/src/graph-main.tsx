@@ -48,7 +48,19 @@ if (apiBase) {
 
 async function apiFetchJson<T>(path: string): Promise<T> {
   const url = apiBase && path.startsWith('/') ? `${apiBase}${path}` : path
-  const res = await fetch(url)
+  let token = ''
+  try {
+    token = (localStorage.getItem('CORE_MEMORY_AUTH_TOKEN') || '').trim()
+  } catch {
+    token = ''
+  }
+  const headers = token ? { Authorization: `Bearer ${token}` } : undefined
+  const res = await fetch(url, { headers })
+
+  if (res.status === 401 || res.status === 403) {
+    throw new Error('Authentication required. Sign in on the demo page first, then reopen Graph View.')
+  }
+
   const body = await res.json()
   if (!res.ok) {
     const msg = (body && (body.error || body.message)) || `HTTP ${res.status}`
