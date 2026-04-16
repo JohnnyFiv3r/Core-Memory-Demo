@@ -851,7 +851,6 @@
     <span class="header-title-tail">Live Demo</span>
   </h1>
   <div class="header-controls">
-    <button class="btn" id="auth-btn" type="button" style="display:none">Sign in</button>
     <div class="session-chip-wrap">
       <button class="session-badge session-badge-btn" id="session-badge" type="button" style="cursor:pointer;user-select:none">session: --- ▾</button>
       <div class="session-popover" id="session-popover" onclick="event.stopPropagation()">
@@ -876,6 +875,7 @@
         </div>
       </div>
     </div>
+    <button class="btn" id="auth-btn" type="button" style="display:none">Sign in</button>
     <button class="btn btn-warn" onclick="flushSession()">Flush Session</button>
     <button class="btn" onclick="openReagraphArchive()">Graph View</button>
   </div>
