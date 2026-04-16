@@ -30,14 +30,14 @@
 <title>Core Memory — Live Demo</title>
 <style>
   :root {
-    --bg: #0f1117;
-    --surface: #1a1d27;
-    --surface2: #232733;
-    --border: #2d3148;
+    --bg: #0a0c10;
+    --surface: #11151b;
+    --surface2: #1a2029;
+    --border: #2f6d45;
     --text: #e1e4ed;
     --text-dim: #8b8fa3;
-    --accent: #6c7eff;
-    --accent-glow: rgba(108, 126, 255, 0.15);
+    --accent: #6ae276;
+    --accent-glow: rgba(106, 226, 118, 0.15);
     --green: #4ade80;
     --amber: #fbbf24;
     --red: #f87171;
@@ -280,7 +280,7 @@
     font-family: var(--font); font-size: 10px; font-weight: 600;
     text-transform: uppercase; padding: 2px 6px; border-radius: 4px; letter-spacing: 0.04em;
   }
-  .bead-type-decision { background: rgba(108, 126, 255, 0.15); color: var(--accent); }
+  .bead-type-decision { background: rgba(106, 226, 118, 0.15); color: var(--accent); }
   .bead-type-lesson { background: rgba(74, 222, 128, 0.15); color: var(--green); }
   .bead-type-goal { background: rgba(251, 191, 36, 0.15); color: var(--amber); }
   .bead-type-evidence { background: rgba(34, 211, 238, 0.15); color: var(--cyan); }
@@ -349,8 +349,8 @@
     font-size: 12px;
   }
   .claim-row:last-child { border-bottom: none; }
-  .claim-row:hover { background: rgba(108, 126, 255, 0.08); }
-  .claim-row.active { background: rgba(108, 126, 255, 0.14); }
+  .claim-row:hover { background: rgba(106, 226, 118, 0.08); }
+  .claim-row.active { background: rgba(106, 226, 118, 0.14); }
 
   .claim-detail {
     background: var(--bg);
@@ -424,7 +424,7 @@
 
   .claims-detail-close:hover {
     border-color: var(--accent);
-    background: rgba(108, 126, 255, 0.16);
+    background: rgba(106, 226, 118, 0.16);
   }
 
   .claims-detail-body {
@@ -555,10 +555,10 @@
     font-size: 11px;
     cursor: pointer;
   }
-  .graph-toggle-btn:hover { color: var(--text); background: rgba(108, 126, 255, 0.08); }
+  .graph-toggle-btn:hover { color: var(--text); background: rgba(106, 226, 118, 0.08); }
   .graph-toggle-btn.active {
     color: var(--text);
-    background: rgba(108, 126, 255, 0.16);
+    background: rgba(106, 226, 118, 0.16);
     font-weight: 600;
   }
 
@@ -650,13 +650,13 @@
 
   .graph-node { cursor: pointer; }
   .graph-node circle {
-    fill: rgba(108, 126, 255, 0.22);
-    stroke: rgba(108, 126, 255, 0.7);
+    fill: rgba(106, 226, 118, 0.22);
+    stroke: rgba(106, 226, 118, 0.7);
     stroke-width: 1.2;
   }
   .graph-node:hover circle {
-    fill: rgba(108, 126, 255, 0.35);
-    stroke: rgba(108, 126, 255, 0.95);
+    fill: rgba(106, 226, 118, 0.35);
+    stroke: rgba(106, 226, 118, 0.95);
   }
   .graph-node text {
     fill: var(--text);
@@ -1362,7 +1362,7 @@ function ensureReagraphRuntime() {
 
 function graphTypeColor(type) {
   const t = String(type || '').toLowerCase();
-  if (t === 'decision') return '#6c7eff';
+  if (t === 'decision') return '#6ae276';
   if (t === 'evidence') return '#22d3ee';
   if (t === 'lesson') return '#4ade80';
   if (t === 'goal') return '#fbbf24';
@@ -1477,7 +1477,7 @@ function renderGraph3DCanvas(el, edges, beadMap, onNodeClick, onEdgeClick) {
         canvas: { background: '#060a16' },
         node: {
           fill: '#7ca0ab',
-          activeFill: '#6c7eff',
+          activeFill: '#6ae276',
           opacity: 0.95,
           selectedOpacity: 1,
           inactiveOpacity: 0.2,
@@ -1492,8 +1492,8 @@ function renderGraph3DCanvas(el, edges, beadMap, onNodeClick, onEdgeClick) {
           inactiveOpacity: 0.2,
           label: { color: '#b8c0d8', stroke: '#060a16', activeColor: '#ffffff' },
         },
-        lasso: { border: '1px solid #6c7eff', background: 'rgba(108,126,255,0.15)' },
-        ring: { fill: '#1f2838', activeFill: '#6c7eff' },
+        lasso: { border: '1px solid #6ae276', background: 'rgba(106,226,118,0.15)' },
+        ring: { fill: '#1f2838', activeFill: '#6ae276' },
       };
 
       root.render(
