@@ -33,6 +33,9 @@
   window.__CORE_MEMORY_GET_TOKEN = () => {
     try { return (localStorage.getItem(AUTH_TOKEN_KEY) || '').trim(); } catch { return ''; }
   };
+  window.__CORE_MEMORY_REFRESH_TOKEN = async () => {
+    return '';
+  };
   window.fetch = (input, init) => {
     const nextInit = Object.assign({}, init || {});
     const inheritedHeaders = (!nextInit.headers && input && typeof input !== 'string' && input.headers)
@@ -57,6 +60,19 @@
 
     return nativeFetch(input, nextInit)
       .then((resp) => {
+        if (resp.status === 401 && typeof window.__CORE_MEMORY_REFRESH_TOKEN === 'function') {
+          return Promise.resolve(window.__CORE_MEMORY_REFRESH_TOKEN())
+            .then((freshToken) => {
+              const tok = String(freshToken || '').trim();
+              if (!tok) return resp;
+              const retryInit = Object.assign({}, nextInit);
+              const retryHeaders = new Headers(retryInit.headers || undefined);
+              retryHeaders.set('Authorization', 'Bearer ' + tok);
+              retryInit.headers = retryHeaders;
+              return nativeFetch(input, retryInit);
+            })
+            .catch(() => resp);
+        }
         if (resp.status >= 500) {
           const alt = tryHostedDirect();
           if (alt) return alt;
@@ -1137,6 +1153,17 @@ async function initAuthGate() {
       cacheLocation: 'localstorage',
       useRefreshTokens: true,
     });
+    window.__CORE_MEMORY_REFRESH_TOKEN = async () => {
+      if (!authClient) return '';
+      try {
+        const fresh = await authClient.getTokenSilently();
+        window.__CORE_MEMORY_SET_TOKEN(fresh || '');
+        return String(fresh || '').trim();
+      } catch (_) {
+        window.__CORE_MEMORY_SET_TOKEN('');
+        return '';
+      }
+    };
 
     const qp = new URLSearchParams(window.location.search);
     if (String(qp.get('login') || '').trim() === '1') {
@@ -1189,7 +1216,7 @@ async function initAuthGate() {
       return false;
     }
 
-    const token = await authClient.getTokenSilently();
+    const token = await window.__CORE_MEMORY_REFRESH_TOKEN();
     window.__CORE_MEMORY_SET_TOKEN(token || '');
     clearAuthLoopGuard();
 
@@ -1222,6 +1249,7 @@ async function initAuthGate() {
     setAuthStatus(email ? ('Signed in: ' + email) : 'Signed in');
     setAuthButton('Sign out', () => {
       window.__CORE_MEMORY_SET_TOKEN('');
+      window.__CORE_MEMORY_REFRESH_TOKEN = async () => '';
       authClient.logout({
         logoutParams: { returnTo: authRedirectUri },
       });
@@ -1230,6 +1258,7 @@ async function initAuthGate() {
     return true;
   } catch (err) {
     window.__CORE_MEMORY_SET_TOKEN('');
+    window.__CORE_MEMORY_REFRESH_TOKEN = async () => '';
     setAuthStatus('Auth error: ' + String((err && err.message) || err || 'unknown'));
     setAuthButton('Sign in', () => redirectToLogin(true));
     return false;
