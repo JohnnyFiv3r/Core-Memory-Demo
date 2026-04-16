@@ -1075,6 +1075,7 @@ async function redirectToLogin(forcePrompt) {
 
 async function initAuthGate() {
   let callbackReturnTo = '';
+  let requestedNext = '';
   let meta = {};
   try {
     const res = await fetch('/api/meta');
@@ -1113,6 +1114,9 @@ async function initAuthGate() {
     });
 
     const qp = new URLSearchParams(window.location.search);
+    if (String(qp.get('login') || '').trim() === '1') {
+      requestedNext = String(qp.get('next') || '').trim();
+    }
     if (qp.get('error')) {
       const err = String(qp.get('error') || 'auth_error');
       const desc = String(qp.get('error_description') || '').trim();
@@ -1163,6 +1167,10 @@ async function initAuthGate() {
     const token = await authClient.getTokenSilently();
     window.__CORE_MEMORY_SET_TOKEN(token || '');
     clearAuthLoopGuard();
+
+    if (!callbackReturnTo && requestedNext) {
+      callbackReturnTo = requestedNext;
+    }
 
     if (callbackReturnTo) {
       try {
