@@ -38,6 +38,7 @@ try {
 }
 const isHostedDemo = window.location.hostname === 'demo.usecorememory.com'
 const hostedBase = ''
+const hostedDirectBase = isHostedDemo ? 'https://core-memory-demo.onrender.com' : ''
 const apiBase = (queryBase || (isHostedDemo ? hostedBase : localBase) || '').replace(/\/+$/, '')
 try {
   if (queryBase) localStorage.setItem('CORE_MEMORY_API_BASE', apiBase)
@@ -82,17 +83,31 @@ function getStoredToken(): string {
 }
 
 async function apiFetchJson<T>(path: string): Promise<T> {
-  const url = apiBase && path.startsWith('/') ? `${apiBase}${path}` : path
+  const primaryUrl = apiBase && path.startsWith('/') ? `${apiBase}${path}` : path
+  const directUrl = !apiBase && hostedDirectBase && path.startsWith('/') ? `${hostedDirectBase}${path}` : ''
   const token = getStoredToken()
   const headers = token ? { Authorization: `Bearer ${token}` } : undefined
   let res: Response
   try {
-    res = await fetch(url, { headers })
+    res = await fetch(primaryUrl, { headers })
   } catch (err) {
     if (apiBase && path.startsWith('/')) {
       res = await fetch(path, { headers })
+    } else if (directUrl) {
+      res = await fetch(directUrl, { headers })
     } else {
       throw err
+    }
+  }
+
+  if (res.status >= 500 && directUrl && primaryUrl !== directUrl) {
+    try {
+      const alt = await fetch(directUrl, { headers })
+      if (alt.ok || alt.status < 500) {
+        res = alt
+      }
+    } catch {
+      // keep primary response
     }
   }
 

@@ -10,6 +10,7 @@
   try { s = (localStorage.getItem('CORE_MEMORY_API_BASE') || '').trim(); } catch {}
   const isHostedDemo = window.location.hostname === 'demo.usecorememory.com';
   const defaultApiBase = isHostedDemo ? '' : '';
+  const hostedDirectBase = isHostedDemo ? 'https://core-memory-demo.onrender.com' : '';
   const apiBase = (q || (isHostedDemo ? defaultApiBase : s) || '').replace(/\/+$/, '');
   if (window.self === window.top && /\/chris-demo\.html$/.test(window.location.pathname)) {
     const rootUrl = new URL('/', window.location.origin);
@@ -48,13 +49,29 @@
     if (apiBase && typeof input === 'string' && input.startsWith('/')) {
       input = apiBase + input;
     }
-    return nativeFetch(input, nextInit).catch((err) => {
-      if (apiBase && typeof input === 'string' && input.startsWith(apiBase + '/')) {
-        const fallback = input.slice(apiBase.length);
-        return nativeFetch(fallback, nextInit);
-      }
-      throw err;
-    });
+    const rawInput = input;
+    const tryHostedDirect = () => {
+      if (!hostedDirectBase || typeof rawInput !== 'string' || !rawInput.startsWith('/')) return null;
+      return nativeFetch(hostedDirectBase + rawInput, nextInit);
+    };
+
+    return nativeFetch(input, nextInit)
+      .then((resp) => {
+        if (resp.status >= 500) {
+          const alt = tryHostedDirect();
+          if (alt) return alt;
+        }
+        return resp;
+      })
+      .catch((err) => {
+        if (apiBase && typeof input === 'string' && input.startsWith(apiBase + '/')) {
+          const fallback = input.slice(apiBase.length);
+          return nativeFetch(fallback, nextInit);
+        }
+        const alt = tryHostedDirect();
+        if (alt) return alt;
+        throw err;
+      });
   };
   window.__CORE_MEMORY_API_BASE = apiBase;
 })();
