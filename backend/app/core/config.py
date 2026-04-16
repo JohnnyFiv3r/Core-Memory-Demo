@@ -43,6 +43,13 @@ class Settings(BaseSettings):
     benchmark_history_max_rows: int = 300
     benchmark_runs_max_keep: int = 80
 
+    async_jobs_tick_enabled: bool = False
+    async_jobs_tick_interval_seconds: int = 60
+    async_jobs_tick_initial_delay_seconds: int = 10
+    async_jobs_tick_max_compaction: int = 2
+    async_jobs_tick_max_side_effects: int = 8
+    async_jobs_tick_run_semantic: bool = True
+
     @property
     def roots(self) -> list[Path]:
         return [

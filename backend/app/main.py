@@ -1,7 +1,11 @@
+import logging
+import threading
+
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse
+from core_memory.runtime.jobs import run_async_jobs
 
 from app.core.config import settings
 from app.core.state_fallback import safe_state_fallback
@@ -9,6 +13,11 @@ from app.routes.health import router as health_router
 from app.routes.demo import public_router as demo_public_router
 from app.routes.demo import router as demo_router
 from app.routes.inspect import router as inspect_router
+
+
+logger = logging.getLogger(__name__)
+_async_jobs_stop = threading.Event()
+_async_jobs_thread: threading.Thread | None = None
 
 
 def ensure_roots_writable() -> None:
@@ -20,6 +29,26 @@ def ensure_roots_writable() -> None:
             test_file.unlink(missing_ok=True)
         except Exception as exc:
             raise RuntimeError(f'root_not_writable:{root}:{exc}')
+
+
+def _async_jobs_tick_loop() -> None:
+    initial_delay = max(0, int(settings.async_jobs_tick_initial_delay_seconds))
+    interval = max(5, int(settings.async_jobs_tick_interval_seconds))
+    if initial_delay > 0:
+        _async_jobs_stop.wait(timeout=float(initial_delay))
+    while not _async_jobs_stop.is_set():
+        try:
+            out = run_async_jobs(
+                root=settings.core_memory_root,
+                run_semantic=bool(settings.async_jobs_tick_run_semantic),
+                max_compaction=max(1, int(settings.async_jobs_tick_max_compaction)),
+                max_side_effects=max(1, int(settings.async_jobs_tick_max_side_effects)),
+            )
+            if not bool(out.get('ok')):
+                logger.warning('async_jobs_tick_failed: %s', out)
+        except Exception as exc:
+            logger.warning('async_jobs_tick_exception: %s', exc)
+        _async_jobs_stop.wait(timeout=float(interval))
 
 
 app = FastAPI(title=settings.app_name)
@@ -58,7 +87,21 @@ async def state_error_fallback_middleware(request: Request, call_next):
 
 @app.on_event('startup')
 def on_startup():
+    global _async_jobs_thread
     ensure_roots_writable()
+    if bool(settings.async_jobs_tick_enabled):
+        _async_jobs_stop.clear()
+        t = threading.Thread(target=_async_jobs_tick_loop, name='core-memory-async-jobs-tick', daemon=True)
+        t.start()
+        _async_jobs_thread = t
+
+
+@app.on_event('shutdown')
+def on_shutdown():
+    _async_jobs_stop.set()
+    t = _async_jobs_thread
+    if t and t.is_alive():
+        t.join(timeout=1.0)
 
 
 @app.get('/')
