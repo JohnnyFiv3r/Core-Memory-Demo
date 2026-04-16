@@ -5,14 +5,22 @@
 (function () {
   const AUTH_TOKEN_KEY = 'CORE_MEMORY_AUTH_TOKEN';
   const params = new URLSearchParams(window.location.search);
-  const q = (params.get('api_base') || '').trim();
+  const qRaw = (params.get('api_base') || '').trim();
   let s = '';
   try { s = (localStorage.getItem('CORE_MEMORY_API_BASE') || '').trim(); } catch {}
   const isHostedDemo = window.location.hostname === 'demo.usecorememory.com';
+  const q = isHostedDemo ? '' : qRaw;
   const defaultApiBase = isHostedDemo ? '' : '';
   const hostedDirectBase = isHostedDemo ? 'https://core-memory-demo.onrender.com' : '';
   window.__CORE_MEMORY_HOSTED_DIRECT_BASE = hostedDirectBase;
   const apiBase = (q || (isHostedDemo ? defaultApiBase : s) || '').replace(/\/+$/, '');
+  if (isHostedDemo && qRaw) {
+    try {
+      const clean = new URL(window.location.href);
+      clean.searchParams.delete('api_base');
+      window.history.replaceState({}, document.title, clean.toString());
+    } catch {}
+  }
   if (window.self === window.top && /\/chris-demo\.html$/.test(window.location.pathname)) {
     const rootUrl = new URL('/', window.location.origin);
     if (window.location.search) rootUrl.search = window.location.search;
@@ -1052,6 +1060,7 @@ let authReady = false;
 let authClient = null;
 let authRequestedScope = 'openid profile email';
 let refreshTimerId = null;
+let refreshErrorStreak = 0;
 let authRedirecting = false;
 const AUTH_LOOP_GUARD_KEY = 'CM_AUTH_LOOP_GUARD';
 
@@ -1546,6 +1555,23 @@ function showTyping() {
   return div;
 }
 
+async function parseApiJsonResponse(res, label) {
+  const status = Number(res && res.status || 0);
+  const raw = await res.text();
+  let data = null;
+  try {
+    data = raw ? JSON.parse(raw) : {};
+  } catch (_) {
+    const snippet = String(raw || '').slice(0, 120).replace(/\s+/g, ' ');
+    throw new Error((label || 'request') + ' returned non-JSON (HTTP ' + status + '): ' + snippet);
+  }
+  if (!res.ok || (data && data.ok === false)) {
+    const detail = String((data && (data.error || data.detail || data.message)) || ('HTTP ' + status));
+    throw new Error(detail);
+  }
+  return data || {};
+}
+
 async function sendMessage() {
   if (authEnabled && !authReady) {
     addMsg('system', 'Sign in required before sending messages.');
@@ -1564,11 +1590,7 @@ async function sendMessage() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({message: text}),
     });
-    const data = await res.json();
-    if (!res.ok || !data || data.ok === false) {
-      const detail = String((data && (data.error || data.detail || data.message)) || ('HTTP ' + res.status));
-      throw new Error(detail);
-    }
+    const data = await parseApiJsonResponse(res, 'chat');
     typing.remove();
     addMsg('assistant', (data.assistant || data.response || ''), data.turn_id);
     if (data.last_answer) {
@@ -3210,7 +3232,7 @@ async function refreshMemory() {
       ? ('/v1/memory/inspect/state?as_of=' + encodeURIComponent(claimsAsOf))
       : '/v1/memory/inspect/state';
     const res = await fetch(stateUrl);
-    const data = await res.json();
+    const data = await parseApiJsonResponse(res, 'state');
     const mem = data.memory || {};
     let sess = data.session || {};
     const claims = data.claims || {};
@@ -3221,7 +3243,7 @@ async function refreshMemory() {
 
     try {
       const rr = await fetch('/api/demo/runtime');
-      const jr = await rr.json();
+      const jr = await parseApiJsonResponse(rr, 'runtime');
       runtimeLocal = jr.runtime || {};
       lastTurnLocal = jr.last_turn || {};
       if (jr.session) sess = jr.session;
@@ -3278,7 +3300,14 @@ async function refreshMemory() {
     fill.style.width = windowPct.toFixed(1) + '%';
     fill.className = 'budget-fill' + (windowPct >= AUTO_FLUSH_THRESHOLD_PCT ? ' critical' : windowPct >= 50 ? ' warn' : '');
     document.getElementById('budget-text').textContent = windowPct.toFixed(1) + '% used';
+    refreshErrorStreak = 0;
   } catch (err) {
+    refreshErrorStreak += 1;
+    if (refreshErrorStreak >= 3 && refreshTimerId) {
+      clearInterval(refreshTimerId);
+      refreshTimerId = null;
+      addMsg('system', 'Data refresh paused due to repeated backend/proxy errors. Use Refresh or reload after backend recovers.');
+    }
     console.error('refreshMemory failed:', err);
   }
 }
@@ -3564,6 +3593,7 @@ function startDemoUi() {
   loadClaimsStateFromUrl();
   loadSeedResetPrefs();
   bindSessionPopoverControls();
+  refreshErrorStreak = 0;
   refreshMemory();
   if (refreshTimerId) clearInterval(refreshTimerId);
   refreshTimerId = setInterval(refreshMemory, 2500);
