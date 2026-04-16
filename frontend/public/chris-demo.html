@@ -12,6 +12,12 @@
     ? 'https://core-memory-demo.onrender.com'
     : '';
   const apiBase = (q || s || defaultApiBase || '').replace(/\/+$/, '');
+  if (window.self === window.top && /\/chris-demo\.html$/.test(window.location.pathname)) {
+    const rootUrl = new URL('/', window.location.origin);
+    if (window.location.search) rootUrl.search = window.location.search;
+    window.location.replace(rootUrl.toString());
+    return;
+  }
   if (apiBase) {
     try { localStorage.setItem('CORE_MEMORY_API_BASE', apiBase); } catch {}
   }
@@ -1051,7 +1057,10 @@ async function initAuthGate() {
   // Auth0 login must happen in top-level browsing context (not inside iframe).
   if (window.self !== window.top) {
     try {
-      window.top.location.assign(window.location.href);
+      const topUrl = new URL('/', window.location.origin);
+      const search = String(window.location.search || '').trim();
+      if (search) topUrl.search = search;
+      window.top.location.assign(topUrl.toString());
       return false;
     } catch (_) {
       // ignore and continue, but login may fail in embedded mode
