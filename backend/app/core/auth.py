@@ -40,6 +40,7 @@ def auth_meta_payload() -> dict[str, Any]:
         "domain": str(settings.demo_auth0_domain or "").strip(),
         "audience": str(settings.demo_auth0_audience or "").strip(),
         "client_id": str(settings.demo_auth0_client_id or "").strip(),
+        "scope": str(settings.demo_auth0_scope or "").strip(),
     }
 
 

@@ -22,6 +22,7 @@ class Settings(BaseSettings):
     demo_auth0_domain: str = ''
     demo_auth0_audience: str = ''
     demo_auth0_client_id: str = ''
+    demo_auth0_scope: str = ''
     demo_auth0_issuer: str = ''
     demo_auth_require_verified_email: bool = False
     demo_admin_emails: str = ''

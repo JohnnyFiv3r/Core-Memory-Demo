@@ -34,6 +34,7 @@ type MetaResponse = {
     domain?: string
     client_id?: string
     audience?: string
+    scope?: string
   }
 }
 
@@ -76,6 +77,25 @@ const AUTH_TOKEN_KEY = 'CORE_MEMORY_AUTH_TOKEN'
 let graphMetaPromise: Promise<MetaResponse['auth'] | null> | null = null
 let graphAuthClientPromise: Promise<Auth0ClientLike | null> | null = null
 let graphTokenRefreshPromise: Promise<string> | null = null
+
+function mergeAuthScopes(baseScopes: string, extraScopes: string): string {
+  const out: string[] = []
+  const seen = new Set<string>()
+  const add = (raw: string) => {
+    String(raw || '')
+      .split(/\s+/)
+      .map((s) => s.trim())
+      .filter(Boolean)
+      .forEach((s) => {
+        if (seen.has(s)) return
+        seen.add(s)
+        out.push(s)
+      })
+  }
+  add(baseScopes)
+  add(extraScopes)
+  return out.join(' ')
+}
 
 class AuthRequiredError extends Error {
   status: number
@@ -158,6 +178,8 @@ async function getGraphAuthClient(): Promise<Auth0ClientLike | null> {
       const domain = String(auth?.domain || '').trim()
       const clientId = String(auth?.client_id || '').trim()
       const audience = String(auth?.audience || '').trim()
+      const audienceScope = String(auth?.scope || '').trim()
+      const requestedScope = mergeAuthScopes('openid profile email', audienceScope)
       const createClient = window.auth0?.createAuth0Client
       if (!enabled || !domain || !clientId || typeof createClient !== 'function') return null
 
@@ -167,7 +189,7 @@ async function getGraphAuthClient(): Promise<Auth0ClientLike | null> {
         clientId,
         authorizationParams: {
           audience,
-          scope: 'openid profile email',
+          scope: requestedScope,
           redirect_uri: redirectUri,
         },
         cacheLocation: 'localstorage',

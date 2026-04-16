@@ -1050,6 +1050,7 @@ const authStatusEl = document.getElementById('auth-status');
 let authEnabled = false;
 let authReady = false;
 let authClient = null;
+let authRequestedScope = 'openid profile email';
 let refreshTimerId = null;
 let authRedirecting = false;
 const AUTH_LOOP_GUARD_KEY = 'CM_AUTH_LOOP_GUARD';
@@ -1097,6 +1098,25 @@ function setAuthButton(label, onClick) {
   authBtnEl.onclick = typeof onClick === 'function' ? onClick : null;
 }
 
+function mergeAuthScopes(baseScopes, extraScopes) {
+  const out = [];
+  const seen = new Set();
+  const add = (raw) => {
+    String(raw || '')
+      .split(/\s+/)
+      .map(s => s.trim())
+      .filter(Boolean)
+      .forEach((s) => {
+        if (seen.has(s)) return;
+        seen.add(s);
+        out.push(s);
+      });
+  };
+  add(baseScopes);
+  add(extraScopes);
+  return out.join(' ');
+}
+
 async function redirectToLogin(forcePrompt) {
   if (!authClient) return;
   const guard = readAuthLoopGuard();
@@ -1105,7 +1125,7 @@ async function redirectToLogin(forcePrompt) {
   const next = String(qp.get('next') || (window.location.pathname + window.location.search) || '/').trim();
   const loginOpts = {
     appState: { returnTo: next },
-    authorizationParams: forcePrompt ? { prompt: 'login', scope: 'openid profile email' } : { scope: 'openid profile email' },
+    authorizationParams: forcePrompt ? { prompt: 'login', scope: authRequestedScope } : { scope: authRequestedScope },
   };
   if (window.self !== window.top) {
     loginOpts.openUrl = (url) => {
@@ -1159,6 +1179,8 @@ async function initAuthGate() {
   const domain = String(auth.domain || '').trim();
   const clientId = String(auth.client_id || '').trim();
   const audience = String(auth.audience || '').trim();
+  const audienceScope = String(auth.scope || '').trim();
+  authRequestedScope = mergeAuthScopes('openid profile email', audienceScope);
   if (!domain || !clientId || !window.auth0 || typeof window.auth0.createAuth0Client !== 'function') {
     setAuthStatus('Auth is enabled but not fully configured.');
     setAuthButton('Sign in', null);
@@ -1172,7 +1194,7 @@ async function initAuthGate() {
       clientId,
       authorizationParams: {
         audience,
-        scope: 'openid profile email',
+        scope: authRequestedScope,
         redirect_uri: authRedirectUri,
       },
       cacheLocation: 'localstorage',
