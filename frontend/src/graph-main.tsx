@@ -167,6 +167,7 @@ async function getGraphAuthClient(): Promise<Auth0ClientLike | null> {
         clientId,
         authorizationParams: {
           audience,
+          scope: 'openid profile email',
           redirect_uri: redirectUri,
         },
         cacheLocation: 'localstorage',
@@ -220,7 +221,7 @@ async function ensureGraphToken(interactive: boolean): Promise<string> {
     if (interactive) {
       await client.loginWithRedirect({
         appState: { returnTo: `${window.location.pathname}${window.location.search}` },
-        authorizationParams: { prompt: 'login' },
+        authorizationParams: { prompt: 'login', scope: 'openid profile email' },
       })
       throw new Error('Redirecting to login...')
     }

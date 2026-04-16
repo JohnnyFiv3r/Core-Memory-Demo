@@ -1,7 +1,11 @@
 from __future__ import annotations
 
 from functools import lru_cache
+import json
+from time import time
 from typing import Any
+from urllib.error import URLError
+from urllib.request import Request, urlopen
 
 import jwt
 from fastapi import Header, HTTPException, Request, status
@@ -36,9 +40,47 @@ def _extract_bearer(authorization: str | None) -> str:
     return parts[1].strip()
 
 
-def _validate_admin_claims(claims: dict[str, Any]) -> dict[str, Any]:
+_userinfo_cache: dict[str, tuple[float, dict[str, Any]]] = {}
+
+
+def _userinfo_from_token(token: str) -> dict[str, Any]:
+    now = time()
+    cached = _userinfo_cache.get(token)
+    if cached and cached[0] > now:
+        return dict(cached[1] or {})
+
+    issuer = str(settings.auth0_issuer or "").strip()
+    if not issuer:
+        return {}
+    url = f"{issuer}userinfo"
+    req = Request(url, headers={"Authorization": f"Bearer {token}"}, method="GET")
+    try:
+        with urlopen(req, timeout=3.0) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+            payload = json.loads(body) if body else {}
+            if not isinstance(payload, dict):
+                payload = {}
+            _userinfo_cache[token] = (now + 300.0, dict(payload))
+            return dict(payload)
+    except Exception:
+        return {}
+
+
+def _validate_admin_claims(claims: dict[str, Any], token: str) -> dict[str, Any]:
     email = str(claims.get("email") or "").strip().lower()
-    if bool(settings.demo_auth_require_verified_email) and not bool(claims.get("email_verified")):
+    email_verified = claims.get("email_verified")
+    name = str(claims.get("name") or "").strip()
+
+    if not email or (bool(settings.demo_auth_require_verified_email) and not bool(email_verified)):
+        userinfo = _userinfo_from_token(token)
+        if not email:
+            email = str(userinfo.get("email") or "").strip().lower()
+        if email_verified is None:
+            email_verified = userinfo.get("email_verified")
+        if not name:
+            name = str(userinfo.get("name") or "").strip()
+
+    if bool(settings.demo_auth_require_verified_email) and not bool(email_verified):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="email_not_verified")
 
     allowlist = settings.admin_emails
@@ -50,7 +92,7 @@ def _validate_admin_claims(claims: dict[str, Any]) -> dict[str, Any]:
     return {
         "sub": str(claims.get("sub") or ""),
         "email": email,
-        "name": str(claims.get("name") or email or "admin"),
+        "name": str(name or email or "admin"),
     }
 
 
@@ -85,6 +127,6 @@ async def require_admin(request: Request, authorization: str | None = Header(def
 
     token = _extract_bearer(authorization)
     claims = _decode_token(token)
-    principal = _validate_admin_claims(claims)
+    principal = _validate_admin_claims(claims, token)
     request.state.principal = principal
     return principal

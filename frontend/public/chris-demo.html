@@ -1063,7 +1063,7 @@ async function redirectToLogin(forcePrompt) {
   const next = String(qp.get('next') || (window.location.pathname + window.location.search) || '/').trim();
   const loginOpts = {
     appState: { returnTo: next },
-    authorizationParams: forcePrompt ? { prompt: 'login' } : {},
+    authorizationParams: forcePrompt ? { prompt: 'login', scope: 'openid profile email' } : { scope: 'openid profile email' },
   };
   if (window.self !== window.top) {
     loginOpts.openUrl = (url) => {
@@ -1107,6 +1107,7 @@ async function initAuthGate() {
       clientId,
       authorizationParams: {
         audience,
+        scope: 'openid profile email',
         redirect_uri: authRedirectUri,
       },
       cacheLocation: 'localstorage',
