@@ -1048,6 +1048,16 @@ async function initAuthGate() {
     return true;
   }
 
+  // Auth0 login must happen in top-level browsing context (not inside iframe).
+  if (window.self !== window.top) {
+    try {
+      window.top.location.assign(window.location.href);
+      return false;
+    } catch (_) {
+      // ignore and continue, but login may fail in embedded mode
+    }
+  }
+
   const domain = String(auth.domain || '').trim();
   const clientId = String(auth.client_id || '').trim();
   const audience = String(auth.audience || '').trim();
