@@ -20,6 +20,8 @@ body {
   flex-direction: column;
 }
 .graph-header {
+  position: relative;
+  z-index: 40;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -61,6 +63,8 @@ body {
   border-color: var(--accent);
 }
 .graph-layout {
+  position: relative;
+  z-index: 1;
   display: grid;
   grid-template-columns: minmax(0, 1fr) 360px;
   gap: 10px;
@@ -68,13 +72,19 @@ body {
   height: calc(100% - 56px);
 }
 .graph-panel {
+  position: relative;
   border: 1px solid var(--border);
   border-radius: 10px;
   background: var(--surface);
   overflow: hidden;
   min-height: 0;
 }
-.graph-host { width: 100%; height: 100%; }
+.graph-host {
+  position: relative;
+  width: 100%;
+  height: 100%;
+  isolation: isolate;
+}
 .graph-side {
   display: flex;
   flex-direction: column;
