@@ -3135,7 +3135,7 @@ async function refreshMemory() {
     document.getElementById('stat-entities').textContent = Number(statsCompat.entity_count || (entities.rows || []).length || 0);
     document.getElementById('stat-rolling').textContent = Number(statsCompat.rolling_window_size || (mem.rolling_window || []).length || 0);
     const usage = Number(sess.token_usage ?? statsCompat.token_usage ?? 0);
-    const budget = Number(sess.context_budget ?? statsCompat.context_budget ?? 10000);
+    const budget = Number(sess.context_budget ?? statsCompat.context_budget ?? 128000);
     const rollingWindowTokens = Number(
       sess.rolling_window_token_estimate ??
       statsCompat.rolling_window_token_estimate ??

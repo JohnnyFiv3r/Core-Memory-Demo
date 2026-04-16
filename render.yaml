@@ -23,7 +23,7 @@ services:
       - key: CORE_MEMORY_DEMO_ARTIFACTS_ROOT
         value: /var/data/core-memory-artifacts
       - key: DEMO_CONTEXT_BUDGET
-        value: "10000"
+        value: "128000"
       - key: OPENAI_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY

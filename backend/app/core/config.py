@@ -15,7 +15,7 @@ class Settings(BaseSettings):
     core_memory_demo_artifacts_root: str = './var/core-memory-artifacts'
 
     demo_model_id: str = ''
-    demo_context_budget: int = 10000
+    demo_context_budget: int = 128000
 
     demo_auth_enabled: bool = False
     demo_auth0_domain: str = ''
