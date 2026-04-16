@@ -59,6 +59,16 @@ class AuthRequiredError extends Error {
   }
 }
 
+class ApiHttpError extends Error {
+  status: number
+
+  constructor(status: number, message: string) {
+    super(message)
+    this.name = 'ApiHttpError'
+    this.status = status
+  }
+}
+
 function isAuthRequiredError(err: unknown): err is AuthRequiredError {
   return err instanceof AuthRequiredError || (err instanceof Error && err.name === 'AuthRequiredError')
 }
@@ -103,7 +113,7 @@ async function apiFetchJson<T>(path: string): Promise<T> {
       (body && (body.error || body.message || body.detail)) ||
       (raw && raw.trim().slice(0, 400)) ||
       `HTTP ${res.status}`
-    throw new Error(String(msg))
+    throw new ApiHttpError(res.status, String(msg))
   }
   return (body || {}) as T
 }
@@ -161,6 +171,7 @@ function App(): React.JSX.Element {
     let lastErr: unknown = null
     const stateUrls = ['/v1/memory/inspect/state', '/api/demo/state']
     let authErrorCount = 0
+    let serverErrorCount = 0
 
     for (const stateUrl of stateUrls) {
       try {
@@ -169,13 +180,21 @@ function App(): React.JSX.Element {
       } catch (err) {
         lastErr = err
         if (isAuthRequiredError(err)) authErrorCount += 1
+        if (err instanceof ApiHttpError && err.status >= 500) serverErrorCount += 1
       }
     }
 
     if (!data) {
-      if (authErrorCount >= stateUrls.length) {
+      if (serverErrorCount >= stateUrls.length) {
+        data = { ok: true, memory: { beads: [], associations: [] } }
+        setMeta('state unavailable (server error), showing empty graph')
+      }
+
+      if (!data && authErrorCount >= stateUrls.length) {
         throw new Error('Authentication required (403). Return to the demo page and sign in again.')
-      } else {
+      }
+
+      if (!data) {
         throw lastErr instanceof Error ? lastErr : new Error('state_fetch_failed')
       }
     }
@@ -191,7 +210,7 @@ function App(): React.JSX.Element {
       const msg = err instanceof Error ? err.stack || err.message : String(err)
       setMeta(`load error: ${msg}`)
       setDetail(`Failed to load graph data.\n\n${msg}`)
-      if (/Authentication required|Failed to fetch|CORS/i.test(msg)) {
+      if (/Authentication required|Failed to fetch|CORS|Internal Server Error|HTTP 5\d\d/i.test(msg)) {
         setAuto(false)
       }
     })
@@ -204,7 +223,7 @@ function App(): React.JSX.Element {
         const msg = err instanceof Error ? err.stack || err.message : String(err)
         setMeta(`refresh error: ${msg}`)
         setDetail(`Runtime error while refreshing graph.\n\n${msg}`)
-        if (/Authentication required|Failed to fetch|CORS/i.test(msg)) {
+        if (/Authentication required|Failed to fetch|CORS|Internal Server Error|HTTP 5\d\d/i.test(msg)) {
           setAuto(false)
         }
       })
