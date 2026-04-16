@@ -1032,10 +1032,16 @@ async function redirectToLogin(forcePrompt) {
   if (!authClient) return;
   const qp = new URLSearchParams(window.location.search);
   const next = String(qp.get('next') || (window.location.pathname + window.location.search) || '/').trim();
-  await authClient.loginWithRedirect({
+  const loginOpts = {
     appState: { returnTo: next },
     authorizationParams: forcePrompt ? { prompt: 'login' } : {},
-  });
+  };
+  if (window.self !== window.top) {
+    loginOpts.openUrl = (url) => {
+      window.top.location.assign(url);
+    };
+  }
+  await authClient.loginWithRedirect(loginOpts);
 }
 
 async function initAuthGate() {
@@ -1052,19 +1058,6 @@ async function initAuthGate() {
   if (!authEnabled) {
     authReady = true;
     return true;
-  }
-
-  // Auth0 login must happen in top-level browsing context (not inside iframe).
-  if (window.self !== window.top) {
-    try {
-      const topUrl = new URL('/', window.location.origin);
-      const search = String(window.location.search || '').trim();
-      if (search) topUrl.search = search;
-      window.top.location.assign(topUrl.toString());
-      return false;
-    } catch (_) {
-      // ignore and continue, but login may fail in embedded mode
-    }
   }
 
   const domain = String(auth.domain || '').trim();
