@@ -13,6 +13,27 @@ from fastapi import Header, HTTPException, Request, status
 from app.core.config import settings
 
 
+PUBLIC_READ_PREFIXES = (
+    '/api/demo/',
+    '/api/story-pack/meta',
+    '/v1/memory/inspect/',
+)
+
+
+def _is_public_read_request(request: Request) -> bool:
+    if not bool(settings.demo_auth_public_read_endpoints):
+        return False
+    if str(request.method or '').upper() != 'GET':
+        return False
+    path = str(request.url.path or '').strip()
+    if not path:
+        return False
+    for pref in PUBLIC_READ_PREFIXES:
+        if path.startswith(pref):
+            return True
+    return False
+
+
 def auth_meta_payload() -> dict[str, Any]:
     return {
         "enabled": bool(settings.demo_auth_enabled),
@@ -122,6 +143,11 @@ def _decode_token(token: str) -> dict[str, Any]:
 async def require_admin(request: Request, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     if not bool(settings.demo_auth_enabled):
         principal = {"sub": "dev-anon", "email": "", "name": "dev"}
+        request.state.principal = principal
+        return principal
+
+    if _is_public_read_request(request):
+        principal = {"sub": "public-read", "email": "", "name": "public-read"}
         request.state.principal = principal
         return principal
 

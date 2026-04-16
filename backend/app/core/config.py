@@ -18,6 +18,7 @@ class Settings(BaseSettings):
     demo_context_budget: int = 128000
 
     demo_auth_enabled: bool = False
+    demo_auth_public_read_endpoints: bool = True
     demo_auth0_domain: str = ''
     demo_auth0_audience: str = ''
     demo_auth0_client_id: str = ''
