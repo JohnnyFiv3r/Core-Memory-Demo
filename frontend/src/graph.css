@@ -1,11 +1,11 @@
 :root {
-  --bg: #0f1117;
-  --surface: #1a1d27;
-  --surface2: #232733;
-  --border: #2d3148;
-  --text: #e1e4ed;
-  --text-dim: #8b8fa3;
-  --accent: #6c7eff;
+  --bg: #102417;
+  --surface: #1d3f24;
+  --surface2: #2a5a30;
+  --border: #4f9c51;
+  --text: #ddf6e0;
+  --text-dim: #9acfa0;
+  --accent: #6ae276;
 }
 * { box-sizing: border-box; }
 html, body, #graph-root { height: 100%; margin: 0; }
@@ -31,10 +31,21 @@ body {
   background: var(--surface);
 }
 .graph-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
   font-size: 14px;
   font-weight: 600;
 }
-.graph-title span { color: var(--accent); }
+.graph-brand {
+  height: 30px;
+  width: auto;
+  display: block;
+}
+.graph-subtitle {
+  color: var(--accent);
+  white-space: nowrap;
+}
 .graph-controls {
   display: flex;
   align-items: center;

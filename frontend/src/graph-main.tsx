@@ -59,13 +59,13 @@ async function apiFetchJson<T>(path: string): Promise<T> {
 
 function typeColor(type: string | undefined): string {
   const t = String(type || '').toLowerCase()
-  if (t === 'decision') return '#6c7eff'
-  if (t === 'evidence') return '#22d3ee'
-  if (t === 'lesson') return '#4ade80'
-  if (t === 'goal') return '#fbbf24'
-  if (t === 'outcome') return '#f87171'
-  if (t === 'context') return '#8b8fa3'
-  return '#7ca0ab'
+  if (t === 'decision') return '#6ae276'
+  if (t === 'evidence') return '#6da773'
+  if (t === 'lesson') return '#4f9c51'
+  if (t === 'goal') return '#8bdf95'
+  if (t === 'outcome') return '#356b31'
+  if (t === 'context') return '#7ea985'
+  return '#5f8f66'
 }
 
 function App(): React.JSX.Element {
@@ -271,7 +271,8 @@ function App(): React.JSX.Element {
     <div className="graph-page">
       <header className="graph-header">
         <div className="graph-title">
-          <span>Core Memory</span> Reagraph Archive Viewer
+          <img className="graph-brand" src="/core-memory-banner.svg" alt="Core Memory" />
+          <span className="graph-subtitle">Reagraph Archive Viewer</span>
         </div>
         <div className="graph-controls">
           <label>relation</label>
@@ -349,27 +350,27 @@ function App(): React.JSX.Element {
               labelType="all"
               edgeLabelPosition="inline"
               theme={{
-                canvas: { background: '#060a16' },
-                arrow: { fill: '#5b6a8a', activeFill: '#8ea2ff' },
+                canvas: { background: '#102417' },
+                arrow: { fill: '#4f9c51', activeFill: '#6ae276' },
                 node: {
-                  fill: '#7ca0ab',
-                  activeFill: '#6c7eff',
+                  fill: '#6da773',
+                  activeFill: '#6ae276',
                   opacity: 0.95,
                   selectedOpacity: 1,
                   inactiveOpacity: 0.2,
-                  label: { color: '#e1e4ed', stroke: '#060a16', activeColor: '#ffffff' },
-                  subLabel: { color: '#8b8fa3', stroke: 'transparent', activeColor: '#e1e4ed' },
+                  label: { color: '#ddf6e0', stroke: '#102417', activeColor: '#ffffff' },
+                  subLabel: { color: '#9acfa0', stroke: 'transparent', activeColor: '#ddf6e0' },
                 },
                 edge: {
-                  fill: '#5b6a8a',
-                  activeFill: '#8ea2ff',
+                  fill: '#4f9c51',
+                  activeFill: '#6ae276',
                   opacity: 0.7,
                   selectedOpacity: 1,
                   inactiveOpacity: 0.2,
-                  label: { color: '#b8c0d8', stroke: '#060a16', activeColor: '#ffffff' },
+                  label: { color: '#bde8c2', stroke: '#102417', activeColor: '#ffffff' },
                 },
-                lasso: { border: '1px solid #6c7eff', background: 'rgba(108,126,255,0.15)' },
-                ring: { fill: '#1f2838', activeFill: '#6c7eff' },
+                lasso: { border: '1px solid #6ae276', background: 'rgba(106,226,118,0.18)' },
+                ring: { fill: '#1d3f24', activeFill: '#6ae276' },
               }}
               onNodeClick={onNodeClick}
               onEdgeClick={onEdgeClick}
