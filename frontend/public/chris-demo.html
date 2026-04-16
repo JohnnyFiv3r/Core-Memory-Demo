@@ -1048,12 +1048,13 @@ async function initAuthGate() {
   }
 
   try {
+    const authRedirectUri = window.location.origin.replace(/\/$/, '') + '/';
     authClient = await window.auth0.createAuth0Client({
       domain,
       clientId,
       authorizationParams: {
         audience,
-        redirect_uri: window.location.origin + window.location.pathname,
+        redirect_uri: authRedirectUri,
       },
       cacheLocation: 'localstorage',
       useRefreshTokens: true,
@@ -1100,7 +1101,7 @@ async function initAuthGate() {
     setAuthButton('Sign out', () => {
       window.__CORE_MEMORY_SET_TOKEN('');
       authClient.logout({
-        logoutParams: { returnTo: window.location.origin + window.location.pathname },
+        logoutParams: { returnTo: authRedirectUri },
       });
     });
     authReady = true;
