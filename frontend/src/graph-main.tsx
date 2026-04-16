@@ -245,17 +245,18 @@ async function refreshGraphTokenSilently(): Promise<string> {
   }
 }
 
-async function fetchWithFallback(path: string, headers?: Record<string, string>): Promise<Response> {
+async function fetchWithFallback(path: string, init?: RequestInit): Promise<Response> {
   const primaryUrl = apiBase && path.startsWith('/') ? `${apiBase}${path}` : path
   const directUrl = !apiBase && hostedDirectBase && path.startsWith('/') ? `${hostedDirectBase}${path}` : ''
+  const reqInit = { ...(init || {}) }
   let res: Response
   try {
-    res = await fetch(primaryUrl, { headers })
+    res = await fetch(primaryUrl, reqInit)
   } catch (err) {
     if (apiBase && path.startsWith('/')) {
-      res = await fetch(path, { headers })
+      res = await fetch(path, reqInit)
     } else if (directUrl) {
-      res = await fetch(directUrl, { headers })
+      res = await fetch(directUrl, reqInit)
     } else {
       throw err
     }
@@ -263,7 +264,7 @@ async function fetchWithFallback(path: string, headers?: Record<string, string>)
 
   if (res.status >= 500 && directUrl && primaryUrl !== directUrl) {
     try {
-      const alt = await fetch(directUrl, { headers })
+      const alt = await fetch(directUrl, reqInit)
       if (alt.ok || alt.status < 500) {
         res = alt
       }
@@ -275,16 +276,18 @@ async function fetchWithFallback(path: string, headers?: Record<string, string>)
   return res
 }
 
-async function apiFetchJson<T>(path: string): Promise<T> {
+async function apiFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   const token = getStoredToken()
-  let headers = token ? { Authorization: `Bearer ${token}` } : undefined
-  let res = await fetchWithFallback(path, headers)
+  const baseHeaders = new Headers((init && init.headers) || undefined)
+  if (token) baseHeaders.set('Authorization', `Bearer ${token}`)
+  let res = await fetchWithFallback(path, { ...(init || {}), headers: baseHeaders })
 
   if (res.status === 401 || res.status === 403) {
     const fresh = await refreshGraphTokenSilently()
     if (fresh) {
-      headers = { Authorization: `Bearer ${fresh}` }
-      res = await fetchWithFallback(path, headers)
+      const retryHeaders = new Headers((init && init.headers) || undefined)
+      retryHeaders.set('Authorization', `Bearer ${fresh}`)
+      res = await fetchWithFallback(path, { ...(init || {}), headers: retryHeaders })
     }
   }
 
@@ -332,7 +335,13 @@ function App(): React.JSX.Element {
   const [detail, setDetail] = useState<string>('')
   const [meta, setMeta] = useState<string>('')
 
-  const closeGraphView = useCallback(() => {
+  const closeGraphView = useCallback(async () => {
+    try {
+      await apiFetchJson<{ ok?: boolean }>('/api/session/reset', { method: 'POST' })
+    } catch {
+      // best effort reset only
+    }
+
     try {
       window.close()
     } catch {
@@ -590,6 +599,7 @@ function App(): React.JSX.Element {
             <input checked={auto} onChange={(e) => setAuto(e.target.checked)} type="checkbox" /> auto
           </label>
           <button
+            className="graph-btn graph-btn-accent"
             type="button"
             onClick={() => {
               refresh().catch((err: unknown) => {
@@ -601,6 +611,7 @@ function App(): React.JSX.Element {
             Refresh
           </button>
           <button
+            className="graph-btn"
             type="button"
             onClick={() => {
               try {
@@ -612,7 +623,7 @@ function App(): React.JSX.Element {
           >
             Fit
           </button>
-          <button type="button" onClick={closeGraphView}>
+          <button className="graph-btn graph-btn-warn" type="button" onClick={closeGraphView}>
             Close Graph
           </button>
         </div>
