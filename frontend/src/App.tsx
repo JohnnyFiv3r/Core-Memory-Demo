@@ -12,8 +12,14 @@ export function App() {
 
   const apiBase = getApiBase()
   const src = useMemo(() => {
-    if (!apiBase) return `/chris-demo.html?ui_rev=${encodeURIComponent(uiRev)}`
-    return `/chris-demo.html?api_base=${encodeURIComponent(apiBase)}&ui_rev=${encodeURIComponent(uiRev)}`
+    if (typeof window === 'undefined') return `/chris-demo.html?ui_rev=${encodeURIComponent(uiRev)}`
+
+    const params = new URLSearchParams(window.location.search)
+    if (apiBase) params.set('api_base', apiBase)
+    params.set('ui_rev', uiRev)
+
+    const q = params.toString()
+    return `/chris-demo.html${q ? `?${q}` : ''}`
   }, [apiBase, uiRev])
 
   return (
