@@ -28,6 +28,30 @@ type InspectStateResponse = {
   }
 }
 
+type MetaResponse = {
+  auth?: {
+    enabled?: boolean
+    domain?: string
+    client_id?: string
+    audience?: string
+  }
+}
+
+type Auth0ClientLike = {
+  isAuthenticated: () => Promise<boolean>
+  getTokenSilently: () => Promise<string>
+  handleRedirectCallback: () => Promise<{ appState?: { returnTo?: string } }>
+}
+
+declare global {
+  interface Window {
+    auth0?: {
+      createAuth0Client?: (opts: Record<string, unknown>) => Promise<Auth0ClientLike>
+    }
+    __CORE_MEMORY_REFRESH_TOKEN?: () => Promise<string> | string
+  }
+}
+
 const params = new URLSearchParams(window.location.search)
 const queryBase = (params.get('api_base') || '').trim()
 let localBase = ''
@@ -49,6 +73,9 @@ try {
 }
 
 const AUTH_TOKEN_KEY = 'CORE_MEMORY_AUTH_TOKEN'
+let graphMetaPromise: Promise<MetaResponse['auth'] | null> | null = null
+let graphAuthClientPromise: Promise<Auth0ClientLike | null> | null = null
+let graphTokenRefreshPromise: Promise<string> | null = null
 
 class AuthRequiredError extends Error {
   status: number
@@ -82,11 +109,123 @@ function getStoredToken(): string {
   }
 }
 
-async function apiFetchJson<T>(path: string): Promise<T> {
+function setStoredToken(token: string): void {
+  try {
+    if (token) localStorage.setItem(AUTH_TOKEN_KEY, String(token))
+    else localStorage.removeItem(AUTH_TOKEN_KEY)
+  } catch {
+    // best effort only
+  }
+}
+
+async function fetchAuthMeta(): Promise<MetaResponse['auth'] | null> {
+  if (!graphMetaPromise) {
+    graphMetaPromise = (async () => {
+      const primary = apiBase ? `${apiBase}/api/meta` : '/api/meta'
+      const fallback = !apiBase && hostedDirectBase ? `${hostedDirectBase}/api/meta` : ''
+      try {
+        const res = await fetch(primary)
+        if (res.ok) {
+          const body = (await res.json()) as MetaResponse
+          return body?.auth || null
+        }
+      } catch {
+        // try fallback below
+      }
+
+      if (fallback && fallback !== primary) {
+        try {
+          const res = await fetch(fallback)
+          if (res.ok) {
+            const body = (await res.json()) as MetaResponse
+            return body?.auth || null
+          }
+        } catch {
+          // ignore
+        }
+      }
+      return null
+    })()
+  }
+  return graphMetaPromise
+}
+
+async function getGraphAuthClient(): Promise<Auth0ClientLike | null> {
+  if (!graphAuthClientPromise) {
+    graphAuthClientPromise = (async () => {
+      const auth = await fetchAuthMeta()
+      const enabled = !!auth?.enabled
+      const domain = String(auth?.domain || '').trim()
+      const clientId = String(auth?.client_id || '').trim()
+      const audience = String(auth?.audience || '').trim()
+      const createClient = window.auth0?.createAuth0Client
+      if (!enabled || !domain || !clientId || typeof createClient !== 'function') return null
+
+      const redirectUri = window.location.origin.replace(/\/$/, '') + '/'
+      return createClient({
+        domain,
+        clientId,
+        authorizationParams: {
+          audience,
+          scope: 'openid profile email',
+          redirect_uri: redirectUri,
+        },
+        cacheLocation: 'localstorage',
+        useRefreshTokens: true,
+      })
+    })()
+  }
+  return graphAuthClientPromise
+}
+
+async function refreshGraphTokenSilently(): Promise<string> {
+  if (!graphTokenRefreshPromise) {
+    graphTokenRefreshPromise = (async () => {
+      try {
+        const fromWindow = window.__CORE_MEMORY_REFRESH_TOKEN
+        if (typeof fromWindow === 'function') {
+          const fresh = String((await fromWindow()) || '').trim()
+          if (fresh) {
+            setStoredToken(fresh)
+            return fresh
+          }
+        }
+
+        const client = await getGraphAuthClient()
+        if (!client) return ''
+
+        const qp = new URLSearchParams(window.location.search)
+        if (qp.get('code') && qp.get('state')) {
+          try {
+            await client.handleRedirectCallback()
+          } catch {
+            // best effort
+          }
+          window.history.replaceState({}, document.title, window.location.pathname)
+        }
+
+        const isAuthed = await client.isAuthenticated()
+        if (!isAuthed) return ''
+
+        const fresh = String((await client.getTokenSilently()) || '').trim()
+        if (fresh) setStoredToken(fresh)
+        return fresh
+      } catch {
+        return ''
+      }
+    })()
+  }
+  const p = graphTokenRefreshPromise
+  try {
+    return await p
+  } finally {
+    if (graphTokenRefreshPromise === p) graphTokenRefreshPromise = null
+  }
+}
+
+async function fetchWithFallback(path: string, headers?: Record<string, string>): Promise<Response> {
   const primaryUrl = apiBase && path.startsWith('/') ? `${apiBase}${path}` : path
   const directUrl = !apiBase && hostedDirectBase && path.startsWith('/') ? `${hostedDirectBase}${path}` : ''
-  const token = getStoredToken()
-  const headers = token ? { Authorization: `Bearer ${token}` } : undefined
   let res: Response
   try {
     res = await fetch(primaryUrl, { headers })
@@ -108,6 +247,22 @@ async function apiFetchJson<T>(path: string): Promise<T> {
       }
     } catch {
       // keep primary response
+    }
+  }
+
+  return res
+}
+
+async function apiFetchJson<T>(path: string): Promise<T> {
+  const token = getStoredToken()
+  let headers = token ? { Authorization: `Bearer ${token}` } : undefined
+  let res = await fetchWithFallback(path, headers)
+
+  if (res.status === 401 || res.status === 403) {
+    const fresh = await refreshGraphTokenSilently()
+    if (fresh) {
+      headers = { Authorization: `Bearer ${fresh}` }
+      res = await fetchWithFallback(path, headers)
     }
   }
 
