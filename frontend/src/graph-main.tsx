@@ -330,7 +330,6 @@ function App(): React.JSX.Element {
           <button type="button" onClick={closeGraphView}>
             Close Graph
           </button>
-          <a href="./">Back to Demo</a>
         </div>
       </header>
 
