@@ -4,11 +4,10 @@ from functools import lru_cache
 import json
 from time import time
 from typing import Any
-from urllib.error import URLError
-from urllib.request import Request, urlopen
+from urllib.request import Request as UrlRequest, urlopen
 
 import jwt
-from fastapi import Header, HTTPException, Request, status
+from fastapi import Header, HTTPException, Request as FastAPIRequest, status
 
 from app.core.config import settings
 
@@ -20,7 +19,7 @@ PUBLIC_READ_PREFIXES = (
 )
 
 
-def _is_public_read_request(request: Request) -> bool:
+def _is_public_read_request(request: FastAPIRequest) -> bool:
     if not bool(settings.demo_auth_public_read_endpoints):
         return False
     if str(request.method or '').upper() != 'GET':
@@ -75,7 +74,7 @@ def _userinfo_from_token(token: str) -> dict[str, Any]:
     if not issuer:
         return {}
     url = f"{issuer}userinfo"
-    req = Request(url, headers={"Authorization": f"Bearer {token}"}, method="GET")
+    req = UrlRequest(url, headers={"Authorization": f"Bearer {token}"}, method="GET")
     try:
         with urlopen(req, timeout=3.0) as resp:
             body = resp.read().decode("utf-8", errors="replace")
@@ -141,7 +140,7 @@ def _decode_token(token: str) -> dict[str, Any]:
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail=f"invalid_token:{exc}")
 
 
-async def require_admin(request: Request, authorization: str | None = Header(default=None)) -> dict[str, Any]:
+async def require_admin(request: FastAPIRequest, authorization: str | None = Header(default=None)) -> dict[str, Any]:
     if not bool(settings.demo_auth_enabled):
         principal = {"sub": "dev-anon", "email": "", "name": "dev"}
         request.state.principal = principal
