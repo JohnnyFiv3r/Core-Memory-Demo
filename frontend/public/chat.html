@@ -1752,17 +1752,51 @@ async function sendMessage() {
   if (!text) return;
   inputEl.value = '';
   addMsg('user', text);
-  const typing = showTyping();
+  const progressMsg = addMsg('system', 'Chat pipeline: queued');
   inputEl.disabled = true;
 
   try {
-    const res = await fetch('/api/chat', {
+    const startRes = await fetch('/api/chat/start', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({message: text}),
     });
-    const data = await parseApiJsonResponse(res, 'chat');
-    typing.remove();
+    const start = await parseApiJsonResponse(startRes, 'chat start');
+    const jobId = String(start.job_id || '').trim();
+    if (!jobId) throw new Error('chat_job_missing_id');
+
+    let cursor = 0;
+    let data = null;
+    const deadline = Date.now() + 180000;
+
+    while (Date.now() < deadline) {
+      const statusRes = await fetch('/api/chat/status/' + encodeURIComponent(jobId) + '?cursor=' + String(cursor));
+      const status = await parseApiJsonResponse(statusRes, 'chat status');
+      const events = Array.isArray(status.events) ? status.events : [];
+      if (events.length > 0) {
+        cursor = Number(status.cursor_next || cursor || 0);
+        const lastEvt = events[events.length - 1] || {};
+        const msg = String(lastEvt.message || lastEvt.stage || status.stage || 'running').trim();
+        if (msg) {
+          progressMsg.textContent = 'Chat pipeline: ' + msg;
+        }
+      }
+
+      if (status.done) {
+        if (status.error) throw new Error(String(status.error));
+        data = status.result || null;
+        break;
+      }
+
+      const waitMs = Math.max(200, Math.min(1200, Number(status.poll_after_ms || 450)));
+      await new Promise((resolve) => setTimeout(resolve, waitMs));
+    }
+
+    if (!data) {
+      throw new Error('chat_status_timeout');
+    }
+
+    progressMsg.remove();
     addMsg('assistant', (data.assistant || data.response || ''), data.turn_id);
     if (data.last_answer) {
       const d = (data.last_answer && data.last_answer.diagnostics) ? data.last_answer.diagnostics : data.last_answer;
@@ -1780,7 +1814,7 @@ async function sendMessage() {
       addMsg('system', 'Auto-flush triggered. Session reset, rolling window rebuilt.');
     }
   } catch (err) {
-    typing.remove();
+    progressMsg.remove();
     addMsg('assistant', 'Error: ' + err.message);
   }
 

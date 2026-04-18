@@ -1,5 +1,10 @@
 from __future__ import annotations
 
+import asyncio
+import time
+import uuid
+from typing import Any
+
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
@@ -31,6 +36,114 @@ from app.core.runtime import (
 
 public_router = APIRouter(prefix='/api', tags=['demo-public'])
 router = APIRouter(prefix='/api', tags=['demo'], dependencies=[Depends(require_admin), Depends(rate_limit_general)])
+
+CHAT_JOB_TTL_SECONDS = 15 * 60
+CHAT_JOB_POLL_MS = 450
+CHAT_JOB_MAX_EVENTS = 48
+CHAT_JOBS: dict[str, dict[str, Any]] = {}
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
+
+
+def _prune_chat_jobs() -> None:
+    now = _now_ms()
+    ttl_ms = int(CHAT_JOB_TTL_SECONDS * 1000)
+    stale: list[str] = []
+    for job_id, row in list(CHAT_JOBS.items()):
+        updated = int((row or {}).get('updated_ms') or 0)
+        done = bool((row or {}).get('done'))
+        age_ms = now - updated
+        if done and age_ms > ttl_ms:
+            stale.append(job_id)
+        elif not done and age_ms > max(ttl_ms * 2, 60_000):
+            stale.append(job_id)
+    for job_id in stale:
+        CHAT_JOBS.pop(job_id, None)
+
+
+def _chat_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> None:
+    events = list(row.get('events') or [])
+    seq = int(row.get('seq') or 0) + 1
+    evt: dict[str, Any] = {
+        'seq': seq,
+        'ts_ms': _now_ms(),
+        'stage': str(stage or ''),
+        'message': str(message or ''),
+    }
+    for k, v in dict(extra or {}).items():
+        if v is None:
+            continue
+        evt[str(k)] = v
+    events.append(evt)
+    if len(events) > CHAT_JOB_MAX_EVENTS:
+        events = events[-CHAT_JOB_MAX_EVENTS:]
+    row['events'] = events
+    row['seq'] = seq
+    row['stage'] = str(stage or '')
+    row['updated_ms'] = _now_ms()
+
+
+def _chat_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
+    events = [e for e in list(row.get('events') or []) if int((e or {}).get('seq') or 0) > int(cursor)]
+    next_cursor = int(cursor)
+    if events:
+        next_cursor = int((events[-1] or {}).get('seq') or cursor)
+
+    out: dict[str, Any] = {
+        'ok': True,
+        'job_id': str(row.get('job_id') or ''),
+        'status': str(row.get('status') or 'running'),
+        'stage': str(row.get('stage') or ''),
+        'done': bool(row.get('done')),
+        'poll_after_ms': CHAT_JOB_POLL_MS,
+        'events': events,
+        'cursor_next': next_cursor,
+        'started_ms': int(row.get('started_ms') or 0),
+        'updated_ms': int(row.get('updated_ms') or 0),
+        'elapsed_ms': max(0, _now_ms() - int(row.get('started_ms') or _now_ms())),
+    }
+    if row.get('error'):
+        out['error'] = str(row.get('error') or '')
+    if bool(row.get('done')) and isinstance(row.get('result'), dict):
+        out['result'] = dict(row.get('result') or {})
+    return out
+
+
+async def _run_chat_job(job_id: str, message: str) -> None:
+    row = CHAT_JOBS.get(job_id)
+    if not isinstance(row, dict):
+        return
+
+    row['status'] = 'running'
+    _chat_event(row, 'queued', 'Request accepted, starting chat pipeline')
+
+    def progress(stage: str, text: str, **extra: Any) -> None:
+        current = CHAT_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        _chat_event(current, stage, text, **extra)
+
+    try:
+        out = await run_chat(message, progress=progress)
+        current = CHAT_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        current['status'] = 'completed'
+        current['done'] = True
+        current['result'] = dict(out or {})
+        current['updated_ms'] = _now_ms()
+        _chat_event(current, 'done', 'Assistant response ready', turn_id=str((out or {}).get('turn_id') or ''))
+    except Exception as exc:
+        current = CHAT_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        current['status'] = 'failed'
+        current['done'] = True
+        current['error'] = str(exc or 'chat_failed')
+        current['updated_ms'] = _now_ms()
+        _chat_event(current, 'failed', 'Chat failed', error=str(exc or 'chat_failed'))
 
 
 def _http_exc_response(exc: HTTPException) -> JSONResponse:
@@ -128,6 +241,48 @@ def demo_claim_slot(subject: str, slot: str, as_of: str | None = None):
 @router.get('/demo/turns')
 def demo_turns(session_id: str | None = None, limit: int = 200, cursor: str | None = None):
     return inspect_turns_payload(session_id, max(1, int(limit)), cursor)
+
+
+@router.post('/chat/start', dependencies=[Depends(rate_limit_chat)])
+async def chat_start(request: Request):
+    body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
+    message = str((body or {}).get('message') or (body or {}).get('query') or '').strip()
+    if not message:
+        return JSONResponse({'ok': False, 'error': 'missing_message'}, status_code=400)
+
+    _prune_chat_jobs()
+    job_id = uuid.uuid4().hex[:12]
+    started = _now_ms()
+    CHAT_JOBS[job_id] = {
+        'job_id': job_id,
+        'status': 'queued',
+        'stage': 'queued',
+        'done': False,
+        'error': '',
+        'result': None,
+        'seq': 0,
+        'events': [],
+        'started_ms': started,
+        'updated_ms': started,
+    }
+    task = asyncio.create_task(_run_chat_job(job_id, message))
+    CHAT_JOBS[job_id]['task'] = task
+    _chat_event(CHAT_JOBS[job_id], 'queued', 'Chat request queued')
+    return {
+        'ok': True,
+        'job_id': job_id,
+        'status': 'queued',
+        'poll_after_ms': CHAT_JOB_POLL_MS,
+    }
+
+
+@router.get('/chat/status/{job_id}')
+def chat_status(job_id: str, cursor: int = 0):
+    _prune_chat_jobs()
+    row = CHAT_JOBS.get(str(job_id or '').strip())
+    if not isinstance(row, dict):
+        return JSONResponse({'ok': False, 'error': 'chat_job_not_found'}, status_code=404)
+    return _chat_job_payload(row, cursor=max(0, int(cursor)))
 
 
 @router.post('/chat', dependencies=[Depends(rate_limit_chat)])

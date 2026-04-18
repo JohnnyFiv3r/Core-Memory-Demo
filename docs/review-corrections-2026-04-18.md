@@ -38,3 +38,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Landing defaults to chat (`/chat.html`) with Graph as an in-app overlay modal (no redirect/route swap).
 - Turn token tracking no longer uses `(chars + 500) // 4`; runtime now uses model-aware estimation (tiktoken when available, deterministic byte/segment fallback otherwise).
 - Demo now exposes model selection (`/api/demo/models`, `/api/demo/model`) and a chat-header model picker with credential-aware options.
+- Chat now exposes live pipeline progress via async endpoints (`POST /api/chat/start`, `GET /api/chat/status/{job_id}`), and the UI surfaces retrieval/generation/linking/diagnostics stages instead of static typing dots.

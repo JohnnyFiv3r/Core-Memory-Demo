@@ -10,7 +10,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 try:
     import tiktoken  # type: ignore
@@ -1388,20 +1388,33 @@ def _chat_semantic_mode_name() -> str:
     return mode if mode in {"required", "degraded_allowed"} else "degraded_allowed"
 
 
-async def run_chat(message: str) -> dict[str, Any]:
+def _emit_chat_progress(progress: Callable[..., Any] | None, stage: str, message: str, **extra: Any) -> None:
+    if not callable(progress):
+        return
+    try:
+        progress(stage, message, **extra)
+    except Exception:
+        return
+
+
+async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) -> dict[str, Any]:
     global LAST_TURN_DIAGNOSTICS
     _sync_session_context_budget()
     turn_id = uuid.uuid4().hex[:12]
     fallback_error = ""
+    model_id = detect_model()
     seed_updates = _seed_crawler_updates(user_query=message, turn_id=turn_id)
     turn_metadata = {
         "source": "core_memory_demo_backend",
         "crawler_updates": seed_updates,
     }
     chat_semantic_mode = _chat_semantic_mode_name()
+    _emit_chat_progress(progress, "prepare", "Preparing memory turn", turn_id=turn_id, model_id=model_id, semantic_mode=chat_semantic_mode)
 
     try:
+        _emit_chat_progress(progress, "retrieve", "Retrieving and grounding memory context")
         agent = get_agent()
+        _emit_chat_progress(progress, "generate", "Generating assistant answer")
         with semantic_mode(chat_semantic_mode):
             result = await run_with_memory(
                 agent,
@@ -1412,9 +1425,11 @@ async def run_chat(message: str) -> dict[str, Any]:
                 metadata=turn_metadata,
             )
         answer = str(getattr(result, "output", None) or getattr(result, "data", None) or result)
+        _emit_chat_progress(progress, "generated", "Assistant answer generated")
     except Exception as exc:
         err = str(exc or "").strip()
         fallback_error = err or "model_unavailable"
+        _emit_chat_progress(progress, "fallback", "Primary model unavailable, using retrieval fallback", error=fallback_error)
         with semantic_mode(chat_semantic_mode):
             retrieval_preview = memory_tools.execute({"query": message, "intent": "remember", "k": 8}, root=settings.core_memory_root, explain=False)
         answer = _build_fallback_answer(message, retrieval_preview)
@@ -1436,12 +1451,14 @@ async def run_chat(message: str) -> dict[str, Any]:
         )
 
     association_linking: dict[str, Any] = {}
+    _emit_chat_progress(progress, "associations", "Linking temporal associations")
     try:
         association_linking = await _link_turn_temporal_association(turn_id=turn_id)
     except Exception as exc:
         association_linking = {"ok": False, "error": str(exc or "association_link_failed")}
 
-    record_turn_tokens(message, answer, model_id=detect_model())
+    _emit_chat_progress(progress, "tokenize", "Updating token usage")
+    record_turn_tokens(message, answer, model_id=model_id)
 
     intent_probe = classify_intent(str(message or "")) or {}
     intent_class = str(intent_probe.get("intent_class") or "").strip().lower()
@@ -1450,6 +1467,7 @@ async def run_chat(message: str) -> dict[str, Any]:
     if intent_class in {"causal", "why", "what_changed"}:
         req["intent"] = "causal"
 
+    _emit_chat_progress(progress, "diagnostics", "Collecting retrieval diagnostics")
     with semantic_mode(chat_semantic_mode):
         retrieval = memory_tools.execute(req, root=settings.core_memory_root, explain=False)
 
@@ -1485,12 +1503,21 @@ async def run_chat(message: str) -> dict[str, Any]:
             "association_linking": association_linking,
         },
     }
+    _emit_chat_progress(
+        progress,
+        "completed",
+        "Chat turn completed",
+        turn_id=turn_id,
+        retrieval_mode=retrieval_mode,
+        grounding_level=str(grounding.get("level") or "none"),
+        fallback_mode=bool(fallback_error),
+    )
 
     return {
         "ok": True,
         "session_id": SESSION.session_id,
         "turn_id": turn_id,
-        "model_id": detect_model(),
+        "model_id": model_id,
         "assistant": answer,
         "last_answer": dict(LAST_TURN_DIAGNOSTICS),
     }
