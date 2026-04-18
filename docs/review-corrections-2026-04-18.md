@@ -35,5 +35,6 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 
 ## Follow-up items completed after this correction pass
 
-- Graph-first landing shipped (`/` now defaults to `/graph.html`, with `?view=demo` legacy fallback).
+- Landing defaults to chat (`/chat.html`) with Graph as an in-app overlay modal (no redirect/route swap).
 - Turn token tracking no longer uses `(chars + 500) // 4`; runtime now uses model-aware estimation (tiktoken when available, deterministic byte/segment fallback otherwise).
+- Demo now exposes model selection (`/api/demo/models`, `/api/demo/model`) and a chat-header model picker with credential-aware options.

@@ -919,6 +919,12 @@
       </div>
     </div>
     <button class="btn" id="auth-btn" type="button" style="display:none">Sign in</button>
+    <label class="control-inline" title="Pick a model for chat turns (auto chooses by available credentials).">
+      <span class="control-label" style="margin-right:0">model</span>
+      <select id="model-select" class="control-select" onchange="changeDemoModel(this.value)">
+        <option value="">auto</option>
+      </select>
+    </label>
     <button class="btn btn-warn" onclick="flushSession()">Flush Session</button>
     <button class="btn" onclick="openReagraphArchive()">Graph View</button>
   </div>
@@ -1115,6 +1121,7 @@ loadGraphPrefs();
 
 const authBtnEl = document.getElementById('auth-btn');
 const authStatusEl = document.getElementById('auth-status');
+const modelSelectEl = document.getElementById('model-select');
 let authEnabled = false;
 let authReady = false;
 let authClient = null;
@@ -1123,6 +1130,73 @@ let refreshTimerId = null;
 let refreshErrorStreak = 0;
 let authRedirecting = false;
 const AUTH_LOOP_GUARD_KEY = 'CM_AUTH_LOOP_GUARD';
+let modelOptionsHydrated = false;
+
+function renderDemoModelOptions(payload) {
+  if (!modelSelectEl) return;
+  modelOptionsHydrated = true;
+  const rows = Array.isArray((payload || {}).options) ? payload.options : [];
+  const selected = String((payload || {}).override_model || '').trim();
+  modelSelectEl.innerHTML = '';
+
+  const autoOpt = document.createElement('option');
+  autoOpt.value = '';
+  const autoModel = String((payload || {}).auto_model || '').trim();
+  autoOpt.textContent = autoModel ? ('auto (' + autoModel + ')') : 'auto';
+  modelSelectEl.appendChild(autoOpt);
+
+  rows.forEach((row) => {
+    const modelId = String((row || {}).model_id || '').trim();
+    if (!modelId) return;
+    const label = String((row || {}).label || modelId).trim();
+    const available = !!(row || {}).available;
+    const requiredEnv = String((row || {}).required_env || '').trim();
+    const opt = document.createElement('option');
+    opt.value = modelId;
+    opt.textContent = available ? label : (label + ' (missing creds: ' + requiredEnv + ')');
+    opt.disabled = !available;
+    modelSelectEl.appendChild(opt);
+  });
+
+  modelSelectEl.value = selected;
+}
+
+async function loadDemoModels() {
+  if (!modelSelectEl) return;
+  try {
+    const res = await fetch('/api/demo/models');
+    const data = await res.json();
+    if (!res.ok || !data || !data.ok) return;
+    renderDemoModelOptions(data);
+  } catch (_) {
+    // best effort only
+  }
+}
+
+async function changeDemoModel(modelId) {
+  const nextModel = String(modelId || '').trim();
+  if (!modelSelectEl) return;
+  modelSelectEl.disabled = true;
+  try {
+    const res = await fetch('/api/demo/model', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({ model_id: nextModel }),
+    });
+    const data = await res.json();
+    if (!res.ok || !data || !data.ok) {
+      throw new Error(String((data || {}).error || ('HTTP ' + res.status)));
+    }
+    renderDemoModelOptions(data);
+    const selected = String((data || {}).selected_model || '').trim();
+    addMsg('system', nextModel ? ('Model selected: ' + selected) : ('Model selection reset to auto (' + selected + ')'));
+  } catch (err) {
+    alert('Model selection failed: ' + String((err && err.message) || err || 'unknown_error'));
+    loadDemoModels();
+  } finally {
+    modelSelectEl.disabled = false;
+  }
+}
 
 function readAuthLoopGuard() {
   try {
@@ -3324,6 +3398,7 @@ function renderBenchmark(summary, report, benchmarkMeta) {
 
 async function refreshMemory() {
   if (authEnabled && !authReady) return;
+  if (!modelOptionsHydrated) loadDemoModels();
   try {
     const stateUrl = claimsAsOf
       ? ('/v1/memory/inspect/state?as_of=' + encodeURIComponent(claimsAsOf))
@@ -3392,6 +3467,12 @@ async function refreshMemory() {
     document.getElementById('stat-tokens').textContent = Math.round(totalUsedTokens);
     document.getElementById('stat-budget').textContent = budget;
     document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || statsCompat.session_id || '---') + ' ▾';
+    if (modelSelectEl) {
+      const selectedOverride = String(sess.model_override || '').trim();
+      if (modelSelectEl.value !== selectedOverride) {
+        modelSelectEl.value = selectedOverride;
+      }
+    }
 
     const fill = document.getElementById('budget-fill');
     fill.style.width = windowPct.toFixed(1) + '%';
@@ -3690,6 +3771,7 @@ function startDemoUi() {
   loadClaimsStateFromUrl();
   loadSeedResetPrefs();
   bindSessionPopoverControls();
+  loadDemoModels();
   refreshErrorStreak = 0;
   refreshMemory();
   if (refreshTimerId) clearInterval(refreshTimerId);

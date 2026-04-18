@@ -17,6 +17,7 @@ from app.core.runtime import (
     inspect_claim_slot_payload,
     inspect_state_payload,
     inspect_turns_payload,
+    list_demo_model_options,
     read_benchmark_history,
     replay_story_pack,
     run_benchmark,
@@ -24,6 +25,7 @@ from app.core.runtime import (
     run_flush,
     reset_test_session,
     seed_demo_history,
+    set_demo_model_override,
     suggest_entity_merges,
 )
 
@@ -86,6 +88,24 @@ def demo_runtime():
         'last_turn': state.get('last_turn') or {},
         'session': state.get('session') or {},
     }
+
+
+@router.get('/demo/models')
+def demo_models():
+    try:
+        return list_demo_model_options()
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+
+
+@router.post('/demo/model')
+async def demo_model_set(request: Request):
+    body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
+    model_id = str((body or {}).get('model_id') or '').strip()
+    try:
+        return set_demo_model_override(model_id or None)
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=400)
 
 
 @router.get('/demo/bead/{bead_id}')

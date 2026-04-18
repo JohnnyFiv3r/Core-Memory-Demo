@@ -106,6 +106,16 @@ ENTITY_CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9._-]{2,}|[A-Z]{2,}[A-Za-z0-
 TOKEN_ESTIMATE_SEGMENT_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 _TIKTOKEN_ENCODER_CACHE: dict[str, Any] = {}
 
+DEMO_MODEL_PRESETS: tuple[tuple[str, str], ...] = (
+    ("anthropic:claude-opus-4-20250514", "Claude Opus 4"),
+    ("anthropic:claude-sonnet-4-20250514", "Claude Sonnet 4"),
+    ("anthropic:claude-3-5-haiku-latest", "Claude Haiku"),
+    ("openai:gpt-4.1", "GPT-4.1"),
+    ("openai:gpt-4o", "GPT-4o"),
+    ("google-gla:gemini-2.5-pro", "Gemini 2.5 Pro"),
+    ("google-gla:gemini-2.5-flash", "Gemini 2.5 Flash"),
+)
+
 
 def _load_story_pack_bundle(*, pack_dir: Path | None = None) -> dict[str, Any]:
     base = Path(pack_dir or STORY_PACK_DIR)
@@ -250,7 +260,14 @@ def _model_has_required_credentials(model_id: str) -> bool:
     return bool(os.getenv(req))
 
 
+_MODEL_OVERRIDE: str = ""
+
+
 def detect_model() -> str:
+    override = str(_MODEL_OVERRIDE or "").strip()
+    if override and _model_has_required_credentials(override):
+        return override
+
     configured = settings.demo_model_id.strip()
     if configured and _model_has_required_credentials(configured):
         return configured
@@ -260,7 +277,48 @@ def detect_model() -> str:
         return "openai:gpt-4o"
     if os.getenv("ANTHROPIC_API_KEY"):
         return "anthropic:claude-sonnet-4-20250514"
+    if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
+        return "google-gla:gemini-2.5-flash"
     return ""
+
+
+def list_demo_model_options() -> dict[str, Any]:
+    options: list[dict[str, Any]] = []
+    seen: set[str] = set()
+
+    for model_id, label in DEMO_MODEL_PRESETS:
+        mid = str(model_id or "").strip()
+        if not mid or mid in seen:
+            continue
+        seen.add(mid)
+        options.append(
+            {
+                "model_id": mid,
+                "label": str(label or mid),
+                "available": bool(_model_has_required_credentials(mid)),
+                "required_env": _required_api_key_env_for_model(mid),
+            }
+        )
+
+    configured = str(settings.demo_model_id or "").strip()
+    if configured and configured not in seen:
+        options.append(
+            {
+                "model_id": configured,
+                "label": configured,
+                "available": bool(_model_has_required_credentials(configured)),
+                "required_env": _required_api_key_env_for_model(configured),
+            }
+        )
+
+    return {
+        "ok": True,
+        "selected_model": str(_MODEL_OVERRIDE or "").strip() or detect_model(),
+        "auto_model": detect_model(),
+        "override_model": str(_MODEL_OVERRIDE or "").strip(),
+        "configured_model": configured,
+        "options": options,
+    }
 
 
 def _model_context_window_tokens(model_id: str) -> int | None:
@@ -361,6 +419,7 @@ def create_agent(model_id: str):
 
 
 _AGENT: Any | None = None
+_AGENT_MODEL: str = ""
 _ASSOC_JUDGE_AGENT: Any | None = None
 _ASSOC_JUDGE_MODEL: str = ""
 
@@ -470,11 +529,29 @@ If unsure, omit the edge.
 """.strip()
 
 
-def get_agent() -> Any:
-    global _AGENT
+def set_demo_model_override(model_id: str | None) -> dict[str, Any]:
+    global _MODEL_OVERRIDE, _AGENT, _AGENT_MODEL, _ASSOC_JUDGE_AGENT, _ASSOC_JUDGE_MODEL
+    req_model = str(model_id or "").strip()
+
+    if not req_model:
+        _MODEL_OVERRIDE = ""
+    else:
+        if not _model_has_required_credentials(req_model):
+            req = _required_api_key_env_for_model(req_model) or "provider credentials"
+            raise RuntimeError(f"missing_model_credentials: '{req_model}' requires {req}")
+        _MODEL_OVERRIDE = req_model
+
+    _AGENT = None
+    _AGENT_MODEL = ""
+    _ASSOC_JUDGE_AGENT = None
+    _ASSOC_JUDGE_MODEL = ""
     _sync_session_context_budget()
-    if _AGENT is not None:
-        return _AGENT
+    return list_demo_model_options()
+
+
+def get_agent() -> Any:
+    global _AGENT, _AGENT_MODEL
+    _sync_session_context_budget()
     model = detect_model()
     if not model:
         configured = settings.demo_model_id.strip()
@@ -482,8 +559,13 @@ def get_agent() -> Any:
             req = _required_api_key_env_for_model(configured)
             if req:
                 raise RuntimeError(f"missing_model_credentials: configured model '{configured}' requires {req}")
-        raise RuntimeError("no_model_configured: set DEMO_MODEL_ID with matching provider credentials, or set ANTHROPIC_API_KEY / OPENAI_API_KEY")
+        raise RuntimeError("no_model_configured: set DEMO_MODEL_ID with matching provider credentials, or set ANTHROPIC_API_KEY / OPENAI_API_KEY / GEMINI_API_KEY")
+
+    if _AGENT is not None and _AGENT_MODEL == model:
+        return _AGENT
+
     _AGENT = create_agent(model)
+    _AGENT_MODEL = model
     return _AGENT
 
 
@@ -551,6 +633,9 @@ def inspect_state_payload(*, as_of: str | None = None) -> dict[str, Any]:
             "rolling_window_token_estimate": rolling_token_estimate,
             "rolling_window_token_budget": rolling_token_budget,
             "rolling_window_record_count": rolling_record_count,
+            "selected_model": detect_model(),
+            "model_override": str(_MODEL_OVERRIDE or "").strip(),
+            "configured_model": str(settings.demo_model_id or "").strip(),
         }
     )
     out["last_turn"] = dict(LAST_TURN_DIAGNOSTICS or {})
@@ -1405,6 +1490,7 @@ async def run_chat(message: str) -> dict[str, Any]:
         "ok": True,
         "session_id": SESSION.session_id,
         "turn_id": turn_id,
+        "model_id": detect_model(),
         "assistant": answer,
         "last_answer": dict(LAST_TURN_DIAGNOSTICS),
     }
