@@ -12,6 +12,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+try:
+    import tiktoken  # type: ignore
+except Exception:  # pragma: no cover - optional dependency
+    tiktoken = None
+
 from core_memory.entity.merge_flow import (
     decide_entity_merge_proposal,
     suggest_entity_merge_proposals,
@@ -98,6 +103,8 @@ STORY_PACK_DIR = Path(__file__).resolve().parents[3] / "demo" / "story-pack"
 TURN_HEADER_RE = re.compile(r"^##\s*Turn\s+(\d{3})\s*:\s*(.+?)\s*$", re.MULTILINE)
 SEND_PROMPT_RE = re.compile(r"^\*\*Send:\*\*\s*`([^`]+)`\s*$", re.MULTILINE)
 ENTITY_CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9._-]{2,}|[A-Z]{2,}[A-Za-z0-9._-]*)\b")
+TOKEN_ESTIMATE_SEGMENT_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
+_TIKTOKEN_ENCODER_CACHE: dict[str, Any] = {}
 
 
 def _load_story_pack_bundle(*, pack_dir: Path | None = None) -> dict[str, Any]:
@@ -578,9 +585,84 @@ def inspect_state_payload(*, as_of: str | None = None) -> dict[str, Any]:
     return out
 
 
-def record_turn_tokens(user_query: str, assistant_response: str) -> None:
-    turn_text = len(str(user_query or "")) + len(str(assistant_response or ""))
-    SESSION.token_usage += (turn_text + 500) // 4
+def _token_estimator_model_name(model_id: str | None) -> str:
+    mid = str(model_id or "").strip()
+    if ":" in mid:
+        mid = mid.split(":", 1)[1].strip()
+    if "/" in mid:
+        mid = mid.split("/", 1)[1].strip()
+    return mid
+
+
+def _tiktoken_encoder(model_id: str | None) -> Any | None:
+    if tiktoken is None:
+        return None
+
+    model_name = _token_estimator_model_name(model_id)
+    cache_key = model_name or "cl100k_base"
+    cached = _TIKTOKEN_ENCODER_CACHE.get(cache_key)
+    if cached is not None:
+        return cached
+
+    enc = None
+    if model_name:
+        try:
+            enc = tiktoken.encoding_for_model(model_name)
+        except Exception:
+            enc = None
+
+    if enc is None:
+        try:
+            enc = tiktoken.get_encoding("cl100k_base")
+        except Exception:
+            enc = None
+
+    if enc is not None:
+        _TIKTOKEN_ENCODER_CACHE[cache_key] = enc
+    return enc
+
+
+def _is_cjk_char(ch: str) -> bool:
+    return (
+        ("\u4e00" <= ch <= "\u9fff")
+        or ("\u3400" <= ch <= "\u4dbf")
+        or ("\u3040" <= ch <= "\u30ff")
+        or ("\uac00" <= ch <= "\ud7af")
+    )
+
+
+def _estimate_text_tokens(text: str, *, model_id: str | None = None) -> int:
+    s = str(text or "")
+    if not s:
+        return 0
+
+    enc = _tiktoken_encoder(model_id)
+    if enc is not None:
+        try:
+            return max(1, int(len(enc.encode(s, disallowed_special=()))))
+        except Exception:
+            pass
+
+    utf8_bytes = len(s.encode("utf-8", errors="ignore"))
+    by_bytes = (utf8_bytes + 3) // 4
+
+    segments = len(TOKEN_ESTIMATE_SEGMENT_RE.findall(s))
+    by_segments = (segments * 3 + 1) // 2
+
+    cjk_chars = sum(1 for ch in s if _is_cjk_char(ch))
+    by_cjk = cjk_chars + max(0, (utf8_bytes - cjk_chars) // 5)
+
+    newlines = s.count("\n")
+    newline_overhead = max(0, newlines // 4)
+
+    return max(1, int(max(by_bytes, by_segments, by_cjk) + newline_overhead))
+
+
+def record_turn_tokens(user_query: str, assistant_response: str, *, model_id: str | None = None) -> None:
+    user_tokens = _estimate_text_tokens(user_query, model_id=model_id)
+    assistant_tokens = _estimate_text_tokens(assistant_response, model_id=model_id)
+    framing_overhead = 24
+    SESSION.token_usage += max(1, int(user_tokens + assistant_tokens + framing_overhead))
 
 
 def _heuristic_entities(*texts: str, limit: int = 16) -> list[str]:
@@ -1273,7 +1355,7 @@ async def run_chat(message: str) -> dict[str, Any]:
     except Exception as exc:
         association_linking = {"ok": False, "error": str(exc or "association_link_failed")}
 
-    record_turn_tokens(message, answer)
+    record_turn_tokens(message, answer, model_id=detect_model())
 
     intent_probe = classify_intent(str(message or "")) or {}
     intent_class = str(intent_probe.get("intent_class") or "").strip().lower()

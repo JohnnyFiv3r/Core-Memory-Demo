@@ -25,8 +25,11 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 
 ## Still-valid concerns from the review
 
-- iframe-first UI architecture (`/chris-demo.html`) remains.
-- token estimator heuristic remains `(chars + 500) // 4`.
+- iframe-first UI architecture remains in legacy demo mode (`/chris-demo.html`).
 - heavy operation slot default remains single-flight.
 - benchmark runtime globals remain in-process state.
-- graph is not yet the default landing route.
+
+## Follow-up items completed after this correction pass
+
+- Graph-first landing shipped (`/` now defaults to `/graph.html`, with `?view=demo` legacy fallback).
+- Turn token tracking no longer uses `(chars + 500) // 4`; runtime now uses model-aware estimation (tiktoken when available, deterministic byte/segment fallback otherwise).
