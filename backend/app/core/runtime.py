@@ -554,10 +554,11 @@ def inspect_state_payload(*, as_of: str | None = None) -> dict[str, Any]:
         }
     )
     out["last_turn"] = dict(LAST_TURN_DIAGNOSTICS or {})
+    benchmark_snapshot = get_last_benchmark_snapshot(history_limit=20)
     out["benchmark"] = {
-        "last_summary": dict(LAST_BENCHMARK_SUMMARY or {}),
-        "has_last_report": bool(LAST_BENCHMARK_REPORT),
-        "history": list(LAST_BENCHMARK_HISTORY or [])[:20],
+        "last_summary": dict(benchmark_snapshot.get("summary") or {}),
+        "has_last_report": bool(benchmark_snapshot.get("report") or {}),
+        "history": list(benchmark_snapshot.get("history") or [])[:20],
     }
 
     # Backward-compat projection fields used by current UI
@@ -1969,7 +1970,7 @@ def _prune_benchmark_run_dirs() -> None:
 
 
 def read_benchmark_history(limit: int = 20) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
+    file_rows: list[dict[str, Any]] = []
     f = _benchmark_history_file()
     if f.exists():
         for line in f.read_text(encoding="utf-8").splitlines():
@@ -1981,12 +1982,15 @@ def read_benchmark_history(limit: int = 20) -> list[dict[str, Any]]:
             except Exception:
                 continue
             if isinstance(rec, dict):
-                out.append(rec)
-    out.extend([dict(x or {}) for x in LAST_BENCHMARK_HISTORY])
-    out = list(reversed(out))
+                file_rows.append(rec)
+
+    file_rows = list(reversed(file_rows))
+    in_memory_rows = [dict(x or {}) for x in list(LAST_BENCHMARK_HISTORY or [])]
+    combined = in_memory_rows + file_rows
+
     seen: set[str] = set()
     dedup: list[dict[str, Any]] = []
-    for r in out:
+    for r in combined:
         rid = str((r.get("summary") or {}).get("run_id") or r.get("run_id") or "")
         if rid and rid in seen:
             continue
@@ -1994,6 +1998,44 @@ def read_benchmark_history(limit: int = 20) -> list[dict[str, Any]]:
             seen.add(rid)
         dedup.append(r)
     return dedup[: max(1, int(limit))]
+
+
+def _set_last_benchmark_cache(*, summary: dict[str, Any], report: dict[str, Any], history_row: dict[str, Any]) -> None:
+    LAST_BENCHMARK_SUMMARY.clear()
+    LAST_BENCHMARK_SUMMARY.update(dict(summary or {}))
+
+    LAST_BENCHMARK_REPORT.clear()
+    LAST_BENCHMARK_REPORT.update(dict(report or {}))
+
+    run_id = str((summary or {}).get("run_id") or (history_row or {}).get("run_id") or "").strip()
+    existing = [dict(x or {}) for x in list(LAST_BENCHMARK_HISTORY or [])]
+    if run_id:
+        existing = [
+            x
+            for x in existing
+            if str((x.get("summary") or {}).get("run_id") or x.get("run_id") or "").strip() != run_id
+        ]
+    LAST_BENCHMARK_HISTORY[:] = ([dict(history_row or {})] + existing)[:100]
+
+
+def get_last_benchmark_snapshot(*, history_limit: int = 20) -> dict[str, Any]:
+    rows = read_benchmark_history(limit=max(1, int(history_limit)))
+    latest = dict(rows[0] or {}) if rows else {}
+
+    summary = dict(LAST_BENCHMARK_SUMMARY or {})
+    report = dict(LAST_BENCHMARK_REPORT or {})
+
+    if not summary:
+        summary = dict(latest.get("summary") or {})
+    if not report:
+        report = dict(latest.get("report") or {})
+
+    return {
+        "ok": bool(report),
+        "summary": summary,
+        "report": report,
+        "history": rows,
+    }
 
 
 def _copy_tree(src: Path, dst: Path) -> None:
@@ -2259,8 +2301,6 @@ def _materialize_locomo_setup(*, root: str, setup: dict[str, Any], case_id: str)
 
 
 def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local") -> dict[str, Any]:
-    global LAST_BENCHMARK_REPORT, LAST_BENCHMARK_SUMMARY, LAST_BENCHMARK_HISTORY
-
     run_id = f"bench-{uuid.uuid4().hex[:10]}"
     started = _utc_now_iso()
     run_root = Path(settings.core_memory_demo_benchmark_root) / run_id
@@ -2399,16 +2439,13 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         },
     }
 
-    LAST_BENCHMARK_SUMMARY = dict(summary)
-    LAST_BENCHMARK_REPORT = dict(report)
-
     history_row = {
         "run_id": run_id,
         "created_at": summary["finished_at"],
         "summary": dict(summary),
         "report": dict(report),
     }
-    LAST_BENCHMARK_HISTORY = ([history_row] + list(LAST_BENCHMARK_HISTORY or []))[:100]
+    _set_last_benchmark_cache(summary=summary, report=report, history_row=history_row)
     _append_history(history_row)
     _prune_benchmark_run_dirs()
 

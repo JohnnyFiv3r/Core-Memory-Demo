@@ -27,7 +27,10 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 
 - iframe-first UI architecture remains in legacy demo mode (`/chris-demo.html`).
 - heavy operation slot default remains 1 total slot (now caller-scoped with per-identity concurrency controls).
-- benchmark runtime globals remain in-process state.
+
+## Additional follow-up correction
+
+- Benchmark "last run" surfaces now use a disk-backed snapshot fallback (`benchmark-history.jsonl`) and mutable in-process cache updates (no stale imported-global rebinds).
 
 ## Follow-up items completed after this correction pass
 

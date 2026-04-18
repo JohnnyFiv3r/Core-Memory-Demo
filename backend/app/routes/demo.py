@@ -11,6 +11,7 @@ from app.core.runtime import (
     compare_benchmark_runs,
     decide_entity_merge,
     get_story_pack_meta,
+    get_last_benchmark_snapshot,
     inspect_bead_hydration_payload,
     inspect_bead_payload,
     inspect_claim_slot_payload,
@@ -24,8 +25,6 @@ from app.core.runtime import (
     reset_test_session,
     seed_demo_history,
     suggest_entity_merges,
-    LAST_BENCHMARK_REPORT,
-    LAST_BENCHMARK_SUMMARY,
 )
 
 public_router = APIRouter(prefix='/api', tags=['demo-public'])
@@ -326,7 +325,8 @@ async def benchmark_run(request: Request):
 
 @router.get('/demo/benchmark/last')
 def benchmark_last():
-    history = read_benchmark_history(limit=20)
+    snapshot = get_last_benchmark_snapshot(history_limit=20)
+    history = list(snapshot.get('history') or [])
     latest_compare = None
     if len(history) >= 2:
         left = str((history[1].get('summary') or {}).get('run_id') or history[1].get('run_id') or '')
@@ -335,9 +335,9 @@ def benchmark_last():
             cmp = compare_benchmark_runs(left, right)
             latest_compare = cmp.get('compare') if cmp.get('ok') else None
     return {
-        'ok': bool(LAST_BENCHMARK_REPORT),
-        'summary': dict(LAST_BENCHMARK_SUMMARY or {}),
-        'report': dict(LAST_BENCHMARK_REPORT or {}),
+        'ok': bool(snapshot.get('ok')),
+        'summary': dict(snapshot.get('summary') or {}),
+        'report': dict(snapshot.get('report') or {}),
         'history': history,
         'latest_compare': latest_compare,
     }
