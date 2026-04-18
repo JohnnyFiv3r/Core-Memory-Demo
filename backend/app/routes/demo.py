@@ -36,7 +36,7 @@ def _http_exc_response(exc: HTTPException) -> JSONResponse:
     detail = exc.detail if isinstance(exc.detail, str) else str(exc.detail)
     payload: dict[str, object] = {'ok': False, 'error': detail}
     if detail == 'heavy_operation_in_progress':
-        payload['hint'] = 'heavy endpoints are single-flight; use one seed request with max_turns instead of parallel seed calls'
+        payload['hint'] = 'heavy endpoints are concurrency-scoped per caller; retry shortly or serialize parallel heavy requests per caller/session'
     return JSONResponse(payload, status_code=int(exc.status_code), headers=dict(exc.headers or {}))
 
 
@@ -127,7 +127,7 @@ async def chat(request: Request):
 @router.post('/flush')
 async def flush(request: Request):
     try:
-        with heavy_operation_slot():
+        with heavy_operation_slot(request):
             await rate_limit_heavy(request)
             return run_flush()
     except HTTPException as exc:
@@ -141,7 +141,7 @@ async def session_reset(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
     wipe_memory = bool((body or {}).get('wipe_memory', False))
     try:
-        with heavy_operation_slot():
+        with heavy_operation_slot(request):
             await rate_limit_heavy(request)
             return reset_test_session(wipe_memory=wipe_memory)
     except HTTPException as exc:
@@ -181,7 +181,7 @@ async def seed(request: Request):
     max_side_effects_per_pass_raw = (body or {}).get('max_side_effects_per_pass')
     max_side_effects_per_pass = int(max_side_effects_per_pass_raw) if isinstance(max_side_effects_per_pass_raw, int) and max_side_effects_per_pass_raw > 0 else 8
     try:
-        with heavy_operation_slot():
+        with heavy_operation_slot(request):
             await rate_limit_heavy(request)
             out = await seed_demo_history(
                 messages=messages if isinstance(messages, list) else None,
@@ -260,7 +260,7 @@ async def story_pack_replay(request: Request):
         benchmark_limit = min(benchmark_limit, max(1, int(settings.benchmark_limit_max_cases)))
 
     try:
-        with heavy_operation_slot():
+        with heavy_operation_slot(request):
             await rate_limit_heavy(request)
             out = await replay_story_pack(
                 max_turns=max_turns,
@@ -307,7 +307,7 @@ async def benchmark_run(request: Request):
         limit = min(limit, max(1, int(settings.benchmark_limit_max_cases)))
 
     try:
-        with heavy_operation_slot():
+        with heavy_operation_slot(request):
             await rate_limit_heavy(request)
             out = run_benchmark(
                 subset=subset,

@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     abuse_heavy_max_requests: int = 40
     abuse_heavy_window_seconds: int = 300
     abuse_heavy_max_concurrent: int = 1
+    abuse_heavy_max_concurrent_per_identity: int = 1
 
     seed_max_turns: int = 500
     replay_max_turns: int = 500

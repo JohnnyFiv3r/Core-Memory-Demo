@@ -26,7 +26,7 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 ## Still-valid concerns from the review
 
 - iframe-first UI architecture remains in legacy demo mode (`/chris-demo.html`).
-- heavy operation slot default remains single-flight.
+- heavy operation slot default remains 1 total slot (now caller-scoped with per-identity concurrency controls).
 - benchmark runtime globals remain in-process state.
 
 ## Follow-up items completed after this correction pass

@@ -36,19 +36,33 @@ class _SlidingWindowLimiter:
 class _HeavyGate:
     def __init__(self) -> None:
         self._lock = threading.Lock()
-        self._active = 0
+        self._active_total = 0
+        self._active_by_identity: dict[str, int] = {}
 
-    def acquire(self) -> bool:
+    def acquire(self, identity_key: str) -> bool:
         with self._lock:
             max_active = max(1, int(settings.abuse_heavy_max_concurrent))
-            if self._active >= max_active:
+            max_per_identity = max(1, int(getattr(settings, "abuse_heavy_max_concurrent_per_identity", 1) or 1))
+            key = str(identity_key or "unknown").strip() or "unknown"
+
+            if self._active_total >= max_active:
                 return False
-            self._active += 1
+            if int(self._active_by_identity.get(key) or 0) >= max_per_identity:
+                return False
+
+            self._active_total += 1
+            self._active_by_identity[key] = int(self._active_by_identity.get(key) or 0) + 1
             return True
 
-    def release(self) -> None:
+    def release(self, identity_key: str) -> None:
         with self._lock:
-            self._active = max(0, self._active - 1)
+            key = str(identity_key or "unknown").strip() or "unknown"
+            self._active_total = max(0, self._active_total - 1)
+            active_for_key = max(0, int(self._active_by_identity.get(key) or 0) - 1)
+            if active_for_key <= 0:
+                self._active_by_identity.pop(key, None)
+            else:
+                self._active_by_identity[key] = active_for_key
 
 
 _LIMITER = _SlidingWindowLimiter()
@@ -99,8 +113,9 @@ async def rate_limit_heavy(request: Request) -> None:
 
 
 @contextmanager
-def heavy_operation_slot() -> None:
-    if not _HEAVY_GATE.acquire():
+def heavy_operation_slot(request: Request, *, slot_key: str | None = None) -> None:
+    key = str(slot_key or "").strip() or _identity(request)
+    if not _HEAVY_GATE.acquire(key):
         raise HTTPException(
             status_code=status.HTTP_429_TOO_MANY_REQUESTS,
             detail="heavy_operation_in_progress",
@@ -109,4 +124,4 @@ def heavy_operation_slot() -> None:
     try:
         yield
     finally:
-        _HEAVY_GATE.release()
+        _HEAVY_GATE.release(key)
