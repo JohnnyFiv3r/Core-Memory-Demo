@@ -1,16 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { getApiBase } from './api'
-import { ReactParityApp } from './ReactParityApp'
 
 const FIRST_LOAD_SPLASH_KEY = 'CM_FIRST_LOAD_SPLASH_DONE'
 const FIRST_LOAD_SPLASH_MS = 2000
 
 export function App() {
-  const reactMode = typeof window !== 'undefined' && window.location.hash === '#react'
-  const uiRev = '20260415-session-popover-11'
+  const uiRev = '20260418-midwest-sync-01'
   const [showSplash, setShowSplash] = useState(() => {
     if (typeof window === 'undefined') return false
-    if (window.location.hash === '#react') return false
     try {
       return window.sessionStorage.getItem(FIRST_LOAD_SPLASH_KEY) !== '1'
     } catch {
@@ -28,10 +25,6 @@ export function App() {
     const timer = window.setTimeout(() => setShowSplash(false), FIRST_LOAD_SPLASH_MS)
     return () => window.clearTimeout(timer)
   }, [showSplash])
-
-  if (reactMode) {
-    return <ReactParityApp />
-  }
 
   const apiBase = getApiBase()
   const src = useMemo(() => {

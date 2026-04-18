@@ -28,8 +28,11 @@ cp .env.example .env
 uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
 ```
 
-Note: requirements currently pin `core-memory` directly from GitHub `master` for MVP speed.
-Before production cut, pin to a tag/commit SHA.
+Note: requirements pin `core-memory` to an explicit commit SHA for deploy stability.
+
+Local auth behavior:
+- `DEMO_AUTH_ENABLED=false` (default) keeps local evaluation simple with no Auth0 setup.
+- Set `DEMO_AUTH_ENABLED=true` only when you want JWT/admin-email enforcement.
 
 ### Frontend
 
