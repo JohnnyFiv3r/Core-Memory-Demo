@@ -41,11 +41,11 @@ class _HeavyGate:
 
     def acquire(self, identity_key: str) -> bool:
         with self._lock:
-            max_active = max(1, int(settings.abuse_heavy_max_concurrent))
+            max_active = int(getattr(settings, "abuse_heavy_max_concurrent", 0) or 0)
             max_per_identity = max(1, int(getattr(settings, "abuse_heavy_max_concurrent_per_identity", 1) or 1))
             key = str(identity_key or "unknown").strip() or "unknown"
 
-            if self._active_total >= max_active:
+            if max_active > 0 and self._active_total >= max_active:
                 return False
             if int(self._active_by_identity.get(key) or 0) >= max_per_identity:
                 return False
@@ -70,6 +70,10 @@ _HEAVY_GATE = _HeavyGate()
 
 
 def _identity(request: Request) -> str:
+    header_id = str(request.headers.get("x-core-memory-session") or "").strip()
+    if header_id:
+        return f"sess:{header_id[:128]}"
+
     principal = getattr(request.state, "principal", None)
     if isinstance(principal, dict):
         sub = str(principal.get("sub") or "").strip()

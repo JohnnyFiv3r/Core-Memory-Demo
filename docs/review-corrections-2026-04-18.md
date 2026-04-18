@@ -9,10 +9,10 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
   - `.env.example` and README now document this default.
 
 - **D14 (rate limits are global-anonymous) is stale**
-  - Rate limiter identity key is scoped by principal sub when available, otherwise client IP (`sub:<id>` or `ip:<host>`), not a single global bucket.
+  - Rate limiter identity key is scoped by client session header when present (`sess:<id>`), then principal sub, then client IP (`sub:<id>` / `ip:<host>`), not a single global bucket.
 
 - **D6 context update**
-  - `heavy_operation_slot()` still enforces shared heavy-slot concurrency (default 1), but now returns explicit `429 heavy_operation_in_progress` + `Retry-After` and avoids burning heavy rate bucket for slot-collisions due to routing changes already in `43b2d8c`.
+  - `heavy_operation_slot()` supports per-identity-only gating by default (`ABUSE_HEAVY_MAX_CONCURRENT=0`, `ABUSE_HEAVY_MAX_CONCURRENT_PER_IDENTITY=1`), so one caller's heavy run does not globally block all others.
 
 ## Additional hardening applied in this correction pass
 
@@ -25,7 +25,7 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 
 ## Remaining concern from the review
 
-- heavy operation slot default remains 1 total slot (now caller-scoped with per-identity concurrency controls).
+- Deploy config still advertises single-replica runtime in `render.yaml`.
 
 ## Additional follow-up corrections
 

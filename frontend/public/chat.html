@@ -4,6 +4,7 @@
 <script>
 (function () {
   const AUTH_TOKEN_KEY = 'CORE_MEMORY_AUTH_TOKEN';
+  const SESSION_KEY = 'CORE_MEMORY_CLIENT_SESSION_ID';
   const params = new URLSearchParams(window.location.search);
   const qRaw = (params.get('api_base') || '').trim();
   let s = '';
@@ -46,6 +47,27 @@
   window.__CORE_MEMORY_REFRESH_TOKEN = async () => {
     return '';
   };
+
+  function getOrCreateClientSessionId() {
+    try {
+      const existing = String(localStorage.getItem(SESSION_KEY) || '').trim();
+      if (existing) return existing;
+    } catch (_) {}
+
+    let next = '';
+    try {
+      if (window.crypto && typeof window.crypto.randomUUID === 'function') {
+        next = String(window.crypto.randomUUID()).trim();
+      }
+    } catch (_) {}
+    if (!next) {
+      next = 'sess-' + Math.random().toString(36).slice(2) + Date.now().toString(36);
+    }
+
+    try { localStorage.setItem(SESSION_KEY, next); } catch (_) {}
+    return next;
+  }
+
   window.fetch = (input, init) => {
     const nextInit = Object.assign({}, init || {});
     const inheritedHeaders = (!nextInit.headers && input && typeof input !== 'string' && input.headers)
@@ -56,6 +78,11 @@
     const token = window.__CORE_MEMORY_GET_TOKEN();
     if (token && !headers.has('Authorization')) {
       headers.set('Authorization', 'Bearer ' + token);
+    }
+
+    const sessionId = getOrCreateClientSessionId();
+    if (sessionId && !headers.has('X-Core-Memory-Session')) {
+      headers.set('X-Core-Memory-Session', sessionId);
     }
 
     nextInit.headers = headers;
