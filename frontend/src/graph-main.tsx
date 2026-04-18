@@ -362,6 +362,7 @@ function App(): React.JSX.Element {
     }
 
     const home = new URL('./', window.location.href)
+    home.searchParams.set('view', 'demo')
     home.searchParams.set('v', nonce)
     window.location.assign(home.toString())
   }, [])

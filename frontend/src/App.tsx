@@ -5,7 +5,7 @@ const FIRST_LOAD_SPLASH_KEY = 'CM_FIRST_LOAD_SPLASH_DONE'
 const FIRST_LOAD_SPLASH_MS = 2000
 
 export function App() {
-  const uiRev = '20260418-midwest-sync-01'
+  const uiRev = '20260418-graph-default-01'
   const [showSplash, setShowSplash] = useState(() => {
     if (typeof window === 'undefined') return false
     try {
@@ -28,14 +28,17 @@ export function App() {
 
   const apiBase = getApiBase()
   const src = useMemo(() => {
-    if (typeof window === 'undefined') return `/chris-demo.html?ui_rev=${encodeURIComponent(uiRev)}`
+    if (typeof window === 'undefined') return `/graph.html?ui_rev=${encodeURIComponent(uiRev)}`
 
     const params = new URLSearchParams(window.location.search)
+    const requestedView = String(params.get('view') || 'graph').trim().toLowerCase()
+    const targetPath = requestedView === 'demo' || requestedView === 'legacy' ? '/chris-demo.html' : '/graph.html'
+    params.delete('view')
     if (apiBase) params.set('api_base', apiBase)
     params.set('ui_rev', uiRev)
 
     const q = params.toString()
-    return `/chris-demo.html${q ? `?${q}` : ''}`
+    return `${targetPath}${q ? `?${q}` : ''}`
   }, [apiBase, uiRev])
 
   return (
