@@ -25,7 +25,7 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 
 ## Remaining concern from the review
 
-- Deploy config still advertises single-replica runtime in `render.yaml`.
+- Larger P2 modernization items still remain (full React extraction from monolithic HTML / CSP hardening).
 
 ## Additional follow-up corrections
 
@@ -39,3 +39,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Turn token tracking no longer uses `(chars + 500) // 4`; runtime now uses model-aware estimation (tiktoken when available, deterministic byte/segment fallback otherwise).
 - Demo now exposes model selection (`/api/demo/models`, `/api/demo/model`) and a chat-header model picker with credential-aware options.
 - Chat now exposes live pipeline progress via async endpoints (`POST /api/chat/start`, `GET /api/chat/status/{job_id}`), and the UI surfaces retrieval/generation/linking/diagnostics stages instead of static typing dots.
+- Render deploy config no longer hard-codes single-instance (`numInstances: 1` removed); instance count is now an environment-level deploy setting, not a repo-advertised cap.

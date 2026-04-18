@@ -52,7 +52,7 @@ cp .env.example .env
 ## Deploy target (from PRD)
 
 - Frontend: Vercel (root `frontend/`)
-- Backend: Render (single instance) + persistent disk mounted at `/var/data`
+- Backend: Render + persistent disk mounted at `/var/data`
 - Storage roots:
   - `CORE_MEMORY_ROOT=/var/data/core-memory`
   - `CORE_MEMORY_DEMO_BENCHMARK_ROOT=/var/data/core-memory-bench`
@@ -70,4 +70,4 @@ When I call T2/T3 MVP stable, you'll need to:
 1. Create Render web service for `backend/`
 2. Attach persistent disk mounted at `/var/data`
 3. Set env vars (roots, model key, allowed origin)
-4. Keep replicas at exactly 1
+4. Set instance count in Render dashboard for your environment (start conservative, then tune based on workload)

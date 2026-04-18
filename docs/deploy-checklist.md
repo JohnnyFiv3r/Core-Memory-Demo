@@ -10,7 +10,7 @@
    - `CORE_MEMORY_DEMO_ARTIFACTS_ROOT=/var/data/core-memory-artifacts`
    - one model key (`OPENAI_API_KEY` or `ANTHROPIC_API_KEY` or `GEMINI_API_KEY`)
    - `ALLOWED_ORIGIN=https://<your-vercel-domain>`
-4. Keep **instance count = 1**.
+4. Set Render instance count per environment in dashboard (do not hard-code a single-instance cap in repo config).
 5. Verify:
    - `/healthz` returns 200
    - `/api/demo/state` returns 200
