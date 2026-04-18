@@ -808,6 +808,49 @@
   }
   .modal .close-btn { float: right; cursor: pointer; color: var(--text-dim); font-size: 18px; background: none; border: none; }
 
+  .graph-overlay {
+    display: none;
+    position: fixed;
+    inset: 0;
+    z-index: 140;
+    background: rgba(0, 0, 0, 0.72);
+    align-items: center;
+    justify-content: center;
+    padding: 18px;
+  }
+  .graph-overlay.open { display: flex; }
+  .graph-overlay-panel {
+    width: min(1400px, 96vw);
+    height: min(900px, 92vh);
+    background: #05070c;
+    border: 1px solid var(--border);
+    border-radius: 12px;
+    overflow: hidden;
+    display: flex;
+    flex-direction: column;
+    box-shadow: 0 18px 64px rgba(0,0,0,0.45);
+  }
+  .graph-overlay-header {
+    height: 42px;
+    border-bottom: 1px solid var(--border);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0 12px;
+    background: #0a0d14;
+    color: var(--text);
+    font-size: 12px;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+  }
+  .graph-overlay-frame {
+    width: 100%;
+    height: 100%;
+    border: 0;
+    background: #05070c;
+    flex: 1;
+  }
+
   .typing {
     display: inline-flex; gap: 4px; padding: 10px 14px; align-self: flex-start;
     background: var(--surface2); border: 1px solid var(--border); border-radius: var(--radius);
@@ -975,6 +1018,16 @@
     <button class="close-btn" onclick="closeModal()">&times;</button>
     <h3 id="modal-title">Bead Detail</h3>
     <pre id="modal-body"></pre>
+  </div>
+</div>
+
+<div class="graph-overlay" id="graph-overlay" onclick="if(event.target===this)closeGraphOverlay()">
+  <div class="graph-overlay-panel">
+    <div class="graph-overlay-header">
+      <span>Causal Graph</span>
+      <button class="btn btn-warn" type="button" onclick="closeGraphOverlay()">Close</button>
+    </div>
+    <iframe class="graph-overlay-frame" id="graph-overlay-frame" title="Core Memory Causal Graph"></iframe>
   </div>
 </div>
 
@@ -1382,6 +1435,43 @@ function refreshStoryCursorLabel() {
 }
 
 function openReagraphArchive() {
+  const overlay = document.getElementById('graph-overlay');
+  const frame = document.getElementById('graph-overlay-frame');
+  if (!overlay || !frame) {
+    const rel = './graph';
+    const url = new URL(rel, window.location.href).toString();
+    window.location.assign(url);
+    return;
+  }
+
+  const qp = new URLSearchParams(window.location.search);
+  const graphUrl = new URL('./graph', window.location.href);
+  const apiBase = String(qp.get('api_base') || '').trim();
+  if (apiBase) graphUrl.searchParams.set('api_base', apiBase);
+  graphUrl.searchParams.set('overlay', '1');
+
+  if (!frame.getAttribute('src')) {
+    frame.setAttribute('src', graphUrl.toString());
+  }
+
+  overlay.classList.add('open');
+  document.body.style.overflow = 'hidden';
+}
+
+function closeGraphOverlay() {
+  const overlay = document.getElementById('graph-overlay');
+  if (overlay) overlay.classList.remove('open');
+  document.body.style.overflow = '';
+}
+
+document.addEventListener('keydown', (evt) => {
+  if (evt.key !== 'Escape') return;
+  const overlay = document.getElementById('graph-overlay');
+  if (!overlay || !overlay.classList.contains('open')) return;
+  closeGraphOverlay();
+});
+
+function openReagraphArchiveWindow() {
   const rel = './graph';
   const url = new URL(rel, window.location.href).toString();
   if (window.self !== window.top) {

@@ -2,15 +2,15 @@ import { useEffect, useMemo } from 'react'
 import { getApiBase } from './api'
 
 export function App() {
-  const uiRev = '20260418-no-iframe-root-01'
+  const uiRev = '20260418-chat-default-overlay-01'
   const apiBase = getApiBase()
 
   const targetUrl = useMemo(() => {
-    if (typeof window === 'undefined') return `/graph.html?ui_rev=${encodeURIComponent(uiRev)}`
+    if (typeof window === 'undefined') return `/chris-demo.html?ui_rev=${encodeURIComponent(uiRev)}`
 
     const params = new URLSearchParams(window.location.search)
-    const requestedView = String(params.get('view') || 'graph').trim().toLowerCase()
-    const targetPath = requestedView === 'demo' || requestedView === 'legacy' ? '/chris-demo.html' : '/graph.html'
+    const requestedView = String(params.get('view') || 'chat').trim().toLowerCase()
+    const targetPath = requestedView === 'graph' ? '/graph.html' : '/chris-demo.html'
 
     params.delete('view')
     if (apiBase) params.set('api_base', apiBase)

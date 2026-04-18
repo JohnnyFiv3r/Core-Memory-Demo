@@ -30,7 +30,8 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 ## Additional follow-up corrections
 
 - Benchmark "last run" surfaces now use a disk-backed snapshot fallback (`benchmark-history.jsonl`) and mutable in-process cache updates (no stale imported-global rebinds).
-- Root app no longer uses iframe embedding as the primary delivery path; it now routes directly to `graph.html` (default) or `chris-demo.html` via `?view=demo`.
+- Root app no longer uses iframe embedding as the primary delivery path and now defaults to the chat surface (`chris-demo.html`).
+- Graph View no longer redirects away from chat; it opens as an in-app overlay (`graph.html` iframe modal) and closes back to the same chat session.
 
 ## Follow-up items completed after this correction pass
 
