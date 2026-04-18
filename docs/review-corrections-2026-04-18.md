@@ -19,9 +19,9 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - **Pinned backend dependency**
   - `backend/requirements.txt` now pins Core-Memory to a concrete commit SHA instead of `@master`.
 
-- **Removed hidden React parity switch from primary app path**
-  - `frontend/src/App.tsx` no longer branches on `#react` into `ReactParityApp`.
-  - This prevents accidental drift from a hidden side-route and clarifies the live surface.
+- **Resolved hidden React parity drift path**
+  - `frontend/src/App.tsx` no longer branches on `#react`.
+  - Removed unused parity remnants (`frontend/src/ReactParityApp.tsx`, `frontend/src/react-parity.css`) to avoid dead-code ambiguity.
 
 ## Remaining concern from the review
 
@@ -40,3 +40,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Demo now exposes model selection (`/api/demo/models`, `/api/demo/model`) and a chat-header model picker with credential-aware options.
 - Chat now exposes live pipeline progress via async endpoints (`POST /api/chat/start`, `GET /api/chat/status/{job_id}`), and the UI surfaces retrieval/generation/linking/diagnostics stages instead of static typing dots.
 - Render deploy config no longer hard-codes single-instance (`numInstances: 1` removed); instance count is now an environment-level deploy setting, not a repo-advertised cap.
+- Hidden React parity route debt is now fully resolved by deleting unused parity files, not just removing route entry.
