@@ -25,7 +25,7 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 
 ## Remaining concern from the review
 
-- Larger P2 modernization items still remain (full React extraction from monolithic HTML / CSP hardening).
+- Larger P2 modernization item still remains (full React extraction from monolithic HTML).
 
 ## Additional follow-up corrections
 
@@ -41,3 +41,5 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Chat now exposes live pipeline progress via async endpoints (`POST /api/chat/start`, `GET /api/chat/status/{job_id}`), and the UI surfaces retrieval/generation/linking/diagnostics stages instead of static typing dots.
 - Render deploy config no longer hard-codes single-instance (`numInstances: 1` removed); instance count is now an environment-level deploy setting, not a repo-advertised cap.
 - Hidden React parity route debt is now fully resolved by deleting unused parity files, not just removing route entry.
+- Added baseline frontend security headers in `vercel.json`, including CSP + nosniff/referrer/frame protections.
+- Removed inline DOM event attributes from `chat.html` (`onclick`/`onchange`/`onkeydown`) and bound handlers in script to reduce CSP friction.

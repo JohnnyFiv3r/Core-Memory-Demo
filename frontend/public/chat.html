@@ -923,37 +923,37 @@
   <div class="header-controls">
     <div class="session-chip-wrap">
       <button class="session-badge session-badge-btn" id="session-badge" type="button" style="cursor:pointer;user-select:none">session: --- ▾</button>
-      <div class="session-popover" id="session-popover" onclick="event.stopPropagation()">
+      <div class="session-popover" id="session-popover">
         <div class="session-pop-title">Session Controls</div>
         <label class="session-pop-check" title="Resets session before each seed run so replay starts at turn 1 in a clean session.">
-          <input id="seed-reset-before-run" type="checkbox" checked onchange="saveSeedResetPrefs()">
+          <input id="seed-reset-before-run" type="checkbox" checked>
           <span>Start fresh session before Seed</span>
         </label>
         <label class="session-pop-check" title="Also clears demo memory store before seeding.">
-          <input id="seed-wipe-memory" type="checkbox" onchange="saveSeedResetPrefs()">
+          <input id="seed-wipe-memory" type="checkbox">
           <span>Clear memory store too</span>
         </label>
         <label class="session-pop-check" title="When enabled, each Seed run resumes story-pack replay from the next unseeded turn.">
-          <input id="seed-continue-story" type="checkbox" checked onchange="saveSeedResetPrefs()">
+          <input id="seed-continue-story" type="checkbox" checked>
           <span>Continue story-pack from last turn</span>
         </label>
         <div id="story-cursor-label" style="font-size:11px;color:var(--text-dim);margin:-2px 0 8px 0;">Story cursor: turn 0</div>
         <div class="session-pop-actions">
-          <button class="btn" type="button" onclick="startFreshSessionNow(false)">New Session Now</button>
-          <button class="btn btn-warn" type="button" onclick="startFreshSessionNow(true)">Hard Reset Now</button>
-          <button class="btn" type="button" onclick="resetStoryCursor(false)">Reset Story Cursor</button>
+          <button class="btn" id="btn-session-new" type="button">New Session Now</button>
+          <button class="btn btn-warn" id="btn-session-hard-reset" type="button">Hard Reset Now</button>
+          <button class="btn" id="btn-story-cursor-reset" type="button">Reset Story Cursor</button>
         </div>
       </div>
     </div>
     <button class="btn" id="auth-btn" type="button" style="display:none">Sign in</button>
     <label class="control-inline" title="Pick a model for chat turns (auto chooses by available credentials).">
       <span class="control-label" style="margin-right:0">model</span>
-      <select id="model-select" class="control-select" onchange="changeDemoModel(this.value)">
+      <select id="model-select" class="control-select">
         <option value="">auto</option>
       </select>
     </label>
-    <button class="btn btn-warn" onclick="flushSession()">Flush Session</button>
-    <button class="btn" onclick="openReagraphArchive()">Graph View</button>
+    <button class="btn btn-warn" id="btn-flush-session">Flush Session</button>
+    <button class="btn" id="btn-open-graph">Graph View</button>
   </div>
 </header>
 
@@ -969,16 +969,15 @@
   <div class="chat-panel">
     <div class="messages" id="messages"></div>
     <div class="chat-input-row">
-      <input type="text" id="chat-input" placeholder="Type a message..."
-             onkeydown="if(event.key==='Enter')sendMessage()" autofocus>
-      <button class="btn btn-accent" onclick="sendMessage()">Send</button>
+      <input type="text" id="chat-input" placeholder="Type a message..." autofocus>
+      <button class="btn btn-accent" id="btn-send-message">Send</button>
     </div>
   </div>
 
   <div class="inspector">
     <div class="inspector-tabs">
       <div class="control-panel-title">Control Panel</div>
-      <select id="tab-selector" class="tab-selector" onchange="switchTab(this.value)">
+      <select id="tab-selector" class="tab-selector">
         <option value="beads" selected>Beads</option>
         <option value="associations">Associations</option>
         <option value="claims">Claims</option>
@@ -1028,8 +1027,8 @@
             <input id="bench-preload-enabled" type="checkbox" checked>
             <span class="control-label" style="margin-right:0">from demo</span>
           </label>
-          <button class="btn" id="btn-seed" onclick="seedMemory()">Seed</button>
-          <button class="btn" id="btn-benchmark" onclick="runBenchmark()">Run LOCOMO Test</button>
+          <button class="btn" id="btn-seed">Seed</button>
+          <button class="btn" id="btn-benchmark">Run LOCOMO Test</button>
         </div>
         <div id="tab-benchmark-content"></div>
       </div>
@@ -1046,19 +1045,19 @@
   </div>
 </div>
 
-<div class="modal-overlay" id="modal" onclick="if(event.target===this)closeModal()">
+<div class="modal-overlay" id="modal">
   <div class="modal">
-    <button class="close-btn" onclick="closeModal()">&times;</button>
+    <button class="close-btn" id="btn-modal-close">&times;</button>
     <h3 id="modal-title">Bead Detail</h3>
     <pre id="modal-body"></pre>
   </div>
 </div>
 
-<div class="graph-overlay" id="graph-overlay" onclick="if(event.target===this)closeGraphOverlay()">
+<div class="graph-overlay" id="graph-overlay">
   <div class="graph-overlay-panel">
     <div class="graph-overlay-header">
       <span>Causal Graph</span>
-      <button class="btn btn-warn" type="button" onclick="closeGraphOverlay()">Close</button>
+      <button class="btn btn-warn" id="btn-close-graph-overlay" type="button">Close</button>
     </div>
     <iframe class="graph-overlay-frame" id="graph-overlay-frame" title="Core Memory Causal Graph"></iframe>
   </div>
@@ -1657,6 +1656,91 @@ function bindSessionPopoverControls() {
     }
   });
   badge.__cmPopoverBound = true;
+}
+
+function bindUiEventHandlers() {
+  if (document.body.__cmUiHandlersBound) return;
+
+  const pop = document.getElementById('session-popover');
+  if (pop) {
+    pop.addEventListener('click', (event) => event.stopPropagation());
+  }
+
+  const resetBeforeRunEl = document.getElementById('seed-reset-before-run');
+  const wipeMemoryEl = document.getElementById('seed-wipe-memory');
+  const continueStoryEl = document.getElementById('seed-continue-story');
+  if (resetBeforeRunEl) resetBeforeRunEl.addEventListener('change', saveSeedResetPrefs);
+  if (wipeMemoryEl) wipeMemoryEl.addEventListener('change', saveSeedResetPrefs);
+  if (continueStoryEl) continueStoryEl.addEventListener('change', saveSeedResetPrefs);
+
+  const modelSelect = document.getElementById('model-select');
+  if (modelSelect) {
+    modelSelect.addEventListener('change', (event) => {
+      const next = String((event && event.target && event.target.value) || '').trim();
+      changeDemoModel(next);
+    });
+  }
+
+  const flushBtn = document.getElementById('btn-flush-session');
+  if (flushBtn) flushBtn.addEventListener('click', flushSession);
+
+  const openGraphBtn = document.getElementById('btn-open-graph');
+  if (openGraphBtn) openGraphBtn.addEventListener('click', openReagraphArchive);
+
+  const chatInput = document.getElementById('chat-input');
+  if (chatInput) {
+    chatInput.addEventListener('keydown', (event) => {
+      if (event.key === 'Enter') sendMessage();
+    });
+  }
+
+  const sendBtn = document.getElementById('btn-send-message');
+  if (sendBtn) sendBtn.addEventListener('click', sendMessage);
+
+  const tabSelect = document.getElementById('tab-selector');
+  if (tabSelect) {
+    tabSelect.addEventListener('change', (event) => {
+      const next = String((event && event.target && event.target.value) || '').trim();
+      if (next) switchTab(next);
+    });
+  }
+
+  const seedBtn = document.getElementById('btn-seed');
+  if (seedBtn) seedBtn.addEventListener('click', seedMemory);
+
+  const benchmarkBtn = document.getElementById('btn-benchmark');
+  if (benchmarkBtn) benchmarkBtn.addEventListener('click', runBenchmark);
+
+  const modal = document.getElementById('modal');
+  if (modal) {
+    modal.addEventListener('click', (event) => {
+      if (event.target === modal) closeModal();
+    });
+  }
+
+  const modalCloseBtn = document.getElementById('btn-modal-close');
+  if (modalCloseBtn) modalCloseBtn.addEventListener('click', closeModal);
+
+  const graphOverlay = document.getElementById('graph-overlay');
+  if (graphOverlay) {
+    graphOverlay.addEventListener('click', (event) => {
+      if (event.target === graphOverlay) closeGraphOverlay();
+    });
+  }
+
+  const closeGraphBtn = document.getElementById('btn-close-graph-overlay');
+  if (closeGraphBtn) closeGraphBtn.addEventListener('click', closeGraphOverlay);
+
+  const newSessionBtn = document.getElementById('btn-session-new');
+  if (newSessionBtn) newSessionBtn.addEventListener('click', () => startFreshSessionNow(false));
+
+  const hardResetBtn = document.getElementById('btn-session-hard-reset');
+  if (hardResetBtn) hardResetBtn.addEventListener('click', () => startFreshSessionNow(true));
+
+  const resetCursorBtn = document.getElementById('btn-story-cursor-reset');
+  if (resetCursorBtn) resetCursorBtn.addEventListener('click', () => resetStoryCursor(false));
+
+  document.body.__cmUiHandlersBound = true;
 }
 
 async function resetSessionForSeed(opts = {}) {
@@ -3829,6 +3913,7 @@ function switchTab(name) {
 }
 
 function startDemoUi() {
+  bindUiEventHandlers();
   loadClaimsStateFromUrl();
   loadSeedResetPrefs();
   bindSessionPopoverControls();
