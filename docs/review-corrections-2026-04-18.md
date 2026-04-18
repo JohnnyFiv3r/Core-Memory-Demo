@@ -23,14 +23,14 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
   - `frontend/src/App.tsx` no longer branches on `#react` into `ReactParityApp`.
   - This prevents accidental drift from a hidden side-route and clarifies the live surface.
 
-## Still-valid concerns from the review
+## Remaining concern from the review
 
-- iframe-first UI architecture remains in legacy demo mode (`/chris-demo.html`).
 - heavy operation slot default remains 1 total slot (now caller-scoped with per-identity concurrency controls).
 
-## Additional follow-up correction
+## Additional follow-up corrections
 
 - Benchmark "last run" surfaces now use a disk-backed snapshot fallback (`benchmark-history.jsonl`) and mutable in-process cache updates (no stale imported-global rebinds).
+- Root app no longer uses iframe embedding as the primary delivery path; it now routes directly to `graph.html` (default) or `chris-demo.html` via `?view=demo`.
 
 ## Follow-up items completed after this correction pass
 
