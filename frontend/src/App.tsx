@@ -6,11 +6,11 @@ export function App() {
   const apiBase = getApiBase()
 
   const targetUrl = useMemo(() => {
-    if (typeof window === 'undefined') return `/chris-demo.html?ui_rev=${encodeURIComponent(uiRev)}`
+    if (typeof window === 'undefined') return `/chat.html?ui_rev=${encodeURIComponent(uiRev)}`
 
     const params = new URLSearchParams(window.location.search)
     const requestedView = String(params.get('view') || 'chat').trim().toLowerCase()
-    const targetPath = requestedView === 'graph' ? '/graph.html' : '/chris-demo.html'
+    const targetPath = requestedView === 'graph' ? '/graph.html' : '/chat.html'
 
     params.delete('view')
     if (apiBase) params.set('api_base', apiBase)

@@ -14,6 +14,14 @@
       "destination": "https://core-memory-demo.onrender.com/v1/:path*"
     },
     {
+      "source": "/chat",
+      "destination": "/chat.html"
+    },
+    {
+      "source": "/chris-demo.html",
+      "destination": "/chat.html"
+    },
+    {
       "source": "/reagraph-archive.html",
       "destination": "/graph.html"
     },

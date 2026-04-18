@@ -21,7 +21,7 @@
       window.history.replaceState({}, document.title, clean.toString());
     } catch {}
   }
-  if (window.self === window.top && /\/chris-demo\.html$/.test(window.location.pathname)) {
+  if (window.self === window.top && /\/chat\.html$/.test(window.location.pathname)) {
     const rootUrl = new URL('/', window.location.origin);
     if (window.location.search) rootUrl.search = window.location.search;
     window.location.replace(rootUrl.toString());
