@@ -52,6 +52,8 @@ let rollingPaneRenderer = null;
 let rollingPaneLoadPromise = null;
 let claimsPaneRenderer = null;
 let claimsPaneLoadPromise = null;
+let entitiesPaneRenderer = null;
+let entitiesPaneLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1889,7 +1891,7 @@ function renderClaims(rows, claimsMeta) {
   ensureClaimsPaneRenderer();
 }
 
-function renderEntities(entityMeta) {
+function renderEntitiesFallback(entityMeta) {
   const el = document.getElementById('tab-entities');
   el.textContent = '';
   const rows = Array.isArray((entityMeta || {}).rows) ? entityMeta.rows : [];
@@ -2014,6 +2016,53 @@ function renderEntities(entityMeta) {
       el.appendChild(row);
     });
   }
+}
+
+function ensureEntitiesPaneRenderer() {
+  if (entitiesPaneRenderer || entitiesPaneLoadPromise) return;
+
+  entitiesPaneLoadPromise = import('/chat-slices/entities-pane.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderEntitiesPane === 'function') {
+        entitiesPaneRenderer = mod.renderEntitiesPane;
+      }
+    })
+    .catch(() => {
+      entitiesPaneRenderer = null;
+    })
+    .finally(() => {
+      entitiesPaneLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderEntities(entityMeta) {
+  const safeMeta = entityMeta || {};
+  const el = document.getElementById('tab-entities');
+  if (!el) return;
+
+  if (entitiesPaneRenderer) {
+    try {
+      entitiesPaneRenderer(el, {
+        entityMeta: safeMeta,
+        formatIsoShort,
+        onSuggestMerges: entitySuggestMerges,
+        onRefresh: refreshMemory,
+        onDecideMerge: entityDecideMerge,
+        onOpenProposal: (proposal) => {
+          document.getElementById('modal-title').textContent = 'Entity merge proposal';
+          document.getElementById('modal-body').textContent = JSON.stringify(proposal, null, 2);
+          document.getElementById('modal').classList.add('open');
+        },
+      });
+      return;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  renderEntitiesFallback(safeMeta);
+  ensureEntitiesPaneRenderer();
 }
 
 async function entitySuggestMerges() {
