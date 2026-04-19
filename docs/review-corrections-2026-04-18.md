@@ -45,3 +45,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Removed inline DOM event attributes from `chat.html` (`onclick`/`onchange`/`onkeydown`) and bound handlers in script to reduce CSP friction.
 - Externalized `chat.html` inline scripts into `chat-bootstrap.js` and `chat-app.js`, then tightened CSP `script-src` by removing `'unsafe-inline'` for scripts.
 - Began pane-by-pane React extraction: Rolling Window tab now renders via a dedicated React module (`frontend/public/chat-slices/rolling-pane.js`) loaded by `chat-app.js`, with graceful fallback if module load fails.
+- Continued pane extraction: Claims tab now renders via React module (`frontend/public/chat-slices/claims-pane.js`) with existing claim-detail loader integration and fallback preservation in `chat-app.js`.

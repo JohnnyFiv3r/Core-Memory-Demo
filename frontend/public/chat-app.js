@@ -50,6 +50,8 @@ const graphFilters = {
 let reagraphLoadPromise = null;
 let rollingPaneRenderer = null;
 let rollingPaneLoadPromise = null;
+let claimsPaneRenderer = null;
+let claimsPaneLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1675,7 +1677,7 @@ function renderRolling(items) {
   ensureRollingPaneRenderer();
 }
 
-function renderClaims(rows, claimsMeta) {
+function renderClaimsFallback(rows, claimsMeta) {
   const el = document.getElementById('tab-claims');
   el.textContent = '';
 
@@ -1812,6 +1814,79 @@ function renderClaims(rows, claimsMeta) {
   if (claimsDetailOpen) {
     loadClaimSlotDetail(selectedClaimSlot, detail);
   }
+}
+
+
+function ensureClaimsPaneRenderer() {
+  if (claimsPaneRenderer || claimsPaneLoadPromise) return;
+
+  claimsPaneLoadPromise = import('/chat-slices/claims-pane.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderClaimsPane === 'function') {
+        claimsPaneRenderer = mod.renderClaimsPane;
+      }
+    })
+    .catch(() => {
+      claimsPaneRenderer = null;
+    })
+    .finally(() => {
+      claimsPaneLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderClaims(rows, claimsMeta) {
+  const el = document.getElementById('tab-claims');
+  if (!el) return;
+
+  const safeRows = Array.isArray(rows) ? rows : [];
+  if (!safeRows.length) {
+    claimsDetailOpen = false;
+  } else if (!selectedClaimSlot || !safeRows.some(r => (r && (r.slot_key || '')) === selectedClaimSlot)) {
+    selectedClaimSlot = (safeRows[0] && safeRows[0].slot_key) || null;
+    syncClaimsStateToUrl();
+  }
+
+  if (claimsPaneRenderer) {
+    try {
+      claimsPaneRenderer(el, {
+        rows: safeRows,
+        claimsMeta,
+        selectedClaimSlot,
+        claimsDetailOpen,
+        asOfInputValue: isoToDatetimeLocal(claimsAsOf || (claimsMeta || {}).as_of || ''),
+        asOfLabel: String((claimsMeta || {}).as_of || claimsAsOf || 'now'),
+        statusClass,
+        onApplyAsOfValue: (localValue) => {
+          claimsAsOf = datetimeLocalToIso(localValue);
+          syncClaimsStateToUrl();
+          refreshMemory();
+        },
+        onClearAsOf: () => {
+          claimsAsOf = '';
+          syncClaimsStateToUrl();
+          refreshMemory();
+        },
+        onSelectSlot: (slotKey) => {
+          selectedClaimSlot = slotKey || null;
+          claimsDetailOpen = true;
+          syncClaimsStateToUrl();
+          renderClaims(safeRows, claimsMeta);
+        },
+        onCloseDetail: () => {
+          claimsDetailOpen = false;
+          renderClaims(safeRows, claimsMeta);
+        },
+        loadDetail: (slotKey, detailEl) => loadClaimSlotDetail(slotKey, detailEl),
+      });
+      return;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  renderClaimsFallback(safeRows, claimsMeta);
+  ensureClaimsPaneRenderer();
 }
 
 function renderEntities(entityMeta) {
