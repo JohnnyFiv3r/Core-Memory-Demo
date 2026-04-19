@@ -43,3 +43,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Hidden React parity route debt is now fully resolved by deleting unused parity files, not just removing route entry.
 - Added baseline frontend security headers in `vercel.json`, including CSP + nosniff/referrer/frame protections.
 - Removed inline DOM event attributes from `chat.html` (`onclick`/`onchange`/`onkeydown`) and bound handlers in script to reduce CSP friction.
+- Externalized `chat.html` inline scripts into `chat-bootstrap.js` and `chat-app.js`, then tightened CSP `script-src` by removing `'unsafe-inline'` for scripts.
