@@ -65,3 +65,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: removed dead legacy helpers `openReagraphArchiveWindow()` and `showTyping()` from `chat-app.js` after event-binding migration and pipeline-status UI changes made them unused.
 - Cleanup pass: simplified graph fallback utilities in `chat-app.js` by removing redundant `*Fallback` helper wrappers (`graphNumConfidenceFallback`, `graphNodeTitleFallback`, `graphEntityIdFallback`, `graphTypeColorFallback`) while preserving behavior.
 - Cleanup pass: consolidated repeated graph slice dynamic-import boilerplate in `chat-app.js` via shared `lazyLoadSlice()` helper and rewired graph module loaders to use it.
+- Cleanup pass: extended shared `lazyLoadSlice()` usage to non-graph pane loaders (`beads`, `associations`, `rolling`, `claims`, `entities`, `runtime`, `benchmark`) to reduce repeated dynamic-import boilerplate.

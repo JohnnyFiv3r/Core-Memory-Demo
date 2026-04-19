@@ -957,15 +957,11 @@ function renderBeadsFallback(beads) {
 function ensureBeadsPaneRenderer() {
   if (beadsPaneRenderer || beadsPaneLoadPromise) return;
 
-  beadsPaneLoadPromise = import('/chat-slices/beads-pane.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderBeadsPane === 'function') {
-        beadsPaneRenderer = mod.renderBeadsPane;
-      }
-    })
-    .catch(() => {
-      beadsPaneRenderer = null;
-    })
+  beadsPaneLoadPromise = lazyLoadSlice(
+    '/chat-slices/beads-pane.js',
+    (mod) => (mod && typeof mod.renderBeadsPane === 'function' ? mod.renderBeadsPane : null),
+    (value) => { beadsPaneRenderer = value; }
+  )
     .finally(() => {
       beadsPaneLoadPromise = null;
       refreshMemory();
@@ -1033,15 +1029,11 @@ function renderAssociationsFallback(assocs) {
 function ensureAssociationsPaneRenderer() {
   if (associationsPaneRenderer || associationsPaneLoadPromise) return;
 
-  associationsPaneLoadPromise = import('/chat-slices/associations-pane.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderAssociationsPane === 'function') {
-        associationsPaneRenderer = mod.renderAssociationsPane;
-      }
-    })
-    .catch(() => {
-      associationsPaneRenderer = null;
-    })
+  associationsPaneLoadPromise = lazyLoadSlice(
+    '/chat-slices/associations-pane.js',
+    (mod) => (mod && typeof mod.renderAssociationsPane === 'function' ? mod.renderAssociationsPane : null),
+    (value) => { associationsPaneRenderer = value; }
+  )
     .finally(() => {
       associationsPaneLoadPromise = null;
       refreshMemory();
@@ -2107,15 +2099,11 @@ function renderRollingFallback(el, items) {
 function ensureRollingPaneRenderer() {
   if (rollingPaneRenderer || rollingPaneLoadPromise) return;
 
-  rollingPaneLoadPromise = import('/chat-slices/rolling-pane.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderRollingPane === 'function') {
-        rollingPaneRenderer = mod.renderRollingPane;
-      }
-    })
-    .catch(() => {
-      rollingPaneRenderer = null;
-    })
+  rollingPaneLoadPromise = lazyLoadSlice(
+    '/chat-slices/rolling-pane.js',
+    (mod) => (mod && typeof mod.renderRollingPane === 'function' ? mod.renderRollingPane : null),
+    (value) => { rollingPaneRenderer = value; }
+  )
     .finally(() => {
       rollingPaneLoadPromise = null;
       refreshMemory();
@@ -2282,15 +2270,11 @@ function renderClaimsFallback(rows, claimsMeta) {
 function ensureClaimsPaneRenderer() {
   if (claimsPaneRenderer || claimsPaneLoadPromise) return;
 
-  claimsPaneLoadPromise = import('/chat-slices/claims-pane.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderClaimsPane === 'function') {
-        claimsPaneRenderer = mod.renderClaimsPane;
-      }
-    })
-    .catch(() => {
-      claimsPaneRenderer = null;
-    })
+  claimsPaneLoadPromise = lazyLoadSlice(
+    '/chat-slices/claims-pane.js',
+    (mod) => (mod && typeof mod.renderClaimsPane === 'function' ? mod.renderClaimsPane : null),
+    (value) => { claimsPaneRenderer = value; }
+  )
     .finally(() => {
       claimsPaneLoadPromise = null;
       refreshMemory();
@@ -2481,15 +2465,11 @@ function renderEntitiesFallback(entityMeta) {
 function ensureEntitiesPaneRenderer() {
   if (entitiesPaneRenderer || entitiesPaneLoadPromise) return;
 
-  entitiesPaneLoadPromise = import('/chat-slices/entities-pane.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderEntitiesPane === 'function') {
-        entitiesPaneRenderer = mod.renderEntitiesPane;
-      }
-    })
-    .catch(() => {
-      entitiesPaneRenderer = null;
-    })
+  entitiesPaneLoadPromise = lazyLoadSlice(
+    '/chat-slices/entities-pane.js',
+    (mod) => (mod && typeof mod.renderEntitiesPane === 'function' ? mod.renderEntitiesPane : null),
+    (value) => { entitiesPaneRenderer = value; }
+  )
     .finally(() => {
       entitiesPaneLoadPromise = null;
       refreshMemory();
@@ -2856,15 +2836,11 @@ function renderRuntimeFallback(runtime, lastTurn) {
 function ensureRuntimePaneRenderer() {
   if (runtimePaneRenderer || runtimePaneLoadPromise) return;
 
-  runtimePaneLoadPromise = import('/chat-slices/runtime-pane.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderRuntimePane === 'function') {
-        runtimePaneRenderer = mod.renderRuntimePane;
-      }
-    })
-    .catch(() => {
-      runtimePaneRenderer = null;
-    })
+  runtimePaneLoadPromise = lazyLoadSlice(
+    '/chat-slices/runtime-pane.js',
+    (mod) => (mod && typeof mod.renderRuntimePane === 'function' ? mod.renderRuntimePane : null),
+    (value) => { runtimePaneRenderer = value; }
+  )
     .finally(() => {
       runtimePaneLoadPromise = null;
       refreshMemory();
@@ -3139,15 +3115,11 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
 function ensureBenchmarkPaneRenderer() {
   if (benchmarkPaneRenderer || benchmarkPaneLoadPromise) return;
 
-  benchmarkPaneLoadPromise = import('/chat-slices/benchmark-pane.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderBenchmarkPane === 'function') {
-        benchmarkPaneRenderer = mod.renderBenchmarkPane;
-      }
-    })
-    .catch(() => {
-      benchmarkPaneRenderer = null;
-    })
+  benchmarkPaneLoadPromise = lazyLoadSlice(
+    '/chat-slices/benchmark-pane.js',
+    (mod) => (mod && typeof mod.renderBenchmarkPane === 'function' ? mod.renderBenchmarkPane : null),
+    (value) => { benchmarkPaneRenderer = value; }
+  )
     .finally(() => {
       benchmarkPaneLoadPromise = null;
       refreshMemory();
