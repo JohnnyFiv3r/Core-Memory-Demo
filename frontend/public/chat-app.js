@@ -1046,18 +1046,12 @@ function renderAssociations(assocs) {
   ensureAssociationsPaneRenderer();
 }
 
-function graphNumConfidenceFallback(v) {
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
-}
-
-function graphNodeTitleFallback(beadMap, id) {
-  const bead = (beadMap || {})[String(id || '')] || {};
-  return String(bead.title || id || 'n/a');
-}
-
 function normalizeGraphEdgesFallback(assocs) {
   const out = [];
+  function numConfidence(v) {
+    const n = Number(v);
+    return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
+  }
   (assocs || []).forEach((a, idx) => {
     const src = String((a || {}).source_bead || (a || {}).source_bead_id || '').trim();
     const dst = String((a || {}).target_bead || (a || {}).target_bead_id || '').trim();
@@ -1067,7 +1061,7 @@ function normalizeGraphEdgesFallback(assocs) {
       source: src,
       target: dst,
       relationship: String((a || {}).relationship || 'associated_with'),
-      confidence: graphNumConfidenceFallback((a || {}).confidence),
+      confidence: numConfidence((a || {}).confidence),
       reason_text: String((a || {}).reason_text || (a || {}).explanation || ''),
     });
   });
@@ -1078,13 +1072,17 @@ function applyGraphFiltersFallback(edges, beadMap, filters) {
   const rel = String((filters || {}).relation || 'all');
   const minConfidence = Number((filters || {}).minConfidence || 0);
   const search = String((filters || {}).search || '').trim().toLowerCase();
+  const titleFor = (id) => {
+    const bead = (beadMap || {})[String(id || '')] || {};
+    return String(bead.title || id || 'n/a');
+  };
 
   return (edges || []).filter(e => {
     if (rel !== 'all' && String((e || {}).relationship || '') !== rel) return false;
     if ((e || {}).confidence !== null && Number.isFinite(minConfidence) && Number(e.confidence) < minConfidence) return false;
     if (!search) return true;
-    const srcTitle = graphNodeTitleFallback(beadMap, (e || {}).source).toLowerCase();
-    const dstTitle = graphNodeTitleFallback(beadMap, (e || {}).target).toLowerCase();
+    const srcTitle = titleFor((e || {}).source).toLowerCase();
+    const dstTitle = titleFor((e || {}).target).toLowerCase();
     const hay = [
       srcTitle,
       dstTitle,
@@ -1095,11 +1093,6 @@ function applyGraphFiltersFallback(edges, beadMap, filters) {
     ].join(' ');
     return hay.includes(search);
   });
-}
-
-function graphEntityIdFallback(v) {
-  if (v && typeof v === 'object') return String(v.id || v.name || '');
-  return String(v || '');
 }
 
 function ensureGraphUtilsModule() {
@@ -1129,7 +1122,8 @@ function graphNumConfidence(v) {
     }
   }
   ensureGraphUtilsModule();
-  return graphNumConfidenceFallback(v);
+  const n = Number(v);
+  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
 }
 
 function graphNodeTitle(beadMap, id) {
@@ -1141,7 +1135,8 @@ function graphNodeTitle(beadMap, id) {
     }
   }
   ensureGraphUtilsModule();
-  return graphNodeTitleFallback(beadMap || {}, id);
+  const bead = (beadMap || {})[String(id || '')] || {};
+  return String(bead.title || id || 'n/a');
 }
 
 function normalizeGraphEdges(assocs) {
@@ -1182,7 +1177,8 @@ function graphEntityId(v) {
     }
   }
   ensureGraphUtilsModule();
-  return graphEntityIdFallback(v);
+  if (v && typeof v === 'object') return String(v.id || v.name || '');
+  return String(v || '');
 }
 
 function ensureGraph3DRuntimeRenderer() {
@@ -1219,20 +1215,19 @@ function renderGraph3DRuntime(opts) {
   return ensureGraph3DRuntimeRenderer().then((renderer) => renderer(safe));
 }
 
-function graphTypeColorFallback(type) {
-  const t = String(type || '').toLowerCase();
-  if (t === 'decision') return '#6ae276';
-  if (t === 'evidence') return '#22d3ee';
-  if (t === 'lesson') return '#4ade80';
-  if (t === 'goal') return '#fbbf24';
-  if (t === 'outcome') return '#f87171';
-  if (t === 'context') return '#8b8fa3';
-  return '#7ca0ab';
-}
-
 function reagraphDataFromEdgesFallback(edges, beadMap) {
   const nodeMap = {};
   const degree = {};
+  const typeColor = (type) => {
+    const t = String(type || '').toLowerCase();
+    if (t === 'decision') return '#6ae276';
+    if (t === 'evidence') return '#22d3ee';
+    if (t === 'lesson') return '#4ade80';
+    if (t === 'goal') return '#fbbf24';
+    if (t === 'outcome') return '#f87171';
+    if (t === 'context') return '#8b8fa3';
+    return '#7ca0ab';
+  };
 
   (edges || []).forEach((e) => {
     const s = String((e || {}).source || '');
@@ -1256,7 +1251,7 @@ function reagraphDataFromEdgesFallback(edges, beadMap) {
       id: n.id,
       label: String(n.title || n.id || 'node'),
       size: Math.max(3, Math.min(14, 4 + (d * 1.1))),
-      fill: graphTypeColorFallback(n.type),
+      fill: typeColor(n.type),
       data: {
         id: n.id,
         title: n.title,
