@@ -66,6 +66,8 @@ let graphListPaneRenderer = null;
 let graphListPaneLoadPromise = null;
 let graphControlsPaneRenderer = null;
 let graphControlsPaneLoadPromise = null;
+let graphEdgeDetailPaneRenderer = null;
+let graphEdgeDetailPaneLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1697,6 +1699,78 @@ function renderGraphControls(el, opts) {
   ensureGraphControlsPaneRenderer();
 }
 
+function renderGraphEdgeDetailFallback(el, opts) {
+  const edge = (opts || {}).edge || null;
+  const beadMap = (opts || {}).beadMap || {};
+  const onOpenBead = typeof (opts || {}).onOpenBead === 'function' ? opts.onOpenBead : null;
+  el.textContent = '';
+
+  if (!edge) {
+    el.innerHTML =
+      '<div><strong>Edge details</strong></div>' +
+      '<div style="margin-top:2px;color:var(--text-dim)">Click an edge in graph view to inspect and jump to source/target beads.</div>';
+    return;
+  }
+
+  const src = graphEntityId((edge || {}).source);
+  const dst = graphEntityId((edge || {}).target);
+  const srcTitle = graphNodeTitle(beadMap, src);
+  const dstTitle = graphNodeTitle(beadMap, dst);
+  const conf = edge && edge.confidence !== null ? Number(edge.confidence).toFixed(2) : 'n/a';
+  const reason = String((edge || {}).reason_text || '').trim();
+  el.innerHTML =
+    '<div><strong>' + escapeHtml(String((edge || {}).relationship || 'associated_with')) + '</strong></div>' +
+    '<div style="margin-top:2px;color:var(--text-dim)">source: ' + escapeHtml(srcTitle) + '</div>' +
+    '<div style="margin-top:2px;color:var(--text-dim)">target: ' + escapeHtml(dstTitle) + '</div>' +
+    '<div style="margin-top:2px;color:var(--text-dim)">confidence: ' + escapeHtml(conf) + '</div>' +
+    (reason ? ('<div style="margin-top:4px">' + escapeHtml(reason) + '</div>') : '') +
+    '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">' +
+      (src ? '<button class="btn" data-edge-open="src">Open source</button>' : '') +
+      (dst ? '<button class="btn" data-edge-open="dst">Open target</button>' : '') +
+    '</div>';
+
+  el.querySelectorAll('button[data-edge-open]').forEach(btn => {
+    btn.addEventListener('click', (ev) => {
+      ev.stopPropagation();
+      const which = btn.getAttribute('data-edge-open') || '';
+      const id = which === 'src' ? src : (which === 'dst' ? dst : '');
+      if (id && onOpenBead) onOpenBead(id);
+    });
+  });
+}
+
+function ensureGraphEdgeDetailPaneRenderer() {
+  if (graphEdgeDetailPaneRenderer || graphEdgeDetailPaneLoadPromise) return;
+
+  graphEdgeDetailPaneLoadPromise = import('/chat-slices/graph-edge-detail-pane.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderGraphEdgeDetailPane === 'function') {
+        graphEdgeDetailPaneRenderer = mod.renderGraphEdgeDetailPane;
+      }
+    })
+    .catch(() => {
+      graphEdgeDetailPaneRenderer = null;
+    })
+    .finally(() => {
+      graphEdgeDetailPaneLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderGraphEdgeDetail(el, opts) {
+  if (graphEdgeDetailPaneRenderer) {
+    try {
+      graphEdgeDetailPaneRenderer(el, opts || {});
+      return;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  renderGraphEdgeDetailFallback(el, opts || {});
+  ensureGraphEdgeDetailPaneRenderer();
+}
+
 function renderGraph(beads, assocs) {
   const el = document.getElementById('tab-graph');
   const mounted3d = el && el.querySelectorAll ? el.querySelectorAll('.graph-3d-wrap') : [];
@@ -1782,37 +1856,19 @@ function renderGraph(beads, assocs) {
 
     const edgeDetail = document.createElement('div');
     edgeDetail.className = 'runtime-card';
-    edgeDetail.innerHTML =
-      '<div><strong>Edge details</strong></div>' +
-      '<div style="margin-top:2px;color:var(--text-dim)">Click an edge in graph view to inspect and jump to source/target beads.</div>';
+    renderGraphEdgeDetail(edgeDetail, {
+      edge: null,
+      beadMap,
+      onOpenBead: showBead,
+    });
 
     renderGraph3DCanvas(el, filtered, beadMap, (nodeId) => {
       if (nodeId) showBead(nodeId);
     }, (edge) => {
-      const src = graphEntityId((edge || {}).source);
-      const dst = graphEntityId((edge || {}).target);
-      const srcTitle = graphNodeTitle(beadMap, src);
-      const dstTitle = graphNodeTitle(beadMap, dst);
-      const conf = edge && edge.confidence !== null ? Number(edge.confidence).toFixed(2) : 'n/a';
-      const reason = String((edge || {}).reason_text || '').trim();
-      edgeDetail.innerHTML =
-        '<div><strong>' + escapeHtml(String((edge || {}).relationship || 'associated_with')) + '</strong></div>' +
-        '<div style="margin-top:2px;color:var(--text-dim)">source: ' + escapeHtml(srcTitle) + '</div>' +
-        '<div style="margin-top:2px;color:var(--text-dim)">target: ' + escapeHtml(dstTitle) + '</div>' +
-        '<div style="margin-top:2px;color:var(--text-dim)">confidence: ' + escapeHtml(conf) + '</div>' +
-        (reason ? ('<div style="margin-top:4px">' + escapeHtml(reason) + '</div>') : '') +
-        '<div style="margin-top:8px;display:flex;gap:6px;flex-wrap:wrap">' +
-          (src ? '<button class="btn" data-edge-open="src">Open source</button>' : '') +
-          (dst ? '<button class="btn" data-edge-open="dst">Open target</button>' : '') +
-        '</div>';
-
-      edgeDetail.querySelectorAll('button[data-edge-open]').forEach(btn => {
-        btn.addEventListener('click', (ev) => {
-          ev.stopPropagation();
-          const which = btn.getAttribute('data-edge-open') || '';
-          const id = which === 'src' ? src : (which === 'dst' ? dst : '');
-          if (id) showBead(id);
-        });
+      renderGraphEdgeDetail(edgeDetail, {
+        edge,
+        beadMap,
+        onOpenBead: showBead,
       });
     });
 
