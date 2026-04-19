@@ -78,6 +78,8 @@ let graph3dRuntimeRenderer = null;
 let graph3dRuntimeLoadPromise = null;
 let graphDataBuilder = null;
 let graphDataBuilderLoadPromise = null;
+let graphUtilsModule = null;
+let graphUtilsLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1073,17 +1075,17 @@ function renderAssociations(assocs) {
   ensureAssociationsPaneRenderer();
 }
 
-function graphNumConfidence(v) {
+function graphNumConfidenceFallback(v) {
   const n = Number(v);
   return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
 }
 
-function graphNodeTitle(beadMap, id) {
-  const bead = beadMap[String(id || '')] || {};
+function graphNodeTitleFallback(beadMap, id) {
+  const bead = (beadMap || {})[String(id || '')] || {};
   return String(bead.title || id || 'n/a');
 }
 
-function normalizeGraphEdges(assocs) {
+function normalizeGraphEdgesFallback(assocs) {
   const out = [];
   (assocs || []).forEach((a, idx) => {
     const src = String((a || {}).source_bead || (a || {}).source_bead_id || '').trim();
@@ -1094,39 +1096,122 @@ function normalizeGraphEdges(assocs) {
       source: src,
       target: dst,
       relationship: String((a || {}).relationship || 'associated_with'),
-      confidence: graphNumConfidence((a || {}).confidence),
+      confidence: graphNumConfidenceFallback((a || {}).confidence),
       reason_text: String((a || {}).reason_text || (a || {}).explanation || ''),
     });
   });
   return out;
 }
 
-function applyGraphFilters(edges, beadMap) {
-  const rel = String(graphFilters.relation || 'all');
-  const minConfidence = Number(graphFilters.minConfidence || 0);
-  const search = String(graphFilters.search || '').trim().toLowerCase();
+function applyGraphFiltersFallback(edges, beadMap, filters) {
+  const rel = String((filters || {}).relation || 'all');
+  const minConfidence = Number((filters || {}).minConfidence || 0);
+  const search = String((filters || {}).search || '').trim().toLowerCase();
 
   return (edges || []).filter(e => {
-    if (rel !== 'all' && String(e.relationship || '') !== rel) return false;
-    if (e.confidence !== null && Number.isFinite(minConfidence) && e.confidence < minConfidence) return false;
+    if (rel !== 'all' && String((e || {}).relationship || '') !== rel) return false;
+    if ((e || {}).confidence !== null && Number.isFinite(minConfidence) && Number(e.confidence) < minConfidence) return false;
     if (!search) return true;
-    const srcTitle = graphNodeTitle(beadMap, e.source).toLowerCase();
-    const dstTitle = graphNodeTitle(beadMap, e.target).toLowerCase();
+    const srcTitle = graphNodeTitleFallback(beadMap, (e || {}).source).toLowerCase();
+    const dstTitle = graphNodeTitleFallback(beadMap, (e || {}).target).toLowerCase();
     const hay = [
       srcTitle,
       dstTitle,
-      String(e.relationship || '').toLowerCase(),
-      String(e.reason_text || '').toLowerCase(),
-      String(e.source || '').toLowerCase(),
-      String(e.target || '').toLowerCase(),
+      String((e || {}).relationship || '').toLowerCase(),
+      String((e || {}).reason_text || '').toLowerCase(),
+      String((e || {}).source || '').toLowerCase(),
+      String((e || {}).target || '').toLowerCase(),
     ].join(' ');
     return hay.includes(search);
   });
 }
 
-function graphEntityId(v) {
+function graphEntityIdFallback(v) {
   if (v && typeof v === 'object') return String(v.id || v.name || '');
   return String(v || '');
+}
+
+function ensureGraphUtilsModule() {
+  if (graphUtilsModule || graphUtilsLoadPromise) return;
+
+  graphUtilsLoadPromise = import('/chat-slices/graph-utils.js')
+    .then((mod) => {
+      if (mod && typeof mod.graphNodeTitle === 'function') {
+        graphUtilsModule = mod;
+      }
+    })
+    .catch(() => {
+      graphUtilsModule = null;
+    })
+    .finally(() => {
+      graphUtilsLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function graphNumConfidence(v) {
+  if (graphUtilsModule && typeof graphUtilsModule.graphNumConfidence === 'function') {
+    try {
+      return graphUtilsModule.graphNumConfidence(v);
+    } catch (_) {
+      // fallback below
+    }
+  }
+  ensureGraphUtilsModule();
+  return graphNumConfidenceFallback(v);
+}
+
+function graphNodeTitle(beadMap, id) {
+  if (graphUtilsModule && typeof graphUtilsModule.graphNodeTitle === 'function') {
+    try {
+      return graphUtilsModule.graphNodeTitle(beadMap || {}, id);
+    } catch (_) {
+      // fallback below
+    }
+  }
+  ensureGraphUtilsModule();
+  return graphNodeTitleFallback(beadMap || {}, id);
+}
+
+function normalizeGraphEdges(assocs) {
+  if (graphUtilsModule && typeof graphUtilsModule.normalizeGraphEdges === 'function') {
+    try {
+      return graphUtilsModule.normalizeGraphEdges(assocs || []);
+    } catch (_) {
+      // fallback below
+    }
+  }
+  ensureGraphUtilsModule();
+  return normalizeGraphEdgesFallback(assocs || []);
+}
+
+function applyGraphFilters(edges, beadMap) {
+  const filters = {
+    relation: String(graphFilters.relation || 'all'),
+    minConfidence: Number(graphFilters.minConfidence || 0),
+    search: String(graphFilters.search || ''),
+  };
+  if (graphUtilsModule && typeof graphUtilsModule.applyGraphFilters === 'function') {
+    try {
+      return graphUtilsModule.applyGraphFilters(edges || [], beadMap || {}, filters);
+    } catch (_) {
+      // fallback below
+    }
+  }
+  ensureGraphUtilsModule();
+  return applyGraphFiltersFallback(edges || [], beadMap || {}, filters);
+}
+
+function graphEntityId(v) {
+  if (graphUtilsModule && typeof graphUtilsModule.graphEntityId === 'function') {
+    try {
+      return graphUtilsModule.graphEntityId(v);
+    } catch (_) {
+      // fallback below
+    }
+  }
+  ensureGraphUtilsModule();
+  return graphEntityIdFallback(v);
 }
 
 function ensureReagraphRuntime() {
