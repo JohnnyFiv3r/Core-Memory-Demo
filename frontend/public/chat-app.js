@@ -2372,9 +2372,7 @@ function renderEntitiesFallback(entityMeta) {
       }
 
       row.addEventListener('click', () => {
-        document.getElementById('modal-title').textContent = 'Entity merge proposal';
-        document.getElementById('modal-body').textContent = JSON.stringify(m, null, 2);
-        document.getElementById('modal').classList.add('open');
+        openJsonModal('Entity merge proposal', m);
       });
       el.appendChild(row);
     });
@@ -2405,9 +2403,7 @@ function renderEntities(entityMeta) {
       onRefresh: refreshMemory,
       onDecideMerge: entityDecideMerge,
       onOpenProposal: (proposal) => {
-        document.getElementById('modal-title').textContent = 'Entity merge proposal';
-        document.getElementById('modal-body').textContent = JSON.stringify(proposal, null, 2);
-        document.getElementById('modal').classList.add('open');
+        openJsonModal('Entity merge proposal', proposal);
       },
     }),
     () => renderEntitiesFallback(safeMeta),
@@ -2795,9 +2791,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
           ' · pass/fail=' + String((s.pass || 0) + '/' + (s.fail || 0)) +
           ' · at=' + escapeHtml(formatIsoShort(String(s.finished_at || r.created_at || ''))) + '</div>';
         row.addEventListener('click', () => {
-          document.getElementById('modal-title').textContent = 'Benchmark run summary';
-          document.getElementById('modal-body').textContent = JSON.stringify(r, null, 2);
-          document.getElementById('modal').classList.add('open');
+          openJsonModal('Benchmark run summary', r);
         });
         el.appendChild(row);
       });
@@ -2846,9 +2840,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const rawBtn = meta.querySelector('#btn-bench-raw');
   if (rawBtn) {
     rawBtn.addEventListener('click', () => {
-      document.getElementById('modal-title').textContent = 'LOCOMO Benchmark Report (raw JSON)';
-      document.getElementById('modal-body').textContent = JSON.stringify(report || {}, null, 2);
-      document.getElementById('modal').classList.add('open');
+      openJsonModal('LOCOMO Benchmark Report (raw JSON)', report || {});
     });
   }
 
@@ -2926,9 +2918,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
           ' · enabled=' + String(!!c.enabled_pass) +
           ' · latency Δ=' + String(Number(c.latency_delta_ms || 0).toFixed(3)) + 'ms</div>';
         row.addEventListener('click', () => {
-          document.getElementById('modal-title').textContent = 'Myelination compare case: ' + String(c.case_id || 'detail');
-          document.getElementById('modal-body').textContent = JSON.stringify(c, null, 2);
-          document.getElementById('modal').classList.add('open');
+          openJsonModal('Myelination compare case: ' + String(c.case_id || 'detail'), c);
         });
         el.appendChild(row);
       });
@@ -2955,9 +2945,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
           ' · tokens=' + String(((c.token_usage || {}).total_tokens_est ?? 0)) +
           ' · warnings=' + String((c.warnings || []).length) + '</div>';
         f.addEventListener('click', () => {
-          document.getElementById('modal-title').textContent = 'Benchmark case: ' + String(c.case_id || 'detail');
-          document.getElementById('modal-body').textContent = JSON.stringify(c, null, 2);
-          document.getElementById('modal').classList.add('open');
+          openJsonModal('Benchmark case: ' + String(c.case_id || 'detail'), c);
         });
         el.appendChild(f);
       });
@@ -2982,9 +2970,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
         ' · tokens=' + Number(s.tokens_total_est || 0).toLocaleString() + '</div>' +
         '<div style="margin-top:2px;color:var(--text-dim)">at=' + escapeHtml(formatIsoShort(String(s.finished_at || rowData.created_at || ''))) + '</div>';
       row.addEventListener('click', () => {
-        document.getElementById('modal-title').textContent = 'Benchmark run';
-        document.getElementById('modal-body').textContent = JSON.stringify(rowData, null, 2);
-        document.getElementById('modal').classList.add('open');
+        openJsonModal('Benchmark run', rowData);
       });
       el.appendChild(row);
     });
@@ -3038,9 +3024,7 @@ function renderBenchmark(summary, report, benchmarkMeta) {
       benchmarkMeta: safeMeta,
       formatIsoShort,
       onOpenPayload: (title, payload) => {
-        document.getElementById('modal-title').textContent = String(title || 'Benchmark detail');
-        document.getElementById('modal-body').textContent = JSON.stringify(payload || {}, null, 2);
-        document.getElementById('modal').classList.add('open');
+        openJsonModal(String(title || 'Benchmark detail'), payload || {});
       },
     }),
     () => renderBenchmarkFallback(safeSummary, safeReport, safeMeta),
@@ -3155,13 +3139,22 @@ async function showBead(id) {
     } catch (_) {
       // optional surface
     }
-    document.getElementById('modal-title').textContent = bead.title || 'Bead Detail';
     const payload = hydrated ? { bead, hydrated_sources: hydrated } : bead;
-    document.getElementById('modal-body').textContent = JSON.stringify(payload, null, 2);
-    document.getElementById('modal').classList.add('open');
+    openJsonModal(bead.title || 'Bead Detail', payload);
   } catch (err) {
     alert('Failed to load bead: ' + err.message);
   }
+}
+
+function openJsonModal(title, payload) {
+  const titleEl = document.getElementById('modal-title');
+  const bodyEl = document.getElementById('modal-body');
+  const modalEl = document.getElementById('modal');
+  if (!titleEl || !bodyEl || !modalEl) return;
+
+  titleEl.textContent = String(title || 'Detail');
+  bodyEl.textContent = JSON.stringify(payload || {}, null, 2);
+  modalEl.classList.add('open');
 }
 
 function closeModal() {
