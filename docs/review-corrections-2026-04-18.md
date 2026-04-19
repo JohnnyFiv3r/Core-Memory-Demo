@@ -66,3 +66,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: simplified graph fallback utilities in `chat-app.js` by removing redundant `*Fallback` helper wrappers (`graphNumConfidenceFallback`, `graphNodeTitleFallback`, `graphEntityIdFallback`, `graphTypeColorFallback`) while preserving behavior.
 - Cleanup pass: consolidated repeated graph slice dynamic-import boilerplate in `chat-app.js` via shared `lazyLoadSlice()` helper and rewired graph module loaders to use it.
 - Cleanup pass: extended shared `lazyLoadSlice()` usage to non-graph pane loaders (`beads`, `associations`, `rolling`, `claims`, `entities`, `runtime`, `benchmark`) to reduce repeated dynamic-import boilerplate.
+- Cleanup pass: centralized repeated renderer-or-fallback invocation patterns in `chat-app.js` via shared `renderViaSlice()` helper across graph + non-graph pane render paths.

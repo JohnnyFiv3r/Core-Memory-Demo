@@ -99,6 +99,21 @@ function lazyLoadSlice(path, pick, assign, opts) {
     });
 }
 
+function renderViaSlice(renderer, renderAttempt, fallbackRender, ensureLoad) {
+  if (renderer) {
+    try {
+      renderAttempt(renderer);
+      return true;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  if (typeof fallbackRender === 'function') fallbackRender();
+  if (typeof ensureLoad === 'function') ensureLoad();
+  return false;
+}
+
 function loadGraphPrefs() {
   try {
     const mode = String(localStorage.getItem(PREF_GRAPH_VIEW_MODE_KEY) || 'list').toLowerCase();
@@ -973,22 +988,17 @@ function renderBeads(beads) {
   const el = document.getElementById('tab-beads');
   if (!el) return;
 
-  if (beadsPaneRenderer) {
-    try {
-      beadsPaneRenderer(el, {
-        beads: safeBeads,
-        beadTypeClass,
-        statusClass,
-        onOpenBead: showBead,
-      });
-      return;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  renderBeadsFallback(safeBeads);
-  ensureBeadsPaneRenderer();
+  renderViaSlice(
+    beadsPaneRenderer,
+    (renderer) => renderer(el, {
+      beads: safeBeads,
+      beadTypeClass,
+      statusClass,
+      onOpenBead: showBead,
+    }),
+    () => renderBeadsFallback(safeBeads),
+    ensureBeadsPaneRenderer
+  );
 }
 
 function renderAssociationsFallback(assocs) {
@@ -1045,19 +1055,12 @@ function renderAssociations(assocs) {
   const el = document.getElementById('tab-associations');
   if (!el) return;
 
-  if (associationsPaneRenderer) {
-    try {
-      associationsPaneRenderer(el, {
-        assocs: safeAssocs,
-      });
-      return;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  renderAssociationsFallback(safeAssocs);
-  ensureAssociationsPaneRenderer();
+  renderViaSlice(
+    associationsPaneRenderer,
+    (renderer) => renderer(el, { assocs: safeAssocs }),
+    () => renderAssociationsFallback(safeAssocs),
+    ensureAssociationsPaneRenderer
+  );
 }
 
 function normalizeGraphEdgesFallback(assocs) {
@@ -1644,23 +1647,18 @@ function renderGraphSvgCanvas(el, edges, beadMap, onEdgeClick) {
   const safeEdges = Array.isArray(edges) ? edges : [];
   const safeMap = beadMap || {};
 
-  if (graphSvgCanvasRenderer) {
-    try {
-      graphSvgCanvasRenderer(el, {
-        edges: safeEdges,
-        beadMap: safeMap,
-        graphNodeTitle,
-        onOpenBead: showBead,
-        onEdgeClick,
-      });
-      return;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  renderGraphSvgCanvasFallback(el, safeEdges, safeMap, onEdgeClick);
-  ensureGraphSvgCanvasRenderer();
+  renderViaSlice(
+    graphSvgCanvasRenderer,
+    (renderer) => renderer(el, {
+      edges: safeEdges,
+      beadMap: safeMap,
+      graphNodeTitle,
+      onOpenBead: showBead,
+      onEdgeClick,
+    }),
+    () => renderGraphSvgCanvasFallback(el, safeEdges, safeMap, onEdgeClick),
+    ensureGraphSvgCanvasRenderer
+  );
 }
 
 function renderGraphListFallback(el, edges, beadMap) {
@@ -1708,22 +1706,17 @@ function ensureGraphListPaneRenderer() {
 
 function renderGraphList(el, edges, beadMap) {
   const safeEdges = Array.isArray(edges) ? edges : [];
-  if (graphListPaneRenderer) {
-    try {
-      graphListPaneRenderer(el, {
-        edges: safeEdges,
-        beadMap: beadMap || {},
-        graphNodeTitle,
-        onOpenBead: showBead,
-      });
-      return;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  renderGraphListFallback(el, safeEdges, beadMap || {});
-  ensureGraphListPaneRenderer();
+  renderViaSlice(
+    graphListPaneRenderer,
+    (renderer) => renderer(el, {
+      edges: safeEdges,
+      beadMap: beadMap || {},
+      graphNodeTitle,
+      onOpenBead: showBead,
+    }),
+    () => renderGraphListFallback(el, safeEdges, beadMap || {}),
+    ensureGraphListPaneRenderer
+  );
 }
 
 function renderGraphControlsFallback(el, opts) {
@@ -1817,17 +1810,12 @@ function ensureGraphControlsPaneRenderer() {
 }
 
 function renderGraphControls(el, opts) {
-  if (graphControlsPaneRenderer) {
-    try {
-      graphControlsPaneRenderer(el, opts || {});
-      return;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  renderGraphControlsFallback(el, opts || {});
-  ensureGraphControlsPaneRenderer();
+  renderViaSlice(
+    graphControlsPaneRenderer,
+    (renderer) => renderer(el, opts || {}),
+    () => renderGraphControlsFallback(el, opts || {}),
+    ensureGraphControlsPaneRenderer
+  );
 }
 
 function renderGraphEdgeDetailFallback(el, opts) {
@@ -1885,17 +1873,12 @@ function ensureGraphEdgeDetailPaneRenderer() {
 }
 
 function renderGraphEdgeDetail(el, opts) {
-  if (graphEdgeDetailPaneRenderer) {
-    try {
-      graphEdgeDetailPaneRenderer(el, opts || {});
-      return;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  renderGraphEdgeDetailFallback(el, opts || {});
-  ensureGraphEdgeDetailPaneRenderer();
+  renderViaSlice(
+    graphEdgeDetailPaneRenderer,
+    (renderer) => renderer(el, opts || {}),
+    () => renderGraphEdgeDetailFallback(el, opts || {}),
+    ensureGraphEdgeDetailPaneRenderer
+  );
 }
 
 function renderGraphSummaryFallback(el, opts) {
@@ -1955,17 +1938,12 @@ function ensureGraphSummaryPaneRenderer() {
 }
 
 function renderGraphSummary(el, opts) {
-  if (graphSummaryPaneRenderer) {
-    try {
-      graphSummaryPaneRenderer(el, opts || {});
-      return;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  renderGraphSummaryFallback(el, opts || {});
-  ensureGraphSummaryPaneRenderer();
+  renderViaSlice(
+    graphSummaryPaneRenderer,
+    (renderer) => renderer(el, opts || {}),
+    () => renderGraphSummaryFallback(el, opts || {}),
+    ensureGraphSummaryPaneRenderer
+  );
 }
 
 function renderGraph(beads, assocs) {
@@ -2114,17 +2092,12 @@ function renderRolling(items) {
   const el = document.getElementById('tab-rolling');
   if (!el) return;
 
-  if (rollingPaneRenderer) {
-    try {
-      rollingPaneRenderer(el, items, beadTypeClass);
-      return;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  renderRollingFallback(el, items);
-  ensureRollingPaneRenderer();
+  renderViaSlice(
+    rollingPaneRenderer,
+    (renderer) => renderer(el, items, beadTypeClass),
+    () => renderRollingFallback(el, items),
+    ensureRollingPaneRenderer
+  );
 }
 
 function renderClaimsFallback(rows, claimsMeta) {
@@ -2293,46 +2266,41 @@ function renderClaims(rows, claimsMeta) {
     syncClaimsStateToUrl();
   }
 
-  if (claimsPaneRenderer) {
-    try {
-      claimsPaneRenderer(el, {
-        rows: safeRows,
-        claimsMeta,
-        selectedClaimSlot,
-        claimsDetailOpen,
-        asOfInputValue: isoToDatetimeLocal(claimsAsOf || (claimsMeta || {}).as_of || ''),
-        asOfLabel: String((claimsMeta || {}).as_of || claimsAsOf || 'now'),
-        statusClass,
-        onApplyAsOfValue: (localValue) => {
-          claimsAsOf = datetimeLocalToIso(localValue);
-          syncClaimsStateToUrl();
-          refreshMemory();
-        },
-        onClearAsOf: () => {
-          claimsAsOf = '';
-          syncClaimsStateToUrl();
-          refreshMemory();
-        },
-        onSelectSlot: (slotKey) => {
-          selectedClaimSlot = slotKey || null;
-          claimsDetailOpen = true;
-          syncClaimsStateToUrl();
-          renderClaims(safeRows, claimsMeta);
-        },
-        onCloseDetail: () => {
-          claimsDetailOpen = false;
-          renderClaims(safeRows, claimsMeta);
-        },
-        loadDetail: (slotKey, detailEl) => loadClaimSlotDetail(slotKey, detailEl),
-      });
-      return;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  renderClaimsFallback(safeRows, claimsMeta);
-  ensureClaimsPaneRenderer();
+  renderViaSlice(
+    claimsPaneRenderer,
+    (renderer) => renderer(el, {
+      rows: safeRows,
+      claimsMeta,
+      selectedClaimSlot,
+      claimsDetailOpen,
+      asOfInputValue: isoToDatetimeLocal(claimsAsOf || (claimsMeta || {}).as_of || ''),
+      asOfLabel: String((claimsMeta || {}).as_of || claimsAsOf || 'now'),
+      statusClass,
+      onApplyAsOfValue: (localValue) => {
+        claimsAsOf = datetimeLocalToIso(localValue);
+        syncClaimsStateToUrl();
+        refreshMemory();
+      },
+      onClearAsOf: () => {
+        claimsAsOf = '';
+        syncClaimsStateToUrl();
+        refreshMemory();
+      },
+      onSelectSlot: (slotKey) => {
+        selectedClaimSlot = slotKey || null;
+        claimsDetailOpen = true;
+        syncClaimsStateToUrl();
+        renderClaims(safeRows, claimsMeta);
+      },
+      onCloseDetail: () => {
+        claimsDetailOpen = false;
+        renderClaims(safeRows, claimsMeta);
+      },
+      loadDetail: (slotKey, detailEl) => loadClaimSlotDetail(slotKey, detailEl),
+    }),
+    () => renderClaimsFallback(safeRows, claimsMeta),
+    ensureClaimsPaneRenderer
+  );
 }
 
 function renderEntitiesFallback(entityMeta) {
@@ -2481,28 +2449,23 @@ function renderEntities(entityMeta) {
   const el = document.getElementById('tab-entities');
   if (!el) return;
 
-  if (entitiesPaneRenderer) {
-    try {
-      entitiesPaneRenderer(el, {
-        entityMeta: safeMeta,
-        formatIsoShort,
-        onSuggestMerges: entitySuggestMerges,
-        onRefresh: refreshMemory,
-        onDecideMerge: entityDecideMerge,
-        onOpenProposal: (proposal) => {
-          document.getElementById('modal-title').textContent = 'Entity merge proposal';
-          document.getElementById('modal-body').textContent = JSON.stringify(proposal, null, 2);
-          document.getElementById('modal').classList.add('open');
-        },
-      });
-      return;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  renderEntitiesFallback(safeMeta);
-  ensureEntitiesPaneRenderer();
+  renderViaSlice(
+    entitiesPaneRenderer,
+    (renderer) => renderer(el, {
+      entityMeta: safeMeta,
+      formatIsoShort,
+      onSuggestMerges: entitySuggestMerges,
+      onRefresh: refreshMemory,
+      onDecideMerge: entityDecideMerge,
+      onOpenProposal: (proposal) => {
+        document.getElementById('modal-title').textContent = 'Entity merge proposal';
+        document.getElementById('modal-body').textContent = JSON.stringify(proposal, null, 2);
+        document.getElementById('modal').classList.add('open');
+      },
+    }),
+    () => renderEntitiesFallback(safeMeta),
+    ensureEntitiesPaneRenderer
+  );
 }
 
 async function entitySuggestMerges() {
@@ -2853,21 +2816,16 @@ function renderRuntime(runtime, lastTurn) {
   const el = document.getElementById('tab-runtime-content');
   if (!el) return;
 
-  if (runtimePaneRenderer) {
-    try {
-      runtimePaneRenderer(el, {
-        runtime: safeRuntime,
-        lastTurn: safeLastTurn,
-        formatIsoShort,
-      });
-      return;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  renderRuntimeFallback(safeRuntime, safeLastTurn);
-  ensureRuntimePaneRenderer();
+  renderViaSlice(
+    runtimePaneRenderer,
+    (renderer) => renderer(el, {
+      runtime: safeRuntime,
+      lastTurn: safeLastTurn,
+      formatIsoShort,
+    }),
+    () => renderRuntimeFallback(safeRuntime, safeLastTurn),
+    ensureRuntimePaneRenderer
+  );
 }
 
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
@@ -3133,27 +3091,22 @@ function renderBenchmark(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   if (!el) return;
 
-  if (benchmarkPaneRenderer) {
-    try {
-      benchmarkPaneRenderer(el, {
-        summary: safeSummary,
-        report: safeReport,
-        benchmarkMeta: safeMeta,
-        formatIsoShort,
-        onOpenPayload: (title, payload) => {
-          document.getElementById('modal-title').textContent = String(title || 'Benchmark detail');
-          document.getElementById('modal-body').textContent = JSON.stringify(payload || {}, null, 2);
-          document.getElementById('modal').classList.add('open');
-        },
-      });
-      return;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  renderBenchmarkFallback(safeSummary, safeReport, safeMeta);
-  ensureBenchmarkPaneRenderer();
+  renderViaSlice(
+    benchmarkPaneRenderer,
+    (renderer) => renderer(el, {
+      summary: safeSummary,
+      report: safeReport,
+      benchmarkMeta: safeMeta,
+      formatIsoShort,
+      onOpenPayload: (title, payload) => {
+        document.getElementById('modal-title').textContent = String(title || 'Benchmark detail');
+        document.getElementById('modal-body').textContent = JSON.stringify(payload || {}, null, 2);
+        document.getElementById('modal').classList.add('open');
+      },
+    }),
+    () => renderBenchmarkFallback(safeSummary, safeReport, safeMeta),
+    ensureBenchmarkPaneRenderer
+  );
 }
 
 async function refreshMemory() {
