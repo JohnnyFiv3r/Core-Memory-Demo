@@ -99,6 +99,20 @@ function renderViaSlice(renderer, renderAttempt, fallbackRender, ensureLoad) {
   return false;
 }
 
+function callSliceWithFallback(binding, invoke, fallback, ensureLoad, isValid) {
+  if (binding) {
+    try {
+      const out = invoke(binding);
+      if (!isValid || isValid(out)) return out;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  if (typeof ensureLoad === 'function') ensureLoad();
+  return fallback();
+}
+
 function ensureSliceLoad(key, beginLoad) {
   const k = String(key || '').trim();
   if (!k) return Promise.resolve(null);
@@ -1280,16 +1294,12 @@ function reagraphDataFromEdges(edges, beadMap) {
   const safeEdges = Array.isArray(edges) ? edges : [];
   const safeMap = beadMap || {};
 
-  if (graphDataBuilder) {
-    try {
-      return graphDataBuilder(safeEdges, safeMap);
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  ensureGraphDataBuilder();
-  return reagraphDataFromEdgesFallback(safeEdges, safeMap);
+  return callSliceWithFallback(
+    graphDataBuilder,
+    (builder) => builder(safeEdges, safeMap),
+    () => reagraphDataFromEdgesFallback(safeEdges, safeMap),
+    ensureGraphDataBuilder
+  );
 }
 
 function createGraphCanvasHostFallback(el, opts) {
@@ -1333,18 +1343,13 @@ function ensureGraphCanvasHostFactory() {
 }
 
 function createGraphCanvasHost(el, opts) {
-  if (graphCanvasHostFactory) {
-    try {
-      const out = graphCanvasHostFactory(el, opts || {});
-      if (out && out.wrap && out.canvasHost) return out;
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  const host = createGraphCanvasHostFallback(el, opts || {});
-  ensureGraphCanvasHostFactory();
-  return host;
+  return callSliceWithFallback(
+    graphCanvasHostFactory,
+    (factory) => factory(el, opts || {}),
+    () => createGraphCanvasHostFallback(el, opts || {}),
+    ensureGraphCanvasHostFactory,
+    (out) => !!(out && out.wrap && out.canvasHost)
+  );
 }
 
 function renderGraph3DCanvas(el, edges, beadMap, onNodeClick, onEdgeClick) {

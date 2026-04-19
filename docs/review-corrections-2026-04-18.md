@@ -70,3 +70,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: replaced per-module `*LoadPromise` variables with shared keyed loader registry (`sliceLoadState` + `ensureSliceLoad()`) and rewired all `ensure*` slice loaders to use it.
 - Cleanup pass: added shared `ensureSliceBinding()` helper and rewired all `ensure*` slice loaders to use it, removing repeated guard-and-load wrapper boilerplate.
 - Cleanup pass: added shared `callGraphUtils()` helper and rewired graph utility callsites (`graphNumConfidence`, `graphNodeTitle`, `normalizeGraphEdges`, `applyGraphFilters`, `graphEntityId`) to remove repeated module-method/fallback boilerplate.
+- Cleanup pass: added generic `callSliceWithFallback()` helper and rewired module-backed compute/factory paths (`reagraphDataFromEdges`, `createGraphCanvasHost`) to remove repeated try/fallback blocks.
