@@ -58,6 +58,8 @@ let runtimePaneRenderer = null;
 let runtimePaneLoadPromise = null;
 let benchmarkPaneRenderer = null;
 let benchmarkPaneLoadPromise = null;
+let beadsPaneRenderer = null;
+let beadsPaneLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -888,7 +890,7 @@ function statusClass(status) {
   return known.includes(status) ? 'status-' + status : 'status-default';
 }
 
-function renderBeads(beads) {
+function renderBeadsFallback(beads) {
   const el = document.getElementById('tab-beads');
   el.textContent = '';
   if (!beads.length) {
@@ -937,6 +939,47 @@ function renderBeads(beads) {
 
     el.appendChild(card);
   });
+}
+
+function ensureBeadsPaneRenderer() {
+  if (beadsPaneRenderer || beadsPaneLoadPromise) return;
+
+  beadsPaneLoadPromise = import('/chat-slices/beads-pane.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderBeadsPane === 'function') {
+        beadsPaneRenderer = mod.renderBeadsPane;
+      }
+    })
+    .catch(() => {
+      beadsPaneRenderer = null;
+    })
+    .finally(() => {
+      beadsPaneLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderBeads(beads) {
+  const safeBeads = Array.isArray(beads) ? beads : [];
+  const el = document.getElementById('tab-beads');
+  if (!el) return;
+
+  if (beadsPaneRenderer) {
+    try {
+      beadsPaneRenderer(el, {
+        beads: safeBeads,
+        beadTypeClass,
+        statusClass,
+        onOpenBead: showBead,
+      });
+      return;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  renderBeadsFallback(safeBeads);
+  ensureBeadsPaneRenderer();
 }
 
 function renderAssociations(assocs) {
