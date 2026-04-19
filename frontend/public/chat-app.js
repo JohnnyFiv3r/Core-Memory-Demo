@@ -45,37 +45,22 @@ const graphFilters = {
   search: '',
 };
 let rollingPaneRenderer = null;
-let rollingPaneLoadPromise = null;
 let claimsPaneRenderer = null;
-let claimsPaneLoadPromise = null;
 let entitiesPaneRenderer = null;
-let entitiesPaneLoadPromise = null;
 let runtimePaneRenderer = null;
-let runtimePaneLoadPromise = null;
 let benchmarkPaneRenderer = null;
-let benchmarkPaneLoadPromise = null;
 let beadsPaneRenderer = null;
-let beadsPaneLoadPromise = null;
 let associationsPaneRenderer = null;
-let associationsPaneLoadPromise = null;
 let graphListPaneRenderer = null;
-let graphListPaneLoadPromise = null;
 let graphControlsPaneRenderer = null;
-let graphControlsPaneLoadPromise = null;
 let graphEdgeDetailPaneRenderer = null;
-let graphEdgeDetailPaneLoadPromise = null;
 let graphSummaryPaneRenderer = null;
-let graphSummaryPaneLoadPromise = null;
 let graphCanvasHostFactory = null;
-let graphCanvasHostLoadPromise = null;
 let graphSvgCanvasRenderer = null;
-let graphSvgCanvasLoadPromise = null;
 let graph3dRuntimeRenderer = null;
-let graph3dRuntimeLoadPromise = null;
 let graphDataBuilder = null;
-let graphDataBuilderLoadPromise = null;
 let graphUtilsModule = null;
-let graphUtilsLoadPromise = null;
+const sliceLoadState = Object.create(null);
 
 function lazyLoadSlice(path, pick, assign, opts) {
   const cfg = opts || {};
@@ -112,6 +97,21 @@ function renderViaSlice(renderer, renderAttempt, fallbackRender, ensureLoad) {
   if (typeof fallbackRender === 'function') fallbackRender();
   if (typeof ensureLoad === 'function') ensureLoad();
   return false;
+}
+
+function ensureSliceLoad(key, beginLoad) {
+  const k = String(key || '').trim();
+  if (!k) return Promise.resolve(null);
+  if (sliceLoadState[k]) return sliceLoadState[k];
+
+  sliceLoadState[k] = Promise.resolve()
+    .then(() => (typeof beginLoad === 'function' ? beginLoad() : null))
+    .finally(() => {
+      delete sliceLoadState[k];
+      refreshMemory();
+    });
+
+  return sliceLoadState[k];
 }
 
 function loadGraphPrefs() {
@@ -970,17 +970,15 @@ function renderBeadsFallback(beads) {
 }
 
 function ensureBeadsPaneRenderer() {
-  if (beadsPaneRenderer || beadsPaneLoadPromise) return;
+  if (beadsPaneRenderer || sliceLoadState.beadsPaneRenderer) return;
 
-  beadsPaneLoadPromise = lazyLoadSlice(
-    '/chat-slices/beads-pane.js',
-    (mod) => (mod && typeof mod.renderBeadsPane === 'function' ? mod.renderBeadsPane : null),
-    (value) => { beadsPaneRenderer = value; }
-  )
-    .finally(() => {
-      beadsPaneLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('beadsPaneRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/beads-pane.js',
+      (mod) => (mod && typeof mod.renderBeadsPane === 'function' ? mod.renderBeadsPane : null),
+      (value) => { beadsPaneRenderer = value; }
+    )
+  );
 }
 
 function renderBeads(beads) {
@@ -1037,17 +1035,15 @@ function renderAssociationsFallback(assocs) {
 }
 
 function ensureAssociationsPaneRenderer() {
-  if (associationsPaneRenderer || associationsPaneLoadPromise) return;
+  if (associationsPaneRenderer || sliceLoadState.associationsPaneRenderer) return;
 
-  associationsPaneLoadPromise = lazyLoadSlice(
-    '/chat-slices/associations-pane.js',
-    (mod) => (mod && typeof mod.renderAssociationsPane === 'function' ? mod.renderAssociationsPane : null),
-    (value) => { associationsPaneRenderer = value; }
-  )
-    .finally(() => {
-      associationsPaneLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('associationsPaneRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/associations-pane.js',
+      (mod) => (mod && typeof mod.renderAssociationsPane === 'function' ? mod.renderAssociationsPane : null),
+      (value) => { associationsPaneRenderer = value; }
+    )
+  );
 }
 
 function renderAssociations(assocs) {
@@ -1113,17 +1109,15 @@ function applyGraphFiltersFallback(edges, beadMap, filters) {
 }
 
 function ensureGraphUtilsModule() {
-  if (graphUtilsModule || graphUtilsLoadPromise) return;
+  if (graphUtilsModule || sliceLoadState.graphUtilsModule) return;
 
-  graphUtilsLoadPromise = lazyLoadSlice(
-    '/chat-slices/graph-utils.js',
-    (mod) => (mod && typeof mod.graphNodeTitle === 'function' ? mod : null),
-    (value) => { graphUtilsModule = value; }
-  )
-    .finally(() => {
-      graphUtilsLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('graphUtilsModule', () =>
+    lazyLoadSlice(
+      '/chat-slices/graph-utils.js',
+      (mod) => (mod && typeof mod.graphNodeTitle === 'function' ? mod : null),
+      (value) => { graphUtilsModule = value; }
+    )
+  );
 }
 
 function graphNumConfidence(v) {
@@ -1198,22 +1192,18 @@ function ensureGraph3DRuntimeRenderer() {
   if (graph3dRuntimeRenderer) {
     return Promise.resolve(graph3dRuntimeRenderer);
   }
-  if (graph3dRuntimeLoadPromise) {
-    return graph3dRuntimeLoadPromise;
+  if (sliceLoadState.graph3dRuntimeRenderer) {
+    return sliceLoadState.graph3dRuntimeRenderer;
   }
 
-  graph3dRuntimeLoadPromise = lazyLoadSlice(
-    '/chat-slices/graph-3d-runtime.js',
-    (mod) => (mod && typeof mod.renderGraph3DRuntimePane === 'function' ? mod.renderGraph3DRuntimePane : null),
-    (value) => { graph3dRuntimeRenderer = value; },
-    { throwOnMissing: true, missingError: 'graph_3d_runtime_missing_exports' }
-  )
-    .finally(() => {
-      graph3dRuntimeLoadPromise = null;
-      refreshMemory();
-    });
-
-  return graph3dRuntimeLoadPromise;
+  return ensureSliceLoad('graph3dRuntimeRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/graph-3d-runtime.js',
+      (mod) => (mod && typeof mod.renderGraph3DRuntimePane === 'function' ? mod.renderGraph3DRuntimePane : null),
+      (value) => { graph3dRuntimeRenderer = value; },
+      { throwOnMissing: true, missingError: 'graph_3d_runtime_missing_exports' }
+    )
+  );
 }
 
 function renderGraph3DRuntime(opts) {
@@ -1285,17 +1275,15 @@ function reagraphDataFromEdgesFallback(edges, beadMap) {
 }
 
 function ensureGraphDataBuilder() {
-  if (graphDataBuilder || graphDataBuilderLoadPromise) return;
+  if (graphDataBuilder || sliceLoadState.graphDataBuilder) return;
 
-  graphDataBuilderLoadPromise = lazyLoadSlice(
-    '/chat-slices/graph-reagraph-data.js',
-    (mod) => (mod && typeof mod.buildReagraphData === 'function' ? mod.buildReagraphData : null),
-    (value) => { graphDataBuilder = value; }
-  )
-    .finally(() => {
-      graphDataBuilderLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('graphDataBuilder', () =>
+    lazyLoadSlice(
+      '/chat-slices/graph-reagraph-data.js',
+      (mod) => (mod && typeof mod.buildReagraphData === 'function' ? mod.buildReagraphData : null),
+      (value) => { graphDataBuilder = value; }
+    )
+  );
 }
 
 function reagraphDataFromEdges(edges, beadMap) {
@@ -1345,17 +1333,15 @@ function createGraphCanvasHostFallback(el, opts) {
 }
 
 function ensureGraphCanvasHostFactory() {
-  if (graphCanvasHostFactory || graphCanvasHostLoadPromise) return;
+  if (graphCanvasHostFactory || sliceLoadState.graphCanvasHostFactory) return;
 
-  graphCanvasHostLoadPromise = lazyLoadSlice(
-    '/chat-slices/graph-canvas-host.js',
-    (mod) => (mod && typeof mod.createGraphCanvasHost === 'function' ? mod.createGraphCanvasHost : null),
-    (value) => { graphCanvasHostFactory = value; }
-  )
-    .finally(() => {
-      graphCanvasHostLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('graphCanvasHostFactory', () =>
+    lazyLoadSlice(
+      '/chat-slices/graph-canvas-host.js',
+      (mod) => (mod && typeof mod.createGraphCanvasHost === 'function' ? mod.createGraphCanvasHost : null),
+      (value) => { graphCanvasHostFactory = value; }
+    )
+  );
 }
 
 function createGraphCanvasHost(el, opts) {
@@ -1630,17 +1616,15 @@ function renderGraphSvgCanvasFallback(el, edges, beadMap, onEdgeClick) {
 }
 
 function ensureGraphSvgCanvasRenderer() {
-  if (graphSvgCanvasRenderer || graphSvgCanvasLoadPromise) return;
+  if (graphSvgCanvasRenderer || sliceLoadState.graphSvgCanvasRenderer) return;
 
-  graphSvgCanvasLoadPromise = lazyLoadSlice(
-    '/chat-slices/graph-svg-canvas.js',
-    (mod) => (mod && typeof mod.renderGraphSvgCanvasPane === 'function' ? mod.renderGraphSvgCanvasPane : null),
-    (value) => { graphSvgCanvasRenderer = value; }
-  )
-    .finally(() => {
-      graphSvgCanvasLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('graphSvgCanvasRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/graph-svg-canvas.js',
+      (mod) => (mod && typeof mod.renderGraphSvgCanvasPane === 'function' ? mod.renderGraphSvgCanvasPane : null),
+      (value) => { graphSvgCanvasRenderer = value; }
+    )
+  );
 }
 
 function renderGraphSvgCanvas(el, edges, beadMap, onEdgeClick) {
@@ -1691,17 +1675,15 @@ function renderGraphListFallback(el, edges, beadMap) {
 }
 
 function ensureGraphListPaneRenderer() {
-  if (graphListPaneRenderer || graphListPaneLoadPromise) return;
+  if (graphListPaneRenderer || sliceLoadState.graphListPaneRenderer) return;
 
-  graphListPaneLoadPromise = lazyLoadSlice(
-    '/chat-slices/graph-list-pane.js',
-    (mod) => (mod && typeof mod.renderGraphListPane === 'function' ? mod.renderGraphListPane : null),
-    (value) => { graphListPaneRenderer = value; }
-  )
-    .finally(() => {
-      graphListPaneLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('graphListPaneRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/graph-list-pane.js',
+      (mod) => (mod && typeof mod.renderGraphListPane === 'function' ? mod.renderGraphListPane : null),
+      (value) => { graphListPaneRenderer = value; }
+    )
+  );
 }
 
 function renderGraphList(el, edges, beadMap) {
@@ -1796,17 +1778,15 @@ function renderGraphControlsFallback(el, opts) {
 }
 
 function ensureGraphControlsPaneRenderer() {
-  if (graphControlsPaneRenderer || graphControlsPaneLoadPromise) return;
+  if (graphControlsPaneRenderer || sliceLoadState.graphControlsPaneRenderer) return;
 
-  graphControlsPaneLoadPromise = lazyLoadSlice(
-    '/chat-slices/graph-controls-pane.js',
-    (mod) => (mod && typeof mod.renderGraphControlsPane === 'function' ? mod.renderGraphControlsPane : null),
-    (value) => { graphControlsPaneRenderer = value; }
-  )
-    .finally(() => {
-      graphControlsPaneLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('graphControlsPaneRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/graph-controls-pane.js',
+      (mod) => (mod && typeof mod.renderGraphControlsPane === 'function' ? mod.renderGraphControlsPane : null),
+      (value) => { graphControlsPaneRenderer = value; }
+    )
+  );
 }
 
 function renderGraphControls(el, opts) {
@@ -1859,17 +1839,15 @@ function renderGraphEdgeDetailFallback(el, opts) {
 }
 
 function ensureGraphEdgeDetailPaneRenderer() {
-  if (graphEdgeDetailPaneRenderer || graphEdgeDetailPaneLoadPromise) return;
+  if (graphEdgeDetailPaneRenderer || sliceLoadState.graphEdgeDetailPaneRenderer) return;
 
-  graphEdgeDetailPaneLoadPromise = lazyLoadSlice(
-    '/chat-slices/graph-edge-detail-pane.js',
-    (mod) => (mod && typeof mod.renderGraphEdgeDetailPane === 'function' ? mod.renderGraphEdgeDetailPane : null),
-    (value) => { graphEdgeDetailPaneRenderer = value; }
-  )
-    .finally(() => {
-      graphEdgeDetailPaneLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('graphEdgeDetailPaneRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/graph-edge-detail-pane.js',
+      (mod) => (mod && typeof mod.renderGraphEdgeDetailPane === 'function' ? mod.renderGraphEdgeDetailPane : null),
+      (value) => { graphEdgeDetailPaneRenderer = value; }
+    )
+  );
 }
 
 function renderGraphEdgeDetail(el, opts) {
@@ -1924,17 +1902,15 @@ function renderGraphSummaryFallback(el, opts) {
 }
 
 function ensureGraphSummaryPaneRenderer() {
-  if (graphSummaryPaneRenderer || graphSummaryPaneLoadPromise) return;
+  if (graphSummaryPaneRenderer || sliceLoadState.graphSummaryPaneRenderer) return;
 
-  graphSummaryPaneLoadPromise = lazyLoadSlice(
-    '/chat-slices/graph-summary-pane.js',
-    (mod) => (mod && typeof mod.renderGraphSummaryPane === 'function' ? mod.renderGraphSummaryPane : null),
-    (value) => { graphSummaryPaneRenderer = value; }
-  )
-    .finally(() => {
-      graphSummaryPaneLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('graphSummaryPaneRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/graph-summary-pane.js',
+      (mod) => (mod && typeof mod.renderGraphSummaryPane === 'function' ? mod.renderGraphSummaryPane : null),
+      (value) => { graphSummaryPaneRenderer = value; }
+    )
+  );
 }
 
 function renderGraphSummary(el, opts) {
@@ -2075,17 +2051,15 @@ function renderRollingFallback(el, items) {
 }
 
 function ensureRollingPaneRenderer() {
-  if (rollingPaneRenderer || rollingPaneLoadPromise) return;
+  if (rollingPaneRenderer || sliceLoadState.rollingPaneRenderer) return;
 
-  rollingPaneLoadPromise = lazyLoadSlice(
-    '/chat-slices/rolling-pane.js',
-    (mod) => (mod && typeof mod.renderRollingPane === 'function' ? mod.renderRollingPane : null),
-    (value) => { rollingPaneRenderer = value; }
-  )
-    .finally(() => {
-      rollingPaneLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('rollingPaneRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/rolling-pane.js',
+      (mod) => (mod && typeof mod.renderRollingPane === 'function' ? mod.renderRollingPane : null),
+      (value) => { rollingPaneRenderer = value; }
+    )
+  );
 }
 
 function renderRolling(items) {
@@ -2241,17 +2215,15 @@ function renderClaimsFallback(rows, claimsMeta) {
 
 
 function ensureClaimsPaneRenderer() {
-  if (claimsPaneRenderer || claimsPaneLoadPromise) return;
+  if (claimsPaneRenderer || sliceLoadState.claimsPaneRenderer) return;
 
-  claimsPaneLoadPromise = lazyLoadSlice(
-    '/chat-slices/claims-pane.js',
-    (mod) => (mod && typeof mod.renderClaimsPane === 'function' ? mod.renderClaimsPane : null),
-    (value) => { claimsPaneRenderer = value; }
-  )
-    .finally(() => {
-      claimsPaneLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('claimsPaneRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/claims-pane.js',
+      (mod) => (mod && typeof mod.renderClaimsPane === 'function' ? mod.renderClaimsPane : null),
+      (value) => { claimsPaneRenderer = value; }
+    )
+  );
 }
 
 function renderClaims(rows, claimsMeta) {
@@ -2431,17 +2403,15 @@ function renderEntitiesFallback(entityMeta) {
 }
 
 function ensureEntitiesPaneRenderer() {
-  if (entitiesPaneRenderer || entitiesPaneLoadPromise) return;
+  if (entitiesPaneRenderer || sliceLoadState.entitiesPaneRenderer) return;
 
-  entitiesPaneLoadPromise = lazyLoadSlice(
-    '/chat-slices/entities-pane.js',
-    (mod) => (mod && typeof mod.renderEntitiesPane === 'function' ? mod.renderEntitiesPane : null),
-    (value) => { entitiesPaneRenderer = value; }
-  )
-    .finally(() => {
-      entitiesPaneLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('entitiesPaneRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/entities-pane.js',
+      (mod) => (mod && typeof mod.renderEntitiesPane === 'function' ? mod.renderEntitiesPane : null),
+      (value) => { entitiesPaneRenderer = value; }
+    )
+  );
 }
 
 function renderEntities(entityMeta) {
@@ -2797,17 +2767,15 @@ function renderRuntimeFallback(runtime, lastTurn) {
 }
 
 function ensureRuntimePaneRenderer() {
-  if (runtimePaneRenderer || runtimePaneLoadPromise) return;
+  if (runtimePaneRenderer || sliceLoadState.runtimePaneRenderer) return;
 
-  runtimePaneLoadPromise = lazyLoadSlice(
-    '/chat-slices/runtime-pane.js',
-    (mod) => (mod && typeof mod.renderRuntimePane === 'function' ? mod.renderRuntimePane : null),
-    (value) => { runtimePaneRenderer = value; }
-  )
-    .finally(() => {
-      runtimePaneLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('runtimePaneRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/runtime-pane.js',
+      (mod) => (mod && typeof mod.renderRuntimePane === 'function' ? mod.renderRuntimePane : null),
+      (value) => { runtimePaneRenderer = value; }
+    )
+  );
 }
 
 function renderRuntime(runtime, lastTurn) {
@@ -3071,17 +3039,15 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
 }
 
 function ensureBenchmarkPaneRenderer() {
-  if (benchmarkPaneRenderer || benchmarkPaneLoadPromise) return;
+  if (benchmarkPaneRenderer || sliceLoadState.benchmarkPaneRenderer) return;
 
-  benchmarkPaneLoadPromise = lazyLoadSlice(
-    '/chat-slices/benchmark-pane.js',
-    (mod) => (mod && typeof mod.renderBenchmarkPane === 'function' ? mod.renderBenchmarkPane : null),
-    (value) => { benchmarkPaneRenderer = value; }
-  )
-    .finally(() => {
-      benchmarkPaneLoadPromise = null;
-      refreshMemory();
-    });
+  ensureSliceLoad('benchmarkPaneRenderer', () =>
+    lazyLoadSlice(
+      '/chat-slices/benchmark-pane.js',
+      (mod) => (mod && typeof mod.renderBenchmarkPane === 'function' ? mod.renderBenchmarkPane : null),
+      (value) => { benchmarkPaneRenderer = value; }
+    )
+  );
 }
 
 function renderBenchmark(summary, report, benchmarkMeta) {
