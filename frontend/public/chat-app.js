@@ -54,6 +54,8 @@ let claimsPaneRenderer = null;
 let claimsPaneLoadPromise = null;
 let entitiesPaneRenderer = null;
 let entitiesPaneLoadPromise = null;
+let runtimePaneRenderer = null;
+let runtimePaneLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -2257,7 +2259,7 @@ function escapeHtml(s) {
     .replace(/'/g, '&#039;');
 }
 
-function renderRuntime(runtime, lastTurn) {
+function renderRuntimeFallback(runtime, lastTurn) {
   const el = document.getElementById('tab-runtime-content');
   el.textContent = '';
   const q = runtime?.queue || {};
@@ -2391,6 +2393,47 @@ function renderRuntime(runtime, lastTurn) {
     '<div style="margin-top:4px;color:var(--text-dim)">enabled: ' + String(!!my.enabled) +
     ' · strengthened/weakened: ' + String((my.stats || {}).strengthened || 0) + '/' + String((my.stats || {}).weakened || 0) + '</div>';
   el.appendChild(c5);
+}
+
+function ensureRuntimePaneRenderer() {
+  if (runtimePaneRenderer || runtimePaneLoadPromise) return;
+
+  runtimePaneLoadPromise = import('/chat-slices/runtime-pane.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderRuntimePane === 'function') {
+        runtimePaneRenderer = mod.renderRuntimePane;
+      }
+    })
+    .catch(() => {
+      runtimePaneRenderer = null;
+    })
+    .finally(() => {
+      runtimePaneLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderRuntime(runtime, lastTurn) {
+  const safeRuntime = runtime || {};
+  const safeLastTurn = lastTurn || {};
+  const el = document.getElementById('tab-runtime-content');
+  if (!el) return;
+
+  if (runtimePaneRenderer) {
+    try {
+      runtimePaneRenderer(el, {
+        runtime: safeRuntime,
+        lastTurn: safeLastTurn,
+        formatIsoShort,
+      });
+      return;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  renderRuntimeFallback(safeRuntime, safeLastTurn);
+  ensureRuntimePaneRenderer();
 }
 
 function renderBenchmark(summary, report, benchmarkMeta) {

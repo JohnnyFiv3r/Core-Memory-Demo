@@ -47,3 +47,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Began pane-by-pane React extraction: Rolling Window tab now renders via a dedicated React module (`frontend/public/chat-slices/rolling-pane.js`) loaded by `chat-app.js`, with graceful fallback if module load fails.
 - Continued pane extraction: Claims tab now renders via React module (`frontend/public/chat-slices/claims-pane.js`) with existing claim-detail loader integration and fallback preservation in `chat-app.js`.
 - Continued pane extraction: Entities tab now renders via React module (`frontend/public/chat-slices/entities-pane.js`) with merge action callbacks and fallback preservation in `chat-app.js`.
+- Continued pane extraction: Runtime tab now renders via React module (`frontend/public/chat-slices/runtime-pane.js`) with fallback preservation in `chat-app.js`.
