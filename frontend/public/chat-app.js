@@ -60,6 +60,8 @@ let benchmarkPaneRenderer = null;
 let benchmarkPaneLoadPromise = null;
 let beadsPaneRenderer = null;
 let beadsPaneLoadPromise = null;
+let associationsPaneRenderer = null;
+let associationsPaneLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -982,7 +984,7 @@ function renderBeads(beads) {
   ensureBeadsPaneRenderer();
 }
 
-function renderAssociations(assocs) {
+function renderAssociationsFallback(assocs) {
   const el = document.getElementById('tab-associations');
   el.textContent = '';
   if (!assocs.length) {
@@ -1015,6 +1017,44 @@ function renderAssociations(assocs) {
 
     el.appendChild(card);
   });
+}
+
+function ensureAssociationsPaneRenderer() {
+  if (associationsPaneRenderer || associationsPaneLoadPromise) return;
+
+  associationsPaneLoadPromise = import('/chat-slices/associations-pane.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderAssociationsPane === 'function') {
+        associationsPaneRenderer = mod.renderAssociationsPane;
+      }
+    })
+    .catch(() => {
+      associationsPaneRenderer = null;
+    })
+    .finally(() => {
+      associationsPaneLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderAssociations(assocs) {
+  const safeAssocs = Array.isArray(assocs) ? assocs : [];
+  const el = document.getElementById('tab-associations');
+  if (!el) return;
+
+  if (associationsPaneRenderer) {
+    try {
+      associationsPaneRenderer(el, {
+        assocs: safeAssocs,
+      });
+      return;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  renderAssociationsFallback(safeAssocs);
+  ensureAssociationsPaneRenderer();
 }
 
 function graphNumConfidence(v) {
