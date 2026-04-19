@@ -77,6 +77,28 @@ let graphDataBuilderLoadPromise = null;
 let graphUtilsModule = null;
 let graphUtilsLoadPromise = null;
 
+function lazyLoadSlice(path, pick, assign, opts) {
+  const cfg = opts || {};
+  return import(path)
+    .then((mod) => {
+      const value = typeof pick === 'function' ? pick(mod || {}) : null;
+      if (value !== null && value !== undefined) {
+        if (typeof assign === 'function') assign(value);
+        return value;
+      }
+      if (typeof assign === 'function') assign(null);
+      if (cfg.throwOnMissing) {
+        throw new Error(String(cfg.missingError || 'slice_missing_export'));
+      }
+      return null;
+    })
+    .catch((err) => {
+      if (typeof assign === 'function') assign(null);
+      if (cfg.throwOnMissing) throw err;
+      return null;
+    });
+}
+
 function loadGraphPrefs() {
   try {
     const mode = String(localStorage.getItem(PREF_GRAPH_VIEW_MODE_KEY) || 'list').toLowerCase();
@@ -1098,15 +1120,11 @@ function applyGraphFiltersFallback(edges, beadMap, filters) {
 function ensureGraphUtilsModule() {
   if (graphUtilsModule || graphUtilsLoadPromise) return;
 
-  graphUtilsLoadPromise = import('/chat-slices/graph-utils.js')
-    .then((mod) => {
-      if (mod && typeof mod.graphNodeTitle === 'function') {
-        graphUtilsModule = mod;
-      }
-    })
-    .catch(() => {
-      graphUtilsModule = null;
-    })
+  graphUtilsLoadPromise = lazyLoadSlice(
+    '/chat-slices/graph-utils.js',
+    (mod) => (mod && typeof mod.graphNodeTitle === 'function' ? mod : null),
+    (value) => { graphUtilsModule = value; }
+  )
     .finally(() => {
       graphUtilsLoadPromise = null;
       refreshMemory();
@@ -1189,18 +1207,12 @@ function ensureGraph3DRuntimeRenderer() {
     return graph3dRuntimeLoadPromise;
   }
 
-  graph3dRuntimeLoadPromise = import('/chat-slices/graph-3d-runtime.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderGraph3DRuntimePane === 'function') {
-        graph3dRuntimeRenderer = mod.renderGraph3DRuntimePane;
-        return graph3dRuntimeRenderer;
-      }
-      throw new Error('graph_3d_runtime_missing_exports');
-    })
-    .catch((err) => {
-      graph3dRuntimeRenderer = null;
-      throw err;
-    })
+  graph3dRuntimeLoadPromise = lazyLoadSlice(
+    '/chat-slices/graph-3d-runtime.js',
+    (mod) => (mod && typeof mod.renderGraph3DRuntimePane === 'function' ? mod.renderGraph3DRuntimePane : null),
+    (value) => { graph3dRuntimeRenderer = value; },
+    { throwOnMissing: true, missingError: 'graph_3d_runtime_missing_exports' }
+  )
     .finally(() => {
       graph3dRuntimeLoadPromise = null;
       refreshMemory();
@@ -1280,15 +1292,11 @@ function reagraphDataFromEdgesFallback(edges, beadMap) {
 function ensureGraphDataBuilder() {
   if (graphDataBuilder || graphDataBuilderLoadPromise) return;
 
-  graphDataBuilderLoadPromise = import('/chat-slices/graph-reagraph-data.js')
-    .then((mod) => {
-      if (mod && typeof mod.buildReagraphData === 'function') {
-        graphDataBuilder = mod.buildReagraphData;
-      }
-    })
-    .catch(() => {
-      graphDataBuilder = null;
-    })
+  graphDataBuilderLoadPromise = lazyLoadSlice(
+    '/chat-slices/graph-reagraph-data.js',
+    (mod) => (mod && typeof mod.buildReagraphData === 'function' ? mod.buildReagraphData : null),
+    (value) => { graphDataBuilder = value; }
+  )
     .finally(() => {
       graphDataBuilderLoadPromise = null;
       refreshMemory();
@@ -1344,15 +1352,11 @@ function createGraphCanvasHostFallback(el, opts) {
 function ensureGraphCanvasHostFactory() {
   if (graphCanvasHostFactory || graphCanvasHostLoadPromise) return;
 
-  graphCanvasHostLoadPromise = import('/chat-slices/graph-canvas-host.js')
-    .then((mod) => {
-      if (mod && typeof mod.createGraphCanvasHost === 'function') {
-        graphCanvasHostFactory = mod.createGraphCanvasHost;
-      }
-    })
-    .catch(() => {
-      graphCanvasHostFactory = null;
-    })
+  graphCanvasHostLoadPromise = lazyLoadSlice(
+    '/chat-slices/graph-canvas-host.js',
+    (mod) => (mod && typeof mod.createGraphCanvasHost === 'function' ? mod.createGraphCanvasHost : null),
+    (value) => { graphCanvasHostFactory = value; }
+  )
     .finally(() => {
       graphCanvasHostLoadPromise = null;
       refreshMemory();
@@ -1633,15 +1637,11 @@ function renderGraphSvgCanvasFallback(el, edges, beadMap, onEdgeClick) {
 function ensureGraphSvgCanvasRenderer() {
   if (graphSvgCanvasRenderer || graphSvgCanvasLoadPromise) return;
 
-  graphSvgCanvasLoadPromise = import('/chat-slices/graph-svg-canvas.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderGraphSvgCanvasPane === 'function') {
-        graphSvgCanvasRenderer = mod.renderGraphSvgCanvasPane;
-      }
-    })
-    .catch(() => {
-      graphSvgCanvasRenderer = null;
-    })
+  graphSvgCanvasLoadPromise = lazyLoadSlice(
+    '/chat-slices/graph-svg-canvas.js',
+    (mod) => (mod && typeof mod.renderGraphSvgCanvasPane === 'function' ? mod.renderGraphSvgCanvasPane : null),
+    (value) => { graphSvgCanvasRenderer = value; }
+  )
     .finally(() => {
       graphSvgCanvasLoadPromise = null;
       refreshMemory();
@@ -1703,15 +1703,11 @@ function renderGraphListFallback(el, edges, beadMap) {
 function ensureGraphListPaneRenderer() {
   if (graphListPaneRenderer || graphListPaneLoadPromise) return;
 
-  graphListPaneLoadPromise = import('/chat-slices/graph-list-pane.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderGraphListPane === 'function') {
-        graphListPaneRenderer = mod.renderGraphListPane;
-      }
-    })
-    .catch(() => {
-      graphListPaneRenderer = null;
-    })
+  graphListPaneLoadPromise = lazyLoadSlice(
+    '/chat-slices/graph-list-pane.js',
+    (mod) => (mod && typeof mod.renderGraphListPane === 'function' ? mod.renderGraphListPane : null),
+    (value) => { graphListPaneRenderer = value; }
+  )
     .finally(() => {
       graphListPaneLoadPromise = null;
       refreshMemory();
@@ -1817,15 +1813,11 @@ function renderGraphControlsFallback(el, opts) {
 function ensureGraphControlsPaneRenderer() {
   if (graphControlsPaneRenderer || graphControlsPaneLoadPromise) return;
 
-  graphControlsPaneLoadPromise = import('/chat-slices/graph-controls-pane.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderGraphControlsPane === 'function') {
-        graphControlsPaneRenderer = mod.renderGraphControlsPane;
-      }
-    })
-    .catch(() => {
-      graphControlsPaneRenderer = null;
-    })
+  graphControlsPaneLoadPromise = lazyLoadSlice(
+    '/chat-slices/graph-controls-pane.js',
+    (mod) => (mod && typeof mod.renderGraphControlsPane === 'function' ? mod.renderGraphControlsPane : null),
+    (value) => { graphControlsPaneRenderer = value; }
+  )
     .finally(() => {
       graphControlsPaneLoadPromise = null;
       refreshMemory();
@@ -1889,15 +1881,11 @@ function renderGraphEdgeDetailFallback(el, opts) {
 function ensureGraphEdgeDetailPaneRenderer() {
   if (graphEdgeDetailPaneRenderer || graphEdgeDetailPaneLoadPromise) return;
 
-  graphEdgeDetailPaneLoadPromise = import('/chat-slices/graph-edge-detail-pane.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderGraphEdgeDetailPane === 'function') {
-        graphEdgeDetailPaneRenderer = mod.renderGraphEdgeDetailPane;
-      }
-    })
-    .catch(() => {
-      graphEdgeDetailPaneRenderer = null;
-    })
+  graphEdgeDetailPaneLoadPromise = lazyLoadSlice(
+    '/chat-slices/graph-edge-detail-pane.js',
+    (mod) => (mod && typeof mod.renderGraphEdgeDetailPane === 'function' ? mod.renderGraphEdgeDetailPane : null),
+    (value) => { graphEdgeDetailPaneRenderer = value; }
+  )
     .finally(() => {
       graphEdgeDetailPaneLoadPromise = null;
       refreshMemory();
@@ -1963,15 +1951,11 @@ function renderGraphSummaryFallback(el, opts) {
 function ensureGraphSummaryPaneRenderer() {
   if (graphSummaryPaneRenderer || graphSummaryPaneLoadPromise) return;
 
-  graphSummaryPaneLoadPromise = import('/chat-slices/graph-summary-pane.js')
-    .then((mod) => {
-      if (mod && typeof mod.renderGraphSummaryPane === 'function') {
-        graphSummaryPaneRenderer = mod.renderGraphSummaryPane;
-      }
-    })
-    .catch(() => {
-      graphSummaryPaneRenderer = null;
-    })
+  graphSummaryPaneLoadPromise = lazyLoadSlice(
+    '/chat-slices/graph-summary-pane.js',
+    (mod) => (mod && typeof mod.renderGraphSummaryPane === 'function' ? mod.renderGraphSummaryPane : null),
+    (value) => { graphSummaryPaneRenderer = value; }
+  )
     .finally(() => {
       graphSummaryPaneLoadPromise = null;
       refreshMemory();

@@ -64,3 +64,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: removed dead legacy `renderGraphLegend()` from `chat-app.js` after summary/legend responsibilities moved to `frontend/public/chat-slices/graph-summary-pane.js`.
 - Cleanup pass: removed dead legacy helpers `openReagraphArchiveWindow()` and `showTyping()` from `chat-app.js` after event-binding migration and pipeline-status UI changes made them unused.
 - Cleanup pass: simplified graph fallback utilities in `chat-app.js` by removing redundant `*Fallback` helper wrappers (`graphNumConfidenceFallback`, `graphNodeTitleFallback`, `graphEntityIdFallback`, `graphTypeColorFallback`) while preserving behavior.
+- Cleanup pass: consolidated repeated graph slice dynamic-import boilerplate in `chat-app.js` via shared `lazyLoadSlice()` helper and rewired graph module loaders to use it.
