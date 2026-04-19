@@ -134,6 +134,10 @@ function ensureSliceBinding(currentValue, key, path, pick, assign, opts) {
   return ensureSliceLoad(key, () => lazyLoadSlice(path, pick, assign, opts));
 }
 
+function arrayOrEmpty(value) {
+  return Array.isArray(value) ? value : [];
+}
+
 function loadGraphPrefs() {
   try {
     const mode = String(localStorage.getItem(PREF_GRAPH_VIEW_MODE_KEY) || 'list').toLowerCase();
@@ -180,7 +184,7 @@ let modelOptionsHydrated = false;
 function renderDemoModelOptions(payload) {
   if (!modelSelectEl) return;
   modelOptionsHydrated = true;
-  const rows = Array.isArray((payload || {}).options) ? payload.options : [];
+  const rows = arrayOrEmpty((payload || {}).options);
   const selected = String((payload || {}).override_model || '').trim();
   modelSelectEl.innerHTML = '';
 
@@ -877,7 +881,7 @@ async function sendMessage() {
     while (Date.now() < deadline) {
       const statusRes = await fetch('/api/chat/status/' + encodeURIComponent(jobId) + '?cursor=' + String(cursor));
       const status = await parseApiJsonResponse(statusRes, 'chat status');
-      const events = Array.isArray(status.events) ? status.events : [];
+      const events = arrayOrEmpty(status.events);
       if (events.length > 0) {
         cursor = Number(status.cursor_next || cursor || 0);
         const lastEvt = events[events.length - 1] || {};
@@ -1000,7 +1004,7 @@ function ensureBeadsPaneRenderer() {
 }
 
 function renderBeads(beads) {
-  const safeBeads = Array.isArray(beads) ? beads : [];
+  const safeBeads = arrayOrEmpty(beads);
   const el = document.getElementById('tab-beads');
   if (!el) return;
 
@@ -1063,7 +1067,7 @@ function ensureAssociationsPaneRenderer() {
 }
 
 function renderAssociations(assocs) {
-  const safeAssocs = Array.isArray(assocs) ? assocs : [];
+  const safeAssocs = arrayOrEmpty(assocs);
   const el = document.getElementById('tab-associations');
   if (!el) return;
 
@@ -1291,7 +1295,7 @@ function ensureGraphDataBuilder() {
 }
 
 function reagraphDataFromEdges(edges, beadMap) {
-  const safeEdges = Array.isArray(edges) ? edges : [];
+  const safeEdges = arrayOrEmpty(edges);
   const safeMap = beadMap || {};
 
   return callSliceWithFallback(
@@ -1619,7 +1623,7 @@ function ensureGraphSvgCanvasRenderer() {
 }
 
 function renderGraphSvgCanvas(el, edges, beadMap, onEdgeClick) {
-  const safeEdges = Array.isArray(edges) ? edges : [];
+  const safeEdges = arrayOrEmpty(edges);
   const safeMap = beadMap || {};
 
   renderViaSlice(
@@ -1676,7 +1680,7 @@ function ensureGraphListPaneRenderer() {
 }
 
 function renderGraphList(el, edges, beadMap) {
-  const safeEdges = Array.isArray(edges) ? edges : [];
+  const safeEdges = arrayOrEmpty(edges);
   renderViaSlice(
     graphListPaneRenderer,
     (renderer) => renderer(el, {
@@ -1845,7 +1849,7 @@ function renderGraphEdgeDetail(el, opts) {
 }
 
 function renderGraphSummaryFallback(el, opts) {
-  const filteredEdges = Array.isArray((opts || {}).filteredEdges) ? opts.filteredEdges : [];
+  const filteredEdges = arrayOrEmpty((opts || {}).filteredEdges);
   const totalEdges = Number((opts || {}).totalEdges || 0);
   el.textContent = '';
 
@@ -2209,7 +2213,7 @@ function renderClaims(rows, claimsMeta) {
   const el = document.getElementById('tab-claims');
   if (!el) return;
 
-  const safeRows = Array.isArray(rows) ? rows : [];
+  const safeRows = arrayOrEmpty(rows);
   if (!safeRows.length) {
     claimsDetailOpen = false;
   } else if (!selectedClaimSlot || !safeRows.some(r => (r && (r.slot_key || '')) === selectedClaimSlot)) {
@@ -2257,9 +2261,9 @@ function renderClaims(rows, claimsMeta) {
 function renderEntitiesFallback(entityMeta) {
   const el = document.getElementById('tab-entities');
   el.textContent = '';
-  const rows = Array.isArray((entityMeta || {}).rows) ? entityMeta.rows : [];
+  const rows = arrayOrEmpty((entityMeta || {}).rows);
   const counts = (entityMeta || {}).counts || {};
-  const merges = Array.isArray((entityMeta || {}).merge_proposals) ? entityMeta.merge_proposals : [];
+  const merges = arrayOrEmpty((entityMeta || {}).merge_proposals);
 
   const toolbar = document.createElement('div');
   toolbar.className = 'claims-toolbar';
@@ -2607,11 +2611,11 @@ function renderRuntimeFallback(runtime, lastTurn) {
   const el = document.getElementById('tab-runtime-content');
   el.textContent = '';
   const q = runtime?.queue || {};
-  const qRows = Array.isArray(runtime?.queue_breakdown) ? runtime.queue_breakdown : [];
+  const qRows = arrayOrEmpty(runtime?.queue_breakdown);
   const s = runtime?.semantic_backend || {};
   const p = (lastTurn || {}).diagnostics || {};
   const f = runtime?.last_flush || {};
-  const fHist = Array.isArray(runtime?.flush_history) ? runtime.flush_history : [];
+  const fHist = arrayOrEmpty(runtime?.flush_history);
   const my = runtime?.myelination || {};
   const warnCount = Array.isArray(p.warnings) ? p.warnings.length : 0;
   const mode = String(s.mode || 'degraded_allowed');
@@ -2676,7 +2680,7 @@ function renderRuntimeFallback(runtime, lastTurn) {
 
   const c3 = document.createElement('div');
   c3.className = 'runtime-card';
-  const topIds = Array.isArray(p.top_bead_ids) ? p.top_bead_ids.slice(0, 5) : [];
+  const topIds = arrayOrEmpty(p.top_bead_ids).slice(0, 5);
   c3.innerHTML =
     '<div><strong>Last Answer Diagnostics</strong></div>' +
     '<div style="margin-top:4px;color:var(--text-dim)">ok: ' + String(!!p.ok) +
@@ -2770,7 +2774,7 @@ function renderRuntime(runtime, lastTurn) {
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
-  const history = Array.isArray((benchmarkMeta || {}).history) ? benchmarkMeta.history : [];
+  const history = arrayOrEmpty((benchmarkMeta || {}).history);
   if (!summary || !summary.cases) {
     const empty = document.createElement('div');
     empty.className = 'empty-state';
@@ -2861,7 +2865,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     const baseline = mc.baseline || {};
     const enabled = mc.enabled || {};
     const delta = Number(mc.accuracy_delta || 0);
-    const cases = Array.isArray(mc.cases) ? mc.cases : [];
+    const cases = arrayOrEmpty(mc.cases);
     const improved = cases.filter(c => !c.baseline_pass && c.enabled_pass);
     const regressed = cases.filter(c => c.baseline_pass && !c.enabled_pass);
     const changed = cases.filter(c => !!c.pass_changed);
