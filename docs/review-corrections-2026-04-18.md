@@ -48,3 +48,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Continued pane extraction: Claims tab now renders via React module (`frontend/public/chat-slices/claims-pane.js`) with existing claim-detail loader integration and fallback preservation in `chat-app.js`.
 - Continued pane extraction: Entities tab now renders via React module (`frontend/public/chat-slices/entities-pane.js`) with merge action callbacks and fallback preservation in `chat-app.js`.
 - Continued pane extraction: Runtime tab now renders via React module (`frontend/public/chat-slices/runtime-pane.js`) with fallback preservation in `chat-app.js`.
+- Continued pane extraction: Benchmark tab now renders via React module (`frontend/public/chat-slices/benchmark-pane.js`) with modal-open callback wiring and fallback preservation in `chat-app.js`.

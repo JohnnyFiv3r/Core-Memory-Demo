@@ -56,6 +56,8 @@ let entitiesPaneRenderer = null;
 let entitiesPaneLoadPromise = null;
 let runtimePaneRenderer = null;
 let runtimePaneLoadPromise = null;
+let benchmarkPaneRenderer = null;
+let benchmarkPaneLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -2436,7 +2438,7 @@ function renderRuntime(runtime, lastTurn) {
   ensureRuntimePaneRenderer();
 }
 
-function renderBenchmark(summary, report, benchmarkMeta) {
+function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
   const history = Array.isArray((benchmarkMeta || {}).history) ? benchmarkMeta.history : [];
@@ -2676,6 +2678,54 @@ function renderBenchmark(summary, report, benchmarkMeta) {
       }
     }
   }
+}
+
+function ensureBenchmarkPaneRenderer() {
+  if (benchmarkPaneRenderer || benchmarkPaneLoadPromise) return;
+
+  benchmarkPaneLoadPromise = import('/chat-slices/benchmark-pane.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderBenchmarkPane === 'function') {
+        benchmarkPaneRenderer = mod.renderBenchmarkPane;
+      }
+    })
+    .catch(() => {
+      benchmarkPaneRenderer = null;
+    })
+    .finally(() => {
+      benchmarkPaneLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderBenchmark(summary, report, benchmarkMeta) {
+  const safeSummary = summary || {};
+  const safeReport = report || null;
+  const safeMeta = benchmarkMeta || {};
+  const el = document.getElementById('tab-benchmark-content');
+  if (!el) return;
+
+  if (benchmarkPaneRenderer) {
+    try {
+      benchmarkPaneRenderer(el, {
+        summary: safeSummary,
+        report: safeReport,
+        benchmarkMeta: safeMeta,
+        formatIsoShort,
+        onOpenPayload: (title, payload) => {
+          document.getElementById('modal-title').textContent = String(title || 'Benchmark detail');
+          document.getElementById('modal-body').textContent = JSON.stringify(payload || {}, null, 2);
+          document.getElementById('modal').classList.add('open');
+        },
+      });
+      return;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  renderBenchmarkFallback(safeSummary, safeReport, safeMeta);
+  ensureBenchmarkPaneRenderer();
 }
 
 async function refreshMemory() {
