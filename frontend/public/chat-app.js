@@ -533,20 +533,6 @@ document.addEventListener('keydown', (evt) => {
   closeGraphOverlay();
 });
 
-function openReagraphArchiveWindow() {
-  const rel = './graph';
-  const url = new URL(rel, window.location.href).toString();
-  if (window.self !== window.top) {
-    try {
-      window.top.location.assign(url);
-      return;
-    } catch (_) {
-      // fallback
-    }
-  }
-  window.location.assign(url);
-}
-
 function resetStoryCursor(silent) {
   setStoryCursorTurn(0);
   if (!silent) {
@@ -782,17 +768,6 @@ function addMsg(role, text, turnId) {
     meta.className = 'msg-meta';
     meta.textContent = turnId;
     div.appendChild(meta);
-  }
-  messagesEl.appendChild(div);
-  messagesEl.scrollTop = messagesEl.scrollHeight;
-  return div;
-}
-
-function showTyping() {
-  const div = document.createElement('div');
-  div.className = 'typing';
-  for (let i = 0; i < 3; i++) {
-    div.appendChild(document.createElement('span'));
   }
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
