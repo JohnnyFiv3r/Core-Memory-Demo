@@ -76,6 +76,8 @@ let graphSvgCanvasRenderer = null;
 let graphSvgCanvasLoadPromise = null;
 let graph3dRuntimeRenderer = null;
 let graph3dRuntimeLoadPromise = null;
+let graphDataBuilder = null;
+let graphDataBuilderLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1225,7 +1227,7 @@ function renderGraph3DRuntime(opts) {
   });
 }
 
-function graphTypeColor(type) {
+function graphTypeColorFallback(type) {
   const t = String(type || '').toLowerCase();
   if (t === 'decision') return '#6ae276';
   if (t === 'evidence') return '#22d3ee';
@@ -1236,7 +1238,7 @@ function graphTypeColor(type) {
   return '#7ca0ab';
 }
 
-function reagraphDataFromEdges(edges, beadMap) {
+function reagraphDataFromEdgesFallback(edges, beadMap) {
   const nodeMap = {};
   const degree = {};
 
@@ -1262,7 +1264,7 @@ function reagraphDataFromEdges(edges, beadMap) {
       id: n.id,
       label: String(n.title || n.id || 'node'),
       size: Math.max(3, Math.min(14, 4 + (d * 1.1))),
-      fill: graphTypeColor(n.type),
+      fill: graphTypeColorFallback(n.type),
       data: {
         id: n.id,
         title: n.title,
@@ -1286,6 +1288,40 @@ function reagraphDataFromEdges(edges, beadMap) {
   })).filter((l) => l.source && l.target);
 
   return { nodes, edges: links };
+}
+
+function ensureGraphDataBuilder() {
+  if (graphDataBuilder || graphDataBuilderLoadPromise) return;
+
+  graphDataBuilderLoadPromise = import('/chat-slices/graph-reagraph-data.js')
+    .then((mod) => {
+      if (mod && typeof mod.buildReagraphData === 'function') {
+        graphDataBuilder = mod.buildReagraphData;
+      }
+    })
+    .catch(() => {
+      graphDataBuilder = null;
+    })
+    .finally(() => {
+      graphDataBuilderLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function reagraphDataFromEdges(edges, beadMap) {
+  const safeEdges = Array.isArray(edges) ? edges : [];
+  const safeMap = beadMap || {};
+
+  if (graphDataBuilder) {
+    try {
+      return graphDataBuilder(safeEdges, safeMap);
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  ensureGraphDataBuilder();
+  return reagraphDataFromEdgesFallback(safeEdges, safeMap);
 }
 
 function renderGraphLegend(el, edges) {
