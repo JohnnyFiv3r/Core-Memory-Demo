@@ -62,6 +62,8 @@ let beadsPaneRenderer = null;
 let beadsPaneLoadPromise = null;
 let associationsPaneRenderer = null;
 let associationsPaneLoadPromise = null;
+let graphListPaneRenderer = null;
+let graphListPaneLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1518,6 +1520,73 @@ function renderGraphSvgCanvas(el, edges, beadMap, onEdgeClick) {
   el.appendChild(note);
 }
 
+function renderGraphListFallback(el, edges, beadMap) {
+  (edges || []).slice(0, 140).forEach(a => {
+    const src = String(a.source || '');
+    const dst = String(a.target || '');
+    const srcTitle = graphNodeTitle(beadMap, src);
+    const dstTitle = graphNodeTitle(beadMap, dst);
+
+    const row = document.createElement('div');
+    row.className = 'bench-bucket';
+    row.innerHTML =
+      '<div><strong>' + escapeHtml(String(a.relationship || 'associated_with')) + '</strong></div>' +
+      '<div style="margin-top:2px;color:var(--text-dim)">source: ' + escapeHtml(srcTitle) + '</div>' +
+      '<div style="margin-top:2px;color:var(--text-dim)">target: ' + escapeHtml(dstTitle) + '</div>' +
+      '<div style="margin-top:2px;color:var(--text-dim)">confidence: ' + String(a.confidence === null ? 'n/a' : Number(a.confidence).toFixed(2)) + '</div>' +
+      '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">' +
+        (src ? '<button class="btn" data-bead-id="' + escapeHtml(src) + '">Open source</button>' : '') +
+        (dst ? '<button class="btn" data-bead-id="' + escapeHtml(dst) + '">Open target</button>' : '') +
+      '</div>';
+    row.querySelectorAll('button[data-bead-id]').forEach(btn => {
+      btn.addEventListener('click', ev => {
+        ev.stopPropagation();
+        const bid = btn.getAttribute('data-bead-id') || '';
+        if (bid) showBead(bid);
+      });
+    });
+    el.appendChild(row);
+  });
+}
+
+function ensureGraphListPaneRenderer() {
+  if (graphListPaneRenderer || graphListPaneLoadPromise) return;
+
+  graphListPaneLoadPromise = import('/chat-slices/graph-list-pane.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderGraphListPane === 'function') {
+        graphListPaneRenderer = mod.renderGraphListPane;
+      }
+    })
+    .catch(() => {
+      graphListPaneRenderer = null;
+    })
+    .finally(() => {
+      graphListPaneLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderGraphList(el, edges, beadMap) {
+  const safeEdges = Array.isArray(edges) ? edges : [];
+  if (graphListPaneRenderer) {
+    try {
+      graphListPaneRenderer(el, {
+        edges: safeEdges,
+        beadMap: beadMap || {},
+        graphNodeTitle,
+        onOpenBead: showBead,
+      });
+      return;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  renderGraphListFallback(el, safeEdges, beadMap || {});
+  ensureGraphListPaneRenderer();
+}
+
 function renderGraph(beads, assocs) {
   const el = document.getElementById('tab-graph');
   const mounted3d = el && el.querySelectorAll ? el.querySelectorAll('.graph-3d-wrap') : [];
@@ -1677,32 +1746,7 @@ function renderGraph(beads, assocs) {
     return;
   }
 
-  edges.slice(0, 140).forEach(a => {
-    const src = String(a.source || '');
-    const dst = String(a.target || '');
-    const srcTitle = graphNodeTitle(beadMap, src);
-    const dstTitle = graphNodeTitle(beadMap, dst);
-
-    const row = document.createElement('div');
-    row.className = 'bench-bucket';
-    row.innerHTML =
-      '<div><strong>' + escapeHtml(String(a.relationship || 'associated_with')) + '</strong></div>' +
-      '<div style="margin-top:2px;color:var(--text-dim)">source: ' + escapeHtml(srcTitle) + '</div>' +
-      '<div style="margin-top:2px;color:var(--text-dim)">target: ' + escapeHtml(dstTitle) + '</div>' +
-      '<div style="margin-top:2px;color:var(--text-dim)">confidence: ' + String(a.confidence === null ? 'n/a' : Number(a.confidence).toFixed(2)) + '</div>' +
-      '<div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap">' +
-        (src ? '<button class="btn" data-bead-id="' + escapeHtml(src) + '">Open source</button>' : '') +
-        (dst ? '<button class="btn" data-bead-id="' + escapeHtml(dst) + '">Open target</button>' : '') +
-      '</div>';
-    row.querySelectorAll('button[data-bead-id]').forEach(btn => {
-      btn.addEventListener('click', ev => {
-        ev.stopPropagation();
-        const bid = btn.getAttribute('data-bead-id') || '';
-        if (bid) showBead(bid);
-      });
-    });
-    el.appendChild(row);
-  });
+  renderGraphList(el, edges, beadMap);
 }
 
 function renderRollingFallback(el, items) {

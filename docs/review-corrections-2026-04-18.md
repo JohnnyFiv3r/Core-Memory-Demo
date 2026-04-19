@@ -51,3 +51,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Continued pane extraction: Benchmark tab now renders via React module (`frontend/public/chat-slices/benchmark-pane.js`) with modal-open callback wiring and fallback preservation in `chat-app.js`.
 - Continued pane extraction: Beads tab now renders via React module (`frontend/public/chat-slices/beads-pane.js`) with bead-open callback wiring and fallback preservation in `chat-app.js`.
 - Continued pane extraction: Associations tab now renders via React module (`frontend/public/chat-slices/associations-pane.js`) with fallback preservation in `chat-app.js`.
+- Continued graph extraction: Graph list rows now render via React module (`frontend/public/chat-slices/graph-list-pane.js`) with bead-open callback wiring and fallback preservation in `chat-app.js`.
