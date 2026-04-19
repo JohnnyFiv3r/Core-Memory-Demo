@@ -37,9 +37,6 @@ const PREF_GRAPH_VIEW_MODE_KEY = 'cm_graph_view_mode';
 const PREF_GRAPH_REL_FILTER_KEY = 'cm_graph_rel_filter';
 const PREF_GRAPH_CONF_FILTER_KEY = 'cm_graph_conf_filter';
 const PREF_GRAPH_SEARCH_FILTER_KEY = 'cm_graph_search_filter';
-const REACT_ESM_SRC = 'https://esm.sh/react@18.3.1';
-const REACT_DOM_CLIENT_ESM_SRC = 'https://esm.sh/react-dom@18.3.1/client';
-const REAGRAPH_ESM_SRC = 'https://esm.sh/reagraph@4.30.8?bundle&deps=react@18.3.1,react-dom@18.3.1';
 
 let graphViewMode = 'list';
 const graphFilters = {
@@ -47,7 +44,6 @@ const graphFilters = {
   minConfidence: 0,
   search: '',
 };
-let reagraphLoadPromise = null;
 let rollingPaneRenderer = null;
 let rollingPaneLoadPromise = null;
 let claimsPaneRenderer = null;
@@ -1214,102 +1210,38 @@ function graphEntityId(v) {
   return graphEntityIdFallback(v);
 }
 
-function ensureReagraphRuntime() {
-  if (reagraphLoadPromise) return reagraphLoadPromise;
-
-  reagraphLoadPromise = Promise.all([
-    import(REACT_ESM_SRC),
-    import(REACT_DOM_CLIENT_ESM_SRC),
-    import(REAGRAPH_ESM_SRC),
-  ])
-    .then(([reactMod, reactDomMod, reagraphMod]) => {
-      const React = reactMod && (reactMod.default || reactMod);
-      const createRoot = reactDomMod && reactDomMod.createRoot;
-      const GraphCanvas = reagraphMod && reagraphMod.GraphCanvas;
-      if (!React || !createRoot || !GraphCanvas) {
-        throw new Error('reagraph_runtime_missing_exports');
-      }
-      return { React, createRoot, GraphCanvas };
-    })
-    .catch((err) => {
-      reagraphLoadPromise = null;
-      throw err;
-    });
-
-  return reagraphLoadPromise;
-}
-
 function ensureGraph3DRuntimeRenderer() {
-  if (graph3dRuntimeRenderer || graph3dRuntimeLoadPromise) return;
+  if (graph3dRuntimeRenderer) {
+    return Promise.resolve(graph3dRuntimeRenderer);
+  }
+  if (graph3dRuntimeLoadPromise) {
+    return graph3dRuntimeLoadPromise;
+  }
 
   graph3dRuntimeLoadPromise = import('/chat-slices/graph-3d-runtime.js')
     .then((mod) => {
       if (mod && typeof mod.renderGraph3DRuntimePane === 'function') {
         graph3dRuntimeRenderer = mod.renderGraph3DRuntimePane;
+        return graph3dRuntimeRenderer;
       }
+      throw new Error('graph_3d_runtime_missing_exports');
     })
-    .catch(() => {
+    .catch((err) => {
       graph3dRuntimeRenderer = null;
+      throw err;
     })
     .finally(() => {
       graph3dRuntimeLoadPromise = null;
       refreshMemory();
     });
+
+  return graph3dRuntimeLoadPromise;
 }
 
 function renderGraph3DRuntime(opts) {
   const safe = opts || {};
 
-  if (graph3dRuntimeRenderer) {
-    try {
-      return Promise.resolve(graph3dRuntimeRenderer(safe));
-    } catch (_) {
-      // fallback below
-    }
-  }
-
-  ensureGraph3DRuntimeRenderer();
-
-  return ensureReagraphRuntime().then(({ React, createRoot, GraphCanvas }) => {
-    if (!safe.canvasHost || !safe.wrap || !safe.graph) {
-      throw new Error('graph_3d_runtime_missing_context');
-    }
-    if (safe.el && !safe.el.contains(safe.canvasHost)) return;
-
-    const root = createRoot(safe.canvasHost);
-    safe.wrap.__cmUnmount = () => {
-      try { root.unmount(); } catch (_) {}
-    };
-
-    root.render(
-      React.createElement(GraphCanvas, {
-        nodes: safe.graph.nodes,
-        edges: safe.graph.edges,
-        layoutType: 'forceDirected3d',
-        cameraMode: 'orbit',
-        draggable: true,
-        animated: true,
-        labelType: 'all',
-        edgeLabelPosition: 'inline',
-        theme: safe.theme || {},
-        onNodeClick: (node) => {
-          const id = graphEntityId(node && (node.id || (node.data || {}).id));
-          if (id && typeof safe.onNodeClick === 'function') safe.onNodeClick(id);
-        },
-        onEdgeClick: (edge) => {
-          if (!edge || typeof safe.onEdgeClick !== 'function') return;
-          const data = edge.data || {};
-          safe.onEdgeClick({
-            source: edge.source,
-            target: edge.target,
-            relationship: edge.label || data.relationship || 'associated_with',
-            confidence: data.confidence,
-            reason_text: data.reason_text,
-          });
-        },
-      })
-    );
-  });
+  return ensureGraph3DRuntimeRenderer().then((renderer) => renderer(safe));
 }
 
 function graphTypeColorFallback(type) {
