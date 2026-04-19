@@ -73,3 +73,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added generic `callSliceWithFallback()` helper and rewired module-backed compute/factory paths (`reagraphDataFromEdges`, `createGraphCanvasHost`) to remove repeated try/fallback blocks.
 - Cleanup pass: added shared `openJsonModal()` helper and rewired repeated modal-open callsites across entities/benchmark/bead detail flows.
 - Cleanup pass: added shared `arrayOrEmpty()` helper and rewired repeated array-normalization callsites in pane/render flows to reduce defensive `Array.isArray(...) ? ... : []` boilerplate.
+- Cleanup pass: added `arrayOr()` and `firstPayloadError()` helpers, then rewired remaining array-check/error-extraction patterns (including benchmark history + seed error handling) to remove residual `Array.isArray` boilerplate.

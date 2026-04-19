@@ -138,6 +138,17 @@ function arrayOrEmpty(value) {
   return Array.isArray(value) ? value : [];
 }
 
+function arrayOr(value, fallback) {
+  return Array.isArray(value) ? value : fallback;
+}
+
+function firstPayloadError(data) {
+  const errors = arrayOrEmpty((data || {}).errors);
+  if (!errors.length) return '';
+  const first = errors[0] || {};
+  return String(first.error || JSON.stringify(first));
+}
+
 function loadGraphPrefs() {
   try {
     const mode = String(localStorage.getItem(PREF_GRAPH_VIEW_MODE_KEY) || 'list').toLowerCase();
@@ -1741,7 +1752,7 @@ function renderGraphControlsFallback(el, opts) {
   const confInput = filters.querySelector('#graph-filter-conf');
   const searchInput = filters.querySelector('#graph-filter-search');
 
-  const relOptions = Array.isArray(opts.relationOptions) ? opts.relationOptions : ['all'];
+  const relOptions = arrayOr(opts.relationOptions, ['all']);
   relOptions.forEach(rel => {
     const opt = document.createElement('option');
     opt.value = String(rel);
@@ -2309,10 +2320,11 @@ function renderEntitiesFallback(entityMeta) {
           ? ('<div style="margin-top:2px;color:var(--amber)">merged_into: ' + escapeHtml(String(r.merged_into)) + '</div>')
           : '') +
         '<div style="margin-top:2px;color:var(--text-dim)">updated: ' + escapeHtml(formatIsoShort(r.updated_at || '')) + '</div>';
-      if (Array.isArray(r.aliases) && r.aliases.length) {
+      const aliases = arrayOrEmpty(r.aliases);
+      if (aliases.length) {
         const aliasesLine = document.createElement('div');
         aliasesLine.style.cssText = 'margin-top:4px;color:var(--text-dim);font-size:11px';
-        aliasesLine.textContent = 'aliases: ' + r.aliases.slice(0, 8).join(', ');
+        aliasesLine.textContent = 'aliases: ' + aliases.slice(0, 8).join(', ');
         card.appendChild(aliasesLine);
       }
       el.appendChild(card);
@@ -2617,7 +2629,7 @@ function renderRuntimeFallback(runtime, lastTurn) {
   const f = runtime?.last_flush || {};
   const fHist = arrayOrEmpty(runtime?.flush_history);
   const my = runtime?.myelination || {};
-  const warnCount = Array.isArray(p.warnings) ? p.warnings.length : 0;
+  const warnCount = arrayOrEmpty(p.warnings).length;
   const mode = String(s.mode || 'degraded_allowed');
   const usable = !!s.usable_backend;
   const strictMode = mode === 'required';
@@ -2929,8 +2941,9 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     }
   }
 
-  if (r && Array.isArray(r.cases)) {
-    const fails = r.cases.filter(c => !c.pass);
+  const cases = arrayOrEmpty(r && r.cases);
+  if (cases.length) {
+    const fails = cases.filter(c => !c.pass);
     if (fails.length) {
       const h = document.createElement('div');
       h.className = 'runtime-card';
@@ -3071,7 +3084,7 @@ async function refreshMemory() {
     renderRolling(mem.rolling_window || data.rolling_window || []);
 
     lastBenchmarkSummary = (data.benchmark || {}).last_summary || lastBenchmarkSummary;
-    lastBenchmarkHistory = Array.isArray((data.benchmark || {}).history) ? (data.benchmark || {}).history : lastBenchmarkHistory;
+    lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
     if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
       try {
         const rb = await fetch('/api/demo/benchmark/last');
@@ -3079,7 +3092,7 @@ async function refreshMemory() {
         if (jb && jb.ok && jb.report) {
           lastBenchmarkReport = jb.report;
           if (jb.summary) lastBenchmarkSummary = jb.summary;
-          if (Array.isArray(jb.history)) lastBenchmarkHistory = jb.history;
+          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
         }
       } catch (_) {
         // best effort only
@@ -3249,10 +3262,7 @@ async function seedMemory() {
       });
       data = await res.json();
       if (!res.ok || !data.ok) {
-        const err =
-          (Array.isArray(data.errors) && data.errors.length > 0 && (data.errors[0].error || JSON.stringify(data.errors[0]))) ||
-          data.error ||
-          ('HTTP ' + res.status);
+        const err = firstPayloadError(data) || data.error || ('HTTP ' + res.status);
         throw new Error(String(err));
       }
 
@@ -3290,10 +3300,7 @@ async function seedMemory() {
       });
       data = await res.json();
       if (!res.ok || !data.ok) {
-        const err =
-          (Array.isArray(data.errors) && data.errors.length > 0 && (data.errors[0].error || JSON.stringify(data.errors[0]))) ||
-          data.error ||
-          ('HTTP ' + res.status);
+        const err = firstPayloadError(data) || data.error || ('HTTP ' + res.status);
         throw new Error(String(err));
       }
       const seeded = Number(data.seeded || data.seeded_turns || 0);
@@ -3396,7 +3403,7 @@ async function runBenchmark() {
     try {
       const rh = await fetch('/api/demo/benchmark/history?limit=20');
       const jh = await rh.json();
-      if (jh && jh.ok && Array.isArray(jh.history)) lastBenchmarkHistory = jh.history;
+      if (jh && jh.ok) lastBenchmarkHistory = arrayOr(jh.history, lastBenchmarkHistory);
     } catch (_) {
       // best effort only
     }
