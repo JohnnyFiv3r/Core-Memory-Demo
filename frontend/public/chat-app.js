@@ -48,6 +48,8 @@ const graphFilters = {
   search: '',
 };
 let reagraphLoadPromise = null;
+let rollingPaneRenderer = null;
+let rollingPaneLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1612,8 +1614,7 @@ function renderGraph(beads, assocs) {
   });
 }
 
-function renderRolling(items) {
-  const el = document.getElementById('tab-rolling');
+function renderRollingFallback(el, items) {
   el.textContent = '';
   if (!items.length) {
     const empty = document.createElement('div');
@@ -1637,6 +1638,41 @@ function renderRolling(items) {
 
     el.appendChild(row);
   });
+}
+
+function ensureRollingPaneRenderer() {
+  if (rollingPaneRenderer || rollingPaneLoadPromise) return;
+
+  rollingPaneLoadPromise = import('/chat-slices/rolling-pane.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderRollingPane === 'function') {
+        rollingPaneRenderer = mod.renderRollingPane;
+      }
+    })
+    .catch(() => {
+      rollingPaneRenderer = null;
+    })
+    .finally(() => {
+      rollingPaneLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderRolling(items) {
+  const el = document.getElementById('tab-rolling');
+  if (!el) return;
+
+  if (rollingPaneRenderer) {
+    try {
+      rollingPaneRenderer(el, items, beadTypeClass);
+      return;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  renderRollingFallback(el, items);
+  ensureRollingPaneRenderer();
 }
 
 function renderClaims(rows, claimsMeta) {
