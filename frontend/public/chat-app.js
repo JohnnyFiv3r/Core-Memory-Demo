@@ -1341,34 +1341,6 @@ function reagraphDataFromEdges(edges, beadMap) {
   return reagraphDataFromEdgesFallback(safeEdges, safeMap);
 }
 
-function renderGraphLegend(el, edges) {
-  const wrap = document.createElement('div');
-  wrap.className = 'graph-legend';
-
-  const counts = {};
-  (edges || []).forEach(e => {
-    const rel = String((e || {}).relationship || 'associated_with');
-    counts[rel] = Number(counts[rel] || 0) + 1;
-  });
-
-  const rows = Object.entries(counts).sort((a, b) => Number(b[1]) - Number(a[1]));
-  rows.slice(0, 14).forEach(([rel, n]) => {
-    const chip = document.createElement('span');
-    chip.className = 'graph-chip';
-    chip.innerHTML = escapeHtml(String(rel)) + ' <span class="graph-chip-count">' + String(n) + '</span>';
-    wrap.appendChild(chip);
-  });
-
-  if (rows.length > 14) {
-    const more = document.createElement('span');
-    more.className = 'graph-chip';
-    more.textContent = '+' + String(rows.length - 14) + ' more';
-    wrap.appendChild(more);
-  }
-
-  el.appendChild(wrap);
-}
-
 function createGraphCanvasHostFallback(el, opts) {
   const wrap = document.createElement('div');
   wrap.className = 'graph-3d-wrap';
