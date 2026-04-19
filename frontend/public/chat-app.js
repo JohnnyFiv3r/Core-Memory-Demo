@@ -68,6 +68,8 @@ let graphControlsPaneRenderer = null;
 let graphControlsPaneLoadPromise = null;
 let graphEdgeDetailPaneRenderer = null;
 let graphEdgeDetailPaneLoadPromise = null;
+let graphSummaryPaneRenderer = null;
+let graphSummaryPaneLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1771,6 +1773,80 @@ function renderGraphEdgeDetail(el, opts) {
   ensureGraphEdgeDetailPaneRenderer();
 }
 
+function renderGraphSummaryFallback(el, opts) {
+  const filteredEdges = Array.isArray((opts || {}).filteredEdges) ? opts.filteredEdges : [];
+  const totalEdges = Number((opts || {}).totalEdges || 0);
+  el.textContent = '';
+
+  const meta = document.createElement('div');
+  meta.className = 'runtime-card';
+  meta.innerHTML =
+    '<div><strong>Filtered graph</strong></div>' +
+    '<div style="margin-top:2px;color:var(--text-dim)">showing ' + String(filteredEdges.length) +
+    ' / ' + String(totalEdges) + ' edges</div>';
+  el.appendChild(meta);
+
+  if (!filteredEdges.length) return;
+
+  const wrap = document.createElement('div');
+  wrap.className = 'graph-legend';
+
+  const counts = {};
+  filteredEdges.forEach(e => {
+    const rel = String((e || {}).relationship || 'associated_with');
+    counts[rel] = Number(counts[rel] || 0) + 1;
+  });
+
+  const rows = Object.entries(counts).sort((a, b) => Number(b[1]) - Number(a[1]));
+  rows.slice(0, 14).forEach(([rel, n]) => {
+    const chip = document.createElement('span');
+    chip.className = 'graph-chip';
+    chip.innerHTML = escapeHtml(String(rel)) + ' <span class="graph-chip-count">' + String(n) + '</span>';
+    wrap.appendChild(chip);
+  });
+
+  if (rows.length > 14) {
+    const more = document.createElement('span');
+    more.className = 'graph-chip';
+    more.textContent = '+' + String(rows.length - 14) + ' more';
+    wrap.appendChild(more);
+  }
+
+  el.appendChild(wrap);
+}
+
+function ensureGraphSummaryPaneRenderer() {
+  if (graphSummaryPaneRenderer || graphSummaryPaneLoadPromise) return;
+
+  graphSummaryPaneLoadPromise = import('/chat-slices/graph-summary-pane.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderGraphSummaryPane === 'function') {
+        graphSummaryPaneRenderer = mod.renderGraphSummaryPane;
+      }
+    })
+    .catch(() => {
+      graphSummaryPaneRenderer = null;
+    })
+    .finally(() => {
+      graphSummaryPaneLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderGraphSummary(el, opts) {
+  if (graphSummaryPaneRenderer) {
+    try {
+      graphSummaryPaneRenderer(el, opts || {});
+      return;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  renderGraphSummaryFallback(el, opts || {});
+  ensureGraphSummaryPaneRenderer();
+}
+
 function renderGraph(beads, assocs) {
   const el = document.getElementById('tab-graph');
   const mounted3d = el && el.querySelectorAll ? el.querySelectorAll('.graph-3d-wrap') : [];
@@ -1836,13 +1912,9 @@ function renderGraph(beads, assocs) {
 
   if (graphViewMode === 'graph') {
     const filtered = applyGraphFilters(edges, beadMap);
-    const meta = document.createElement('div');
-    meta.className = 'runtime-card';
-    meta.innerHTML =
-      '<div><strong>Filtered graph</strong></div>' +
-      '<div style="margin-top:2px;color:var(--text-dim)">showing ' + String(filtered.length) +
-      ' / ' + String(edges.length) + ' edges</div>';
-    el.appendChild(meta);
+    const summaryHost = document.createElement('div');
+    el.appendChild(summaryHost);
+    renderGraphSummary(summaryHost, { filteredEdges: filtered, totalEdges: edges.length });
 
     if (!filtered.length) {
       const empty = document.createElement('div');
@@ -1851,8 +1923,6 @@ function renderGraph(beads, assocs) {
       el.appendChild(empty);
       return;
     }
-
-    renderGraphLegend(el, filtered);
 
     const edgeDetail = document.createElement('div');
     edgeDetail.className = 'runtime-card';
