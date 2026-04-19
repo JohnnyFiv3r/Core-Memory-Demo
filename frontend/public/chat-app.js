@@ -64,6 +64,8 @@ let associationsPaneRenderer = null;
 let associationsPaneLoadPromise = null;
 let graphListPaneRenderer = null;
 let graphListPaneLoadPromise = null;
+let graphControlsPaneRenderer = null;
+let graphControlsPaneLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1587,6 +1589,114 @@ function renderGraphList(el, edges, beadMap) {
   ensureGraphListPaneRenderer();
 }
 
+function renderGraphControlsFallback(el, opts) {
+  const beadCount = Number(opts.beadCount || 0);
+  const edgeCount = Number(opts.edgeCount || 0);
+  const viewMode = String(opts.viewMode || 'list');
+  const showFilters = !!opts.showFilters;
+
+  const toolbar = document.createElement('div');
+  toolbar.className = 'graph-toolbar';
+
+  const summary = document.createElement('div');
+  summary.innerHTML =
+    '<div><strong>Graph pane</strong></div>' +
+    '<div style="margin-top:2px;color:var(--text-dim)">beads=' + String(beadCount) +
+    ' · associations=' + String(edgeCount) + '</div>';
+  toolbar.appendChild(summary);
+
+  const toggle = document.createElement('div');
+  toggle.className = 'graph-toggle';
+  ['list', 'graph'].forEach(mode => {
+    const btn = document.createElement('button');
+    btn.type = 'button';
+    btn.className = 'graph-toggle-btn' + (viewMode === mode ? ' active' : '');
+    btn.textContent = mode === 'list' ? 'List view' : 'Graph view';
+    btn.addEventListener('click', () => {
+      if (typeof opts.onSetMode === 'function') opts.onSetMode(mode);
+    });
+    toggle.appendChild(btn);
+  });
+  toolbar.appendChild(toggle);
+
+  el.appendChild(toolbar);
+
+  if (!showFilters) return;
+
+  const filters = document.createElement('div');
+  filters.className = 'graph-filters';
+  filters.innerHTML =
+    '<span class="graph-filter-label">Filters</span>' +
+    '<select class="control-select" id="graph-filter-rel" style="width:160px"></select>' +
+    '<input class="control-input" id="graph-filter-conf" type="number" min="0" max="1" step="0.05" style="width:90px" />' +
+    '<input class="control-input" id="graph-filter-search" type="text" placeholder="search node/edge" style="flex:1;min-width:160px" />';
+  el.appendChild(filters);
+
+  const relSel = filters.querySelector('#graph-filter-rel');
+  const confInput = filters.querySelector('#graph-filter-conf');
+  const searchInput = filters.querySelector('#graph-filter-search');
+
+  const relOptions = Array.isArray(opts.relationOptions) ? opts.relationOptions : ['all'];
+  relOptions.forEach(rel => {
+    const opt = document.createElement('option');
+    opt.value = String(rel);
+    opt.textContent = String(rel);
+    if (String(rel) === String(opts.relationValue || 'all')) opt.selected = true;
+    relSel.appendChild(opt);
+  });
+
+  confInput.value = String(Number(opts.minConfidence || 0).toFixed(2));
+  searchInput.value = String(opts.search || '');
+
+  relSel.addEventListener('change', () => {
+    if (typeof opts.onSetRelation === 'function') {
+      opts.onSetRelation(String(relSel.value || 'all'));
+    }
+  });
+  confInput.addEventListener('change', () => {
+    if (typeof opts.onSetMinConfidence === 'function') {
+      opts.onSetMinConfidence(confInput.value);
+    }
+  });
+  searchInput.addEventListener('input', () => {
+    if (typeof opts.onSetSearch === 'function') {
+      opts.onSetSearch(String(searchInput.value || '').trim());
+    }
+  });
+}
+
+function ensureGraphControlsPaneRenderer() {
+  if (graphControlsPaneRenderer || graphControlsPaneLoadPromise) return;
+
+  graphControlsPaneLoadPromise = import('/chat-slices/graph-controls-pane.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderGraphControlsPane === 'function') {
+        graphControlsPaneRenderer = mod.renderGraphControlsPane;
+      }
+    })
+    .catch(() => {
+      graphControlsPaneRenderer = null;
+    })
+    .finally(() => {
+      graphControlsPaneLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderGraphControls(el, opts) {
+  if (graphControlsPaneRenderer) {
+    try {
+      graphControlsPaneRenderer(el, opts || {});
+      return;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  renderGraphControlsFallback(el, opts || {});
+  ensureGraphControlsPaneRenderer();
+}
+
 function renderGraph(beads, assocs) {
   const el = document.getElementById('tab-graph');
   const mounted3d = el && el.querySelectorAll ? el.querySelectorAll('.graph-3d-wrap') : [];
@@ -1602,33 +1712,45 @@ function renderGraph(beads, assocs) {
   (beads || []).forEach(b => { beadMap[String(b.id || '')] = b; });
   const edges = normalizeGraphEdges(assocs || []);
 
-  const toolbar = document.createElement('div');
-  toolbar.className = 'graph-toolbar';
+  const rels = graphViewMode === 'graph'
+    ? Array.from(new Set(edges.map(e => String(e.relationship || 'associated_with')))).sort()
+    : [];
+  if (graphViewMode === 'graph' && graphFilters.relation !== 'all' && !rels.includes(graphFilters.relation)) {
+    graphFilters.relation = 'all';
+    saveGraphPrefs();
+  }
 
-  const summary = document.createElement('div');
-  summary.innerHTML =
-    '<div><strong>Graph pane</strong></div>' +
-    '<div style="margin-top:2px;color:var(--text-dim)">beads=' + String((beads || []).length) +
-    ' · associations=' + String(edges.length) + '</div>';
-  toolbar.appendChild(summary);
-
-  const toggle = document.createElement('div');
-  toggle.className = 'graph-toggle';
-  ['list', 'graph'].forEach(mode => {
-    const btn = document.createElement('button');
-    btn.type = 'button';
-    btn.className = 'graph-toggle-btn' + (graphViewMode === mode ? ' active' : '');
-    btn.textContent = mode === 'list' ? 'List view' : 'Graph view';
-    btn.addEventListener('click', () => {
-      graphViewMode = mode;
+  renderGraphControls(el, {
+    beadCount: (beads || []).length,
+    edgeCount: edges.length,
+    viewMode: graphViewMode,
+    showFilters: graphViewMode === 'graph' && edges.length > 0,
+    relationOptions: ['all'].concat(rels),
+    relationValue: String(graphFilters.relation || 'all'),
+    minConfidence: Number(graphFilters.minConfidence || 0),
+    search: String(graphFilters.search || ''),
+    onSetMode: (mode) => {
+      graphViewMode = mode === 'graph' ? 'graph' : 'list';
       saveGraphPrefs();
       renderGraph(beads, assocs);
-    });
-    toggle.appendChild(btn);
+    },
+    onSetRelation: (rel) => {
+      graphFilters.relation = String(rel || 'all');
+      saveGraphPrefs();
+      renderGraph(beads, assocs);
+    },
+    onSetMinConfidence: (raw) => {
+      const v = Number(raw || 0);
+      graphFilters.minConfidence = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
+      saveGraphPrefs();
+      renderGraph(beads, assocs);
+    },
+    onSetSearch: (search) => {
+      graphFilters.search = String(search || '').trim();
+      saveGraphPrefs();
+      renderGraph(beads, assocs);
+    },
   });
-  toolbar.appendChild(toggle);
-
-  el.appendChild(toolbar);
 
   if (!edges.length) {
     const empty = document.createElement('div');
@@ -1639,54 +1761,6 @@ function renderGraph(beads, assocs) {
   }
 
   if (graphViewMode === 'graph') {
-    const rels = Array.from(new Set(edges.map(e => String(e.relationship || 'associated_with')))).sort();
-    if (graphFilters.relation !== 'all' && !rels.includes(graphFilters.relation)) {
-      graphFilters.relation = 'all';
-      saveGraphPrefs();
-    }
-
-    const filters = document.createElement('div');
-    filters.className = 'graph-filters';
-    filters.innerHTML =
-      '<span class="graph-filter-label">Filters</span>' +
-      '<select class="control-select" id="graph-filter-rel" style="width:160px"></select>' +
-      '<input class="control-input" id="graph-filter-conf" type="number" min="0" max="1" step="0.05" style="width:90px" />' +
-      '<input class="control-input" id="graph-filter-search" type="text" placeholder="search node/edge" style="flex:1;min-width:160px" />';
-    el.appendChild(filters);
-
-    const relSel = filters.querySelector('#graph-filter-rel');
-    const confInput = filters.querySelector('#graph-filter-conf');
-    const searchInput = filters.querySelector('#graph-filter-search');
-
-    const relOptions = ['all'].concat(rels);
-    relOptions.forEach(rel => {
-      const opt = document.createElement('option');
-      opt.value = rel;
-      opt.textContent = rel;
-      if (rel === String(graphFilters.relation || 'all')) opt.selected = true;
-      relSel.appendChild(opt);
-    });
-
-    confInput.value = String(Number(graphFilters.minConfidence || 0).toFixed(2));
-    searchInput.value = String(graphFilters.search || '');
-
-    relSel.addEventListener('change', () => {
-      graphFilters.relation = String(relSel.value || 'all');
-      saveGraphPrefs();
-      renderGraph(beads, assocs);
-    });
-    confInput.addEventListener('change', () => {
-      const v = Number(confInput.value || 0);
-      graphFilters.minConfidence = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
-      saveGraphPrefs();
-      renderGraph(beads, assocs);
-    });
-    searchInput.addEventListener('input', () => {
-      graphFilters.search = String(searchInput.value || '').trim();
-      saveGraphPrefs();
-      renderGraph(beads, assocs);
-    });
-
     const filtered = applyGraphFilters(edges, beadMap);
     const meta = document.createElement('div');
     meta.className = 'runtime-card';
