@@ -1120,42 +1120,47 @@ function ensureGraphUtilsModule() {
   );
 }
 
-function graphNumConfidence(v) {
-  if (graphUtilsModule && typeof graphUtilsModule.graphNumConfidence === 'function') {
+function callGraphUtils(methodName, invoke, fallback) {
+  const fn = graphUtilsModule && graphUtilsModule[methodName];
+  if (typeof fn === 'function') {
     try {
-      return graphUtilsModule.graphNumConfidence(v);
+      return invoke(fn);
     } catch (_) {
       // fallback below
     }
   }
   ensureGraphUtilsModule();
-  const n = Number(v);
-  return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
+  return fallback();
+}
+
+function graphNumConfidence(v) {
+  return callGraphUtils(
+    'graphNumConfidence',
+    (fn) => fn(v),
+    () => {
+      const n = Number(v);
+      return Number.isFinite(n) ? Math.max(0, Math.min(1, n)) : null;
+    }
+  );
 }
 
 function graphNodeTitle(beadMap, id) {
-  if (graphUtilsModule && typeof graphUtilsModule.graphNodeTitle === 'function') {
-    try {
-      return graphUtilsModule.graphNodeTitle(beadMap || {}, id);
-    } catch (_) {
-      // fallback below
+  return callGraphUtils(
+    'graphNodeTitle',
+    (fn) => fn(beadMap || {}, id),
+    () => {
+      const bead = (beadMap || {})[String(id || '')] || {};
+      return String(bead.title || id || 'n/a');
     }
-  }
-  ensureGraphUtilsModule();
-  const bead = (beadMap || {})[String(id || '')] || {};
-  return String(bead.title || id || 'n/a');
+  );
 }
 
 function normalizeGraphEdges(assocs) {
-  if (graphUtilsModule && typeof graphUtilsModule.normalizeGraphEdges === 'function') {
-    try {
-      return graphUtilsModule.normalizeGraphEdges(assocs || []);
-    } catch (_) {
-      // fallback below
-    }
-  }
-  ensureGraphUtilsModule();
-  return normalizeGraphEdgesFallback(assocs || []);
+  return callGraphUtils(
+    'normalizeGraphEdges',
+    (fn) => fn(assocs || []),
+    () => normalizeGraphEdgesFallback(assocs || [])
+  );
 }
 
 function applyGraphFilters(edges, beadMap) {
@@ -1164,28 +1169,22 @@ function applyGraphFilters(edges, beadMap) {
     minConfidence: Number(graphFilters.minConfidence || 0),
     search: String(graphFilters.search || ''),
   };
-  if (graphUtilsModule && typeof graphUtilsModule.applyGraphFilters === 'function') {
-    try {
-      return graphUtilsModule.applyGraphFilters(edges || [], beadMap || {}, filters);
-    } catch (_) {
-      // fallback below
-    }
-  }
-  ensureGraphUtilsModule();
-  return applyGraphFiltersFallback(edges || [], beadMap || {}, filters);
+  return callGraphUtils(
+    'applyGraphFilters',
+    (fn) => fn(edges || [], beadMap || {}, filters),
+    () => applyGraphFiltersFallback(edges || [], beadMap || {}, filters)
+  );
 }
 
 function graphEntityId(v) {
-  if (graphUtilsModule && typeof graphUtilsModule.graphEntityId === 'function') {
-    try {
-      return graphUtilsModule.graphEntityId(v);
-    } catch (_) {
-      // fallback below
+  return callGraphUtils(
+    'graphEntityId',
+    (fn) => fn(v),
+    () => {
+      if (v && typeof v === 'object') return String(v.id || v.name || '');
+      return String(v || '');
     }
-  }
-  ensureGraphUtilsModule();
-  if (v && typeof v === 'object') return String(v.id || v.name || '');
-  return String(v || '');
+  );
 }
 
 function ensureGraph3DRuntimeRenderer() {
