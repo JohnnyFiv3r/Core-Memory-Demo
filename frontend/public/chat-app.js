@@ -74,6 +74,8 @@ let graphCanvasHostFactory = null;
 let graphCanvasHostLoadPromise = null;
 let graphSvgCanvasRenderer = null;
 let graphSvgCanvasLoadPromise = null;
+let graph3dRuntimeRenderer = null;
+let graph3dRuntimeLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1150,6 +1152,79 @@ function ensureReagraphRuntime() {
   return reagraphLoadPromise;
 }
 
+function ensureGraph3DRuntimeRenderer() {
+  if (graph3dRuntimeRenderer || graph3dRuntimeLoadPromise) return;
+
+  graph3dRuntimeLoadPromise = import('/chat-slices/graph-3d-runtime.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderGraph3DRuntimePane === 'function') {
+        graph3dRuntimeRenderer = mod.renderGraph3DRuntimePane;
+      }
+    })
+    .catch(() => {
+      graph3dRuntimeRenderer = null;
+    })
+    .finally(() => {
+      graph3dRuntimeLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderGraph3DRuntime(opts) {
+  const safe = opts || {};
+
+  if (graph3dRuntimeRenderer) {
+    try {
+      return Promise.resolve(graph3dRuntimeRenderer(safe));
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  ensureGraph3DRuntimeRenderer();
+
+  return ensureReagraphRuntime().then(({ React, createRoot, GraphCanvas }) => {
+    if (!safe.canvasHost || !safe.wrap || !safe.graph) {
+      throw new Error('graph_3d_runtime_missing_context');
+    }
+    if (safe.el && !safe.el.contains(safe.canvasHost)) return;
+
+    const root = createRoot(safe.canvasHost);
+    safe.wrap.__cmUnmount = () => {
+      try { root.unmount(); } catch (_) {}
+    };
+
+    root.render(
+      React.createElement(GraphCanvas, {
+        nodes: safe.graph.nodes,
+        edges: safe.graph.edges,
+        layoutType: 'forceDirected3d',
+        cameraMode: 'orbit',
+        draggable: true,
+        animated: true,
+        labelType: 'all',
+        edgeLabelPosition: 'inline',
+        theme: safe.theme || {},
+        onNodeClick: (node) => {
+          const id = graphEntityId(node && (node.id || (node.data || {}).id));
+          if (id && typeof safe.onNodeClick === 'function') safe.onNodeClick(id);
+        },
+        onEdgeClick: (edge) => {
+          if (!edge || typeof safe.onEdgeClick !== 'function') return;
+          const data = edge.data || {};
+          safe.onEdgeClick({
+            source: edge.source,
+            target: edge.target,
+            relationship: edge.label || data.relationship || 'associated_with',
+            confidence: data.confidence,
+            reason_text: data.reason_text,
+          });
+        },
+      })
+    );
+  });
+}
+
 function graphTypeColor(type) {
   const t = String(type || '').toLowerCase();
   if (t === 'decision') return '#6ae276';
@@ -1309,68 +1384,40 @@ function renderGraph3DCanvas(el, edges, beadMap, onNodeClick, onEdgeClick) {
   const wrap = host.wrap;
   const canvasHost = host.canvasHost;
 
-  ensureReagraphRuntime()
-    .then(({ React, createRoot, GraphCanvas }) => {
-      if (!el.contains(canvasHost)) return;
+  const graph = reagraphDataFromEdges(edges, beadMap);
+  const theme = {
+    canvas: { background: '#060a16' },
+    node: {
+      fill: '#7ca0ab',
+      activeFill: '#6ae276',
+      opacity: 0.95,
+      selectedOpacity: 1,
+      inactiveOpacity: 0.2,
+      label: { color: '#e1e4ed', stroke: '#060a16', activeColor: '#ffffff' },
+      subLabel: { color: '#8b8fa3', stroke: 'transparent', activeColor: '#e1e4ed' },
+    },
+    edge: {
+      fill: '#5b6a8a',
+      activeFill: '#8ea2ff',
+      opacity: 0.7,
+      selectedOpacity: 1,
+      inactiveOpacity: 0.2,
+      label: { color: '#b8c0d8', stroke: '#060a16', activeColor: '#ffffff' },
+    },
+    lasso: { border: '1px solid #6ae276', background: 'rgba(106,226,118,0.15)' },
+    ring: { fill: '#1f2838', activeFill: '#6ae276' },
+  };
 
-      const graph = reagraphDataFromEdges(edges, beadMap);
-      const root = createRoot(canvasHost);
-      wrap.__cmUnmount = () => {
-        try { root.unmount(); } catch (_) {}
-      };
-
-      const theme = {
-        canvas: { background: '#060a16' },
-        node: {
-          fill: '#7ca0ab',
-          activeFill: '#6ae276',
-          opacity: 0.95,
-          selectedOpacity: 1,
-          inactiveOpacity: 0.2,
-          label: { color: '#e1e4ed', stroke: '#060a16', activeColor: '#ffffff' },
-          subLabel: { color: '#8b8fa3', stroke: 'transparent', activeColor: '#e1e4ed' },
-        },
-        edge: {
-          fill: '#5b6a8a',
-          activeFill: '#8ea2ff',
-          opacity: 0.7,
-          selectedOpacity: 1,
-          inactiveOpacity: 0.2,
-          label: { color: '#b8c0d8', stroke: '#060a16', activeColor: '#ffffff' },
-        },
-        lasso: { border: '1px solid #6ae276', background: 'rgba(106,226,118,0.15)' },
-        ring: { fill: '#1f2838', activeFill: '#6ae276' },
-      };
-
-      root.render(
-        React.createElement(GraphCanvas, {
-          nodes: graph.nodes,
-          edges: graph.edges,
-          layoutType: 'forceDirected3d',
-          cameraMode: 'orbit',
-          draggable: true,
-          animated: true,
-          labelType: 'all',
-          edgeLabelPosition: 'inline',
-          theme,
-          onNodeClick: (node) => {
-            const id = graphEntityId(node && (node.id || (node.data || {}).id));
-            if (id && typeof onNodeClick === 'function') onNodeClick(id);
-          },
-          onEdgeClick: (edge) => {
-            if (!edge || typeof onEdgeClick !== 'function') return;
-            const data = edge.data || {};
-            onEdgeClick({
-              source: edge.source,
-              target: edge.target,
-              relationship: edge.label || data.relationship || 'associated_with',
-              confidence: data.confidence,
-              reason_text: data.reason_text,
-            });
-          },
-        })
-      );
-
+  renderGraph3DRuntime({
+    el,
+    wrap,
+    canvasHost,
+    graph,
+    theme,
+    onNodeClick,
+    onEdgeClick,
+  })
+    .then(() => {
       if (host && typeof host.setNote === 'function') {
         host.setNote('Reagraph 3D: drag to orbit, right-drag to pan, wheel to zoom, drag nodes to reposition.');
       }
