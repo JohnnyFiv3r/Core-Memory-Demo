@@ -72,6 +72,8 @@ let graphSummaryPaneRenderer = null;
 let graphSummaryPaneLoadPromise = null;
 let graphCanvasHostFactory = null;
 let graphCanvasHostLoadPromise = null;
+let graphSvgCanvasRenderer = null;
+let graphSvgCanvasLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1384,7 +1386,7 @@ function renderGraph3DCanvas(el, edges, beadMap, onNodeClick, onEdgeClick) {
     });
 }
 
-function renderGraphSvgCanvas(el, edges, beadMap, onEdgeClick) {
+function renderGraphSvgCanvasFallback(el, edges, beadMap, onEdgeClick) {
   const svgNs = 'http://www.w3.org/2000/svg';
   const wrap = document.createElement('div');
   wrap.className = 'graph-canvas-wrap';
@@ -1584,6 +1586,47 @@ function renderGraphSvgCanvas(el, edges, beadMap, onEdgeClick) {
     ' · edges=' + String(limitedEdges.length) +
     ' · drag to pan · wheel to zoom · double-click to reset.</div>';
   el.appendChild(note);
+}
+
+function ensureGraphSvgCanvasRenderer() {
+  if (graphSvgCanvasRenderer || graphSvgCanvasLoadPromise) return;
+
+  graphSvgCanvasLoadPromise = import('/chat-slices/graph-svg-canvas.js')
+    .then((mod) => {
+      if (mod && typeof mod.renderGraphSvgCanvasPane === 'function') {
+        graphSvgCanvasRenderer = mod.renderGraphSvgCanvasPane;
+      }
+    })
+    .catch(() => {
+      graphSvgCanvasRenderer = null;
+    })
+    .finally(() => {
+      graphSvgCanvasLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function renderGraphSvgCanvas(el, edges, beadMap, onEdgeClick) {
+  const safeEdges = Array.isArray(edges) ? edges : [];
+  const safeMap = beadMap || {};
+
+  if (graphSvgCanvasRenderer) {
+    try {
+      graphSvgCanvasRenderer(el, {
+        edges: safeEdges,
+        beadMap: safeMap,
+        graphNodeTitle,
+        onOpenBead: showBead,
+        onEdgeClick,
+      });
+      return;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  renderGraphSvgCanvasFallback(el, safeEdges, safeMap, onEdgeClick);
+  ensureGraphSvgCanvasRenderer();
 }
 
 function renderGraphListFallback(el, edges, beadMap) {

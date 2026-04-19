@@ -56,3 +56,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Continued graph extraction: Graph edge-detail card/actions now render via React module (`frontend/public/chat-slices/graph-edge-detail-pane.js`) with bead-open callback wiring and fallback preservation in `chat-app.js`.
 - Continued graph extraction: Graph filtered-summary/legend card now renders via React module (`frontend/public/chat-slices/graph-summary-pane.js`) with fallback preservation in `chat-app.js`.
 - Continued graph extraction: Graph 3D canvas host wrapper now renders via dedicated slice module (`frontend/public/chat-slices/graph-canvas-host.js`) with fallback preservation in `chat-app.js`.
+- Continued graph extraction: SVG graph fallback canvas now renders via dedicated slice module (`frontend/public/chat-slices/graph-svg-canvas.js`) with fallback preservation in `chat-app.js`.
