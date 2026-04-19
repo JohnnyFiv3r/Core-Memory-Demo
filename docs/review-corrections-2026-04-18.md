@@ -68,3 +68,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: extended shared `lazyLoadSlice()` usage to non-graph pane loaders (`beads`, `associations`, `rolling`, `claims`, `entities`, `runtime`, `benchmark`) to reduce repeated dynamic-import boilerplate.
 - Cleanup pass: centralized repeated renderer-or-fallback invocation patterns in `chat-app.js` via shared `renderViaSlice()` helper across graph + non-graph pane render paths.
 - Cleanup pass: replaced per-module `*LoadPromise` variables with shared keyed loader registry (`sliceLoadState` + `ensureSliceLoad()`) and rewired all `ensure*` slice loaders to use it.
+- Cleanup pass: added shared `ensureSliceBinding()` helper and rewired all `ensure*` slice loaders to use it, removing repeated guard-and-load wrapper boilerplate.

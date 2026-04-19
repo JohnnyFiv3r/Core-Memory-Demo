@@ -114,6 +114,12 @@ function ensureSliceLoad(key, beginLoad) {
   return sliceLoadState[k];
 }
 
+function ensureSliceBinding(currentValue, key, path, pick, assign, opts) {
+  if (currentValue) return Promise.resolve(currentValue);
+  if (sliceLoadState[key]) return sliceLoadState[key];
+  return ensureSliceLoad(key, () => lazyLoadSlice(path, pick, assign, opts));
+}
+
 function loadGraphPrefs() {
   try {
     const mode = String(localStorage.getItem(PREF_GRAPH_VIEW_MODE_KEY) || 'list').toLowerCase();
@@ -970,14 +976,12 @@ function renderBeadsFallback(beads) {
 }
 
 function ensureBeadsPaneRenderer() {
-  if (beadsPaneRenderer || sliceLoadState.beadsPaneRenderer) return;
-
-  ensureSliceLoad('beadsPaneRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/beads-pane.js',
-      (mod) => (mod && typeof mod.renderBeadsPane === 'function' ? mod.renderBeadsPane : null),
-      (value) => { beadsPaneRenderer = value; }
-    )
+  return ensureSliceBinding(
+    beadsPaneRenderer,
+    'beadsPaneRenderer',
+    '/chat-slices/beads-pane.js',
+    (mod) => (mod && typeof mod.renderBeadsPane === 'function' ? mod.renderBeadsPane : null),
+    (value) => { beadsPaneRenderer = value; }
   );
 }
 
@@ -1035,14 +1039,12 @@ function renderAssociationsFallback(assocs) {
 }
 
 function ensureAssociationsPaneRenderer() {
-  if (associationsPaneRenderer || sliceLoadState.associationsPaneRenderer) return;
-
-  ensureSliceLoad('associationsPaneRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/associations-pane.js',
-      (mod) => (mod && typeof mod.renderAssociationsPane === 'function' ? mod.renderAssociationsPane : null),
-      (value) => { associationsPaneRenderer = value; }
-    )
+  return ensureSliceBinding(
+    associationsPaneRenderer,
+    'associationsPaneRenderer',
+    '/chat-slices/associations-pane.js',
+    (mod) => (mod && typeof mod.renderAssociationsPane === 'function' ? mod.renderAssociationsPane : null),
+    (value) => { associationsPaneRenderer = value; }
   );
 }
 
@@ -1109,14 +1111,12 @@ function applyGraphFiltersFallback(edges, beadMap, filters) {
 }
 
 function ensureGraphUtilsModule() {
-  if (graphUtilsModule || sliceLoadState.graphUtilsModule) return;
-
-  ensureSliceLoad('graphUtilsModule', () =>
-    lazyLoadSlice(
-      '/chat-slices/graph-utils.js',
-      (mod) => (mod && typeof mod.graphNodeTitle === 'function' ? mod : null),
-      (value) => { graphUtilsModule = value; }
-    )
+  return ensureSliceBinding(
+    graphUtilsModule,
+    'graphUtilsModule',
+    '/chat-slices/graph-utils.js',
+    (mod) => (mod && typeof mod.graphNodeTitle === 'function' ? mod : null),
+    (value) => { graphUtilsModule = value; }
   );
 }
 
@@ -1189,20 +1189,13 @@ function graphEntityId(v) {
 }
 
 function ensureGraph3DRuntimeRenderer() {
-  if (graph3dRuntimeRenderer) {
-    return Promise.resolve(graph3dRuntimeRenderer);
-  }
-  if (sliceLoadState.graph3dRuntimeRenderer) {
-    return sliceLoadState.graph3dRuntimeRenderer;
-  }
-
-  return ensureSliceLoad('graph3dRuntimeRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/graph-3d-runtime.js',
-      (mod) => (mod && typeof mod.renderGraph3DRuntimePane === 'function' ? mod.renderGraph3DRuntimePane : null),
-      (value) => { graph3dRuntimeRenderer = value; },
-      { throwOnMissing: true, missingError: 'graph_3d_runtime_missing_exports' }
-    )
+  return ensureSliceBinding(
+    graph3dRuntimeRenderer,
+    'graph3dRuntimeRenderer',
+    '/chat-slices/graph-3d-runtime.js',
+    (mod) => (mod && typeof mod.renderGraph3DRuntimePane === 'function' ? mod.renderGraph3DRuntimePane : null),
+    (value) => { graph3dRuntimeRenderer = value; },
+    { throwOnMissing: true, missingError: 'graph_3d_runtime_missing_exports' }
   );
 }
 
@@ -1275,14 +1268,12 @@ function reagraphDataFromEdgesFallback(edges, beadMap) {
 }
 
 function ensureGraphDataBuilder() {
-  if (graphDataBuilder || sliceLoadState.graphDataBuilder) return;
-
-  ensureSliceLoad('graphDataBuilder', () =>
-    lazyLoadSlice(
-      '/chat-slices/graph-reagraph-data.js',
-      (mod) => (mod && typeof mod.buildReagraphData === 'function' ? mod.buildReagraphData : null),
-      (value) => { graphDataBuilder = value; }
-    )
+  return ensureSliceBinding(
+    graphDataBuilder,
+    'graphDataBuilder',
+    '/chat-slices/graph-reagraph-data.js',
+    (mod) => (mod && typeof mod.buildReagraphData === 'function' ? mod.buildReagraphData : null),
+    (value) => { graphDataBuilder = value; }
   );
 }
 
@@ -1333,14 +1324,12 @@ function createGraphCanvasHostFallback(el, opts) {
 }
 
 function ensureGraphCanvasHostFactory() {
-  if (graphCanvasHostFactory || sliceLoadState.graphCanvasHostFactory) return;
-
-  ensureSliceLoad('graphCanvasHostFactory', () =>
-    lazyLoadSlice(
-      '/chat-slices/graph-canvas-host.js',
-      (mod) => (mod && typeof mod.createGraphCanvasHost === 'function' ? mod.createGraphCanvasHost : null),
-      (value) => { graphCanvasHostFactory = value; }
-    )
+  return ensureSliceBinding(
+    graphCanvasHostFactory,
+    'graphCanvasHostFactory',
+    '/chat-slices/graph-canvas-host.js',
+    (mod) => (mod && typeof mod.createGraphCanvasHost === 'function' ? mod.createGraphCanvasHost : null),
+    (value) => { graphCanvasHostFactory = value; }
   );
 }
 
@@ -1616,14 +1605,12 @@ function renderGraphSvgCanvasFallback(el, edges, beadMap, onEdgeClick) {
 }
 
 function ensureGraphSvgCanvasRenderer() {
-  if (graphSvgCanvasRenderer || sliceLoadState.graphSvgCanvasRenderer) return;
-
-  ensureSliceLoad('graphSvgCanvasRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/graph-svg-canvas.js',
-      (mod) => (mod && typeof mod.renderGraphSvgCanvasPane === 'function' ? mod.renderGraphSvgCanvasPane : null),
-      (value) => { graphSvgCanvasRenderer = value; }
-    )
+  return ensureSliceBinding(
+    graphSvgCanvasRenderer,
+    'graphSvgCanvasRenderer',
+    '/chat-slices/graph-svg-canvas.js',
+    (mod) => (mod && typeof mod.renderGraphSvgCanvasPane === 'function' ? mod.renderGraphSvgCanvasPane : null),
+    (value) => { graphSvgCanvasRenderer = value; }
   );
 }
 
@@ -1675,14 +1662,12 @@ function renderGraphListFallback(el, edges, beadMap) {
 }
 
 function ensureGraphListPaneRenderer() {
-  if (graphListPaneRenderer || sliceLoadState.graphListPaneRenderer) return;
-
-  ensureSliceLoad('graphListPaneRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/graph-list-pane.js',
-      (mod) => (mod && typeof mod.renderGraphListPane === 'function' ? mod.renderGraphListPane : null),
-      (value) => { graphListPaneRenderer = value; }
-    )
+  return ensureSliceBinding(
+    graphListPaneRenderer,
+    'graphListPaneRenderer',
+    '/chat-slices/graph-list-pane.js',
+    (mod) => (mod && typeof mod.renderGraphListPane === 'function' ? mod.renderGraphListPane : null),
+    (value) => { graphListPaneRenderer = value; }
   );
 }
 
@@ -1778,14 +1763,12 @@ function renderGraphControlsFallback(el, opts) {
 }
 
 function ensureGraphControlsPaneRenderer() {
-  if (graphControlsPaneRenderer || sliceLoadState.graphControlsPaneRenderer) return;
-
-  ensureSliceLoad('graphControlsPaneRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/graph-controls-pane.js',
-      (mod) => (mod && typeof mod.renderGraphControlsPane === 'function' ? mod.renderGraphControlsPane : null),
-      (value) => { graphControlsPaneRenderer = value; }
-    )
+  return ensureSliceBinding(
+    graphControlsPaneRenderer,
+    'graphControlsPaneRenderer',
+    '/chat-slices/graph-controls-pane.js',
+    (mod) => (mod && typeof mod.renderGraphControlsPane === 'function' ? mod.renderGraphControlsPane : null),
+    (value) => { graphControlsPaneRenderer = value; }
   );
 }
 
@@ -1839,14 +1822,12 @@ function renderGraphEdgeDetailFallback(el, opts) {
 }
 
 function ensureGraphEdgeDetailPaneRenderer() {
-  if (graphEdgeDetailPaneRenderer || sliceLoadState.graphEdgeDetailPaneRenderer) return;
-
-  ensureSliceLoad('graphEdgeDetailPaneRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/graph-edge-detail-pane.js',
-      (mod) => (mod && typeof mod.renderGraphEdgeDetailPane === 'function' ? mod.renderGraphEdgeDetailPane : null),
-      (value) => { graphEdgeDetailPaneRenderer = value; }
-    )
+  return ensureSliceBinding(
+    graphEdgeDetailPaneRenderer,
+    'graphEdgeDetailPaneRenderer',
+    '/chat-slices/graph-edge-detail-pane.js',
+    (mod) => (mod && typeof mod.renderGraphEdgeDetailPane === 'function' ? mod.renderGraphEdgeDetailPane : null),
+    (value) => { graphEdgeDetailPaneRenderer = value; }
   );
 }
 
@@ -1902,14 +1883,12 @@ function renderGraphSummaryFallback(el, opts) {
 }
 
 function ensureGraphSummaryPaneRenderer() {
-  if (graphSummaryPaneRenderer || sliceLoadState.graphSummaryPaneRenderer) return;
-
-  ensureSliceLoad('graphSummaryPaneRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/graph-summary-pane.js',
-      (mod) => (mod && typeof mod.renderGraphSummaryPane === 'function' ? mod.renderGraphSummaryPane : null),
-      (value) => { graphSummaryPaneRenderer = value; }
-    )
+  return ensureSliceBinding(
+    graphSummaryPaneRenderer,
+    'graphSummaryPaneRenderer',
+    '/chat-slices/graph-summary-pane.js',
+    (mod) => (mod && typeof mod.renderGraphSummaryPane === 'function' ? mod.renderGraphSummaryPane : null),
+    (value) => { graphSummaryPaneRenderer = value; }
   );
 }
 
@@ -2051,14 +2030,12 @@ function renderRollingFallback(el, items) {
 }
 
 function ensureRollingPaneRenderer() {
-  if (rollingPaneRenderer || sliceLoadState.rollingPaneRenderer) return;
-
-  ensureSliceLoad('rollingPaneRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/rolling-pane.js',
-      (mod) => (mod && typeof mod.renderRollingPane === 'function' ? mod.renderRollingPane : null),
-      (value) => { rollingPaneRenderer = value; }
-    )
+  return ensureSliceBinding(
+    rollingPaneRenderer,
+    'rollingPaneRenderer',
+    '/chat-slices/rolling-pane.js',
+    (mod) => (mod && typeof mod.renderRollingPane === 'function' ? mod.renderRollingPane : null),
+    (value) => { rollingPaneRenderer = value; }
   );
 }
 
@@ -2215,14 +2192,12 @@ function renderClaimsFallback(rows, claimsMeta) {
 
 
 function ensureClaimsPaneRenderer() {
-  if (claimsPaneRenderer || sliceLoadState.claimsPaneRenderer) return;
-
-  ensureSliceLoad('claimsPaneRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/claims-pane.js',
-      (mod) => (mod && typeof mod.renderClaimsPane === 'function' ? mod.renderClaimsPane : null),
-      (value) => { claimsPaneRenderer = value; }
-    )
+  return ensureSliceBinding(
+    claimsPaneRenderer,
+    'claimsPaneRenderer',
+    '/chat-slices/claims-pane.js',
+    (mod) => (mod && typeof mod.renderClaimsPane === 'function' ? mod.renderClaimsPane : null),
+    (value) => { claimsPaneRenderer = value; }
   );
 }
 
@@ -2403,14 +2378,12 @@ function renderEntitiesFallback(entityMeta) {
 }
 
 function ensureEntitiesPaneRenderer() {
-  if (entitiesPaneRenderer || sliceLoadState.entitiesPaneRenderer) return;
-
-  ensureSliceLoad('entitiesPaneRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/entities-pane.js',
-      (mod) => (mod && typeof mod.renderEntitiesPane === 'function' ? mod.renderEntitiesPane : null),
-      (value) => { entitiesPaneRenderer = value; }
-    )
+  return ensureSliceBinding(
+    entitiesPaneRenderer,
+    'entitiesPaneRenderer',
+    '/chat-slices/entities-pane.js',
+    (mod) => (mod && typeof mod.renderEntitiesPane === 'function' ? mod.renderEntitiesPane : null),
+    (value) => { entitiesPaneRenderer = value; }
   );
 }
 
@@ -2767,14 +2740,12 @@ function renderRuntimeFallback(runtime, lastTurn) {
 }
 
 function ensureRuntimePaneRenderer() {
-  if (runtimePaneRenderer || sliceLoadState.runtimePaneRenderer) return;
-
-  ensureSliceLoad('runtimePaneRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/runtime-pane.js',
-      (mod) => (mod && typeof mod.renderRuntimePane === 'function' ? mod.renderRuntimePane : null),
-      (value) => { runtimePaneRenderer = value; }
-    )
+  return ensureSliceBinding(
+    runtimePaneRenderer,
+    'runtimePaneRenderer',
+    '/chat-slices/runtime-pane.js',
+    (mod) => (mod && typeof mod.renderRuntimePane === 'function' ? mod.renderRuntimePane : null),
+    (value) => { runtimePaneRenderer = value; }
   );
 }
 
@@ -3039,14 +3010,12 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
 }
 
 function ensureBenchmarkPaneRenderer() {
-  if (benchmarkPaneRenderer || sliceLoadState.benchmarkPaneRenderer) return;
-
-  ensureSliceLoad('benchmarkPaneRenderer', () =>
-    lazyLoadSlice(
-      '/chat-slices/benchmark-pane.js',
-      (mod) => (mod && typeof mod.renderBenchmarkPane === 'function' ? mod.renderBenchmarkPane : null),
-      (value) => { benchmarkPaneRenderer = value; }
-    )
+  return ensureSliceBinding(
+    benchmarkPaneRenderer,
+    'benchmarkPaneRenderer',
+    '/chat-slices/benchmark-pane.js',
+    (mod) => (mod && typeof mod.renderBenchmarkPane === 'function' ? mod.renderBenchmarkPane : null),
+    (value) => { benchmarkPaneRenderer = value; }
   );
 }
 
