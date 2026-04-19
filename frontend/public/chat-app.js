@@ -70,6 +70,8 @@ let graphEdgeDetailPaneRenderer = null;
 let graphEdgeDetailPaneLoadPromise = null;
 let graphSummaryPaneRenderer = null;
 let graphSummaryPaneLoadPromise = null;
+let graphCanvasHostFactory = null;
+let graphCanvasHostLoadPromise = null;
 
 function loadGraphPrefs() {
   try {
@@ -1237,17 +1239,73 @@ function renderGraphLegend(el, edges) {
   el.appendChild(wrap);
 }
 
-function renderGraph3DCanvas(el, edges, beadMap, onNodeClick, onEdgeClick) {
+function createGraphCanvasHostFallback(el, opts) {
   const wrap = document.createElement('div');
   wrap.className = 'graph-3d-wrap';
+
   const canvasHost = document.createElement('div');
   canvasHost.className = 'graph-3d-canvas';
   wrap.appendChild(canvasHost);
+
   const loading = document.createElement('div');
   loading.className = 'graph-3d-note';
-  loading.textContent = 'Loading 3D graph...';
+  loading.textContent = String((opts || {}).noteText || 'Loading 3D graph...');
   wrap.appendChild(loading);
+
   el.appendChild(wrap);
+
+  return {
+    wrap,
+    canvasHost,
+    setNote: (text) => {
+      loading.textContent = String(text || '');
+    },
+    removeNote: () => {
+      if (loading && loading.parentNode) loading.remove();
+    },
+    removeCanvasHost: () => {
+      if (canvasHost && canvasHost.parentNode) canvasHost.remove();
+    },
+  };
+}
+
+function ensureGraphCanvasHostFactory() {
+  if (graphCanvasHostFactory || graphCanvasHostLoadPromise) return;
+
+  graphCanvasHostLoadPromise = import('/chat-slices/graph-canvas-host.js')
+    .then((mod) => {
+      if (mod && typeof mod.createGraphCanvasHost === 'function') {
+        graphCanvasHostFactory = mod.createGraphCanvasHost;
+      }
+    })
+    .catch(() => {
+      graphCanvasHostFactory = null;
+    })
+    .finally(() => {
+      graphCanvasHostLoadPromise = null;
+      refreshMemory();
+    });
+}
+
+function createGraphCanvasHost(el, opts) {
+  if (graphCanvasHostFactory) {
+    try {
+      const out = graphCanvasHostFactory(el, opts || {});
+      if (out && out.wrap && out.canvasHost) return out;
+    } catch (_) {
+      // fallback below
+    }
+  }
+
+  const host = createGraphCanvasHostFallback(el, opts || {});
+  ensureGraphCanvasHostFactory();
+  return host;
+}
+
+function renderGraph3DCanvas(el, edges, beadMap, onNodeClick, onEdgeClick) {
+  const host = createGraphCanvasHost(el, { noteText: 'Loading 3D graph...' });
+  const wrap = host.wrap;
+  const canvasHost = host.canvasHost;
 
   ensureReagraphRuntime()
     .then(({ React, createRoot, GraphCanvas }) => {
@@ -1311,15 +1369,17 @@ function renderGraph3DCanvas(el, edges, beadMap, onNodeClick, onEdgeClick) {
         })
       );
 
-      loading.textContent = 'Reagraph 3D: drag to orbit, right-drag to pan, wheel to zoom, drag nodes to reposition.';
+      if (host && typeof host.setNote === 'function') {
+        host.setNote('Reagraph 3D: drag to orbit, right-drag to pan, wheel to zoom, drag nodes to reposition.');
+      }
     })
     .catch(() => {
       if (typeof wrap.__cmUnmount === 'function') {
         try { wrap.__cmUnmount(); } catch (_) {}
       }
       if (!el.contains(canvasHost)) return;
-      canvasHost.remove();
-      loading.remove();
+      if (host && typeof host.removeCanvasHost === 'function') host.removeCanvasHost();
+      if (host && typeof host.removeNote === 'function') host.removeNote();
       renderGraphSvgCanvas(el, edges, beadMap, onEdgeClick);
     });
 }
