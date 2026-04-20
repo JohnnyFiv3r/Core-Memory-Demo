@@ -2783,6 +2783,28 @@ function renderRuntime(runtime, lastTurn) {
   );
 }
 
+function appendBenchCards(container, entries) {
+  arrayOrEmpty(entries).forEach(([k, v]) => {
+    const c = document.createElement('div');
+    c.className = 'bench-card';
+    c.innerHTML = '<div class="k">' + String(k) + '</div><div class="v">' + String(v) + '</div>';
+    container.appendChild(c);
+  });
+}
+
+function appendBenchBucket(container, html, modalTitle, payload) {
+  const row = document.createElement('div');
+  row.className = 'bench-bucket';
+  row.innerHTML = String(html || '');
+  if (modalTitle) {
+    row.addEventListener('click', () => {
+      openJsonModal(String(modalTitle), payload);
+    });
+  }
+  container.appendChild(row);
+  return row;
+}
+
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
@@ -2799,17 +2821,15 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
       el.appendChild(h);
       history.slice(0, 8).forEach(r => {
         const s = r.summary || {};
-        const row = document.createElement('div');
-        row.className = 'bench-bucket';
-        row.innerHTML =
+        appendBenchBucket(
+          el,
           '<div><strong>' + escapeHtml(String(s.run_id || r.run_id || 'run')) + '</strong></div>' +
           '<div style="margin-top:2px;color:var(--text-dim)">acc=' + Number(s.accuracy || 0).toFixed(4) +
           ' · pass/fail=' + String((s.pass || 0) + '/' + (s.fail || 0)) +
-          ' · at=' + escapeHtml(formatIsoShort(String(s.finished_at || r.created_at || ''))) + '</div>';
-        row.addEventListener('click', () => {
-          openJsonModal('Benchmark run summary', r);
-        });
-        el.appendChild(row);
+          ' · at=' + escapeHtml(formatIsoShort(String(s.finished_at || r.created_at || ''))) + '</div>',
+          'Benchmark run summary',
+          r
+        );
       });
     }
     return;
@@ -2827,12 +2847,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     ['latency mean (ms)', latencyMean],
     ['tokens est', tokenTotal.toLocaleString()],
   ];
-  cards.forEach(([k, v]) => {
-    const c = document.createElement('div');
-    c.className = 'bench-card';
-    c.innerHTML = '<div class="k">' + k + '</div><div class="v">' + v + '</div>';
-    g.appendChild(c);
-  });
+  appendBenchCards(g, cards);
   el.appendChild(g);
 
   const meta = document.createElement('div');
@@ -2864,11 +2879,11 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   if (r && r.per_bucket) {
     Object.keys(r.per_bucket).sort().forEach(k => {
       const row = r.per_bucket[k] || {};
-      const b = document.createElement('div');
-      b.className = 'bench-bucket';
-      b.innerHTML = '<strong>' + k + '</strong> · acc=' + Number(row.accuracy || 0).toFixed(4) +
-        ' · pass/fail=' + String((row.pass || 0) + '/' + (row.fail || 0));
-      el.appendChild(b);
+      appendBenchBucket(
+        el,
+        '<strong>' + k + '</strong> · acc=' + Number(row.accuracy || 0).toFixed(4) +
+        ' · pass/fail=' + String((row.pass || 0) + '/' + (row.fail || 0))
+      );
     });
   }
 
@@ -2895,17 +2910,12 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
 
     const mg = document.createElement('div');
     mg.className = 'bench-grid';
-    [
+    appendBenchCards(mg, [
       ['improved', String(improved.length)],
       ['regressed', String(regressed.length)],
       ['changed', String(changed.length)],
       ['unchanged', String(cases.length - changed.length)],
-    ].forEach(([k, v]) => {
-      const c = document.createElement('div');
-      c.className = 'bench-card';
-      c.innerHTML = '<div class="k">' + k + '</div><div class="v">' + v + '</div>';
-      mg.appendChild(c);
-    });
+    ]);
     el.appendChild(mg);
 
     if (changed.length) {
@@ -2977,19 +2987,17 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
 
     history.slice(0, 12).forEach((rowData, idx) => {
       const s = rowData.summary || {};
-      const row = document.createElement('div');
-      row.className = 'bench-bucket';
-      row.innerHTML =
+      appendBenchBucket(
+        el,
         '<div><strong>' + escapeHtml(String(s.run_id || rowData.run_id || ('run-' + idx))) + '</strong></div>' +
         '<div style="margin-top:2px;color:var(--text-dim)">acc=' + Number(s.accuracy || 0).toFixed(4) +
         ' · pass/fail=' + String((s.pass || 0) + '/' + (s.fail || 0)) +
         ' · latency=' + Number(s.latency_mean_ms || 0).toFixed(2) + 'ms' +
         ' · tokens=' + Number(s.tokens_total_est || 0).toLocaleString() + '</div>' +
-        '<div style="margin-top:2px;color:var(--text-dim)">at=' + escapeHtml(formatIsoShort(String(s.finished_at || rowData.created_at || ''))) + '</div>';
-      row.addEventListener('click', () => {
-        openJsonModal('Benchmark run', rowData);
-      });
-      el.appendChild(row);
+        '<div style="margin-top:2px;color:var(--text-dim)">at=' + escapeHtml(formatIsoShort(String(s.finished_at || rowData.created_at || ''))) + '</div>',
+        'Benchmark run',
+        rowData
+      );
     });
 
     if (summary.run_id && history.length >= 2) {
