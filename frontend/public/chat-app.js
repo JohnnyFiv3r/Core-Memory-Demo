@@ -2983,6 +2983,19 @@ function benchmarkMyelinationPassFailLine(baseline, enabled) {
     ' · enabled=' + benchmarkPassFail(e.pass ?? 0, e.fail ?? 0) + '</div>';
 }
 
+function benchmarkMyelinationCountCards(improvedCount, regressedCount, changedCount, totalCount) {
+  const i = Number(improvedCount || 0);
+  const r = Number(regressedCount || 0);
+  const c = Number(changedCount || 0);
+  const t = Number(totalCount || 0);
+  return [
+    ['improved', String(i)],
+    ['regressed', String(r)],
+    ['changed', String(c)],
+    ['unchanged', String(t - c)],
+  ];
+}
+
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
@@ -3075,12 +3088,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
 
     const mg = document.createElement('div');
     mg.className = 'bench-grid';
-    appendBenchCards(mg, [
-      ['improved', String(improved.length)],
-      ['regressed', String(regressed.length)],
-      ['changed', String(changed.length)],
-      ['unchanged', String(cases.length - changed.length)],
-    ]);
+    appendBenchCards(mg, benchmarkMyelinationCountCards(improved.length, regressed.length, changed.length, cases.length));
     el.appendChild(mg);
 
     if (changed.length) {
