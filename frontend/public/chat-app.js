@@ -3004,6 +3004,27 @@ function benchmarkCaseTransitionHtml(improvedNow, regressedNow) {
   return 'changed';
 }
 
+function benchmarkRegressedNow(caseRow) {
+  const c = caseRow || {};
+  return !!c.baseline_pass && !c.enabled_pass;
+}
+
+function benchmarkImprovedNow(caseRow) {
+  const c = caseRow || {};
+  return !c.baseline_pass && !!c.enabled_pass;
+}
+
+function benchmarkPassStateCaseCompare(a, b) {
+  const aReg = benchmarkRegressedNow(a) ? 1 : 0;
+  const bReg = benchmarkRegressedNow(b) ? 1 : 0;
+  if (aReg !== bReg) return bReg - aReg; // regressions first
+  return benchmarkCaseId((a || {}).case_id, '').localeCompare(benchmarkCaseId((b || {}).case_id, ''));
+}
+
+function benchmarkSortedPassStateChanges(changedCases) {
+  return arrayOrEmpty(changedCases).slice().sort(benchmarkPassStateCaseCompare);
+}
+
 function benchmarkRunId(runId, fallback) {
   const s = String(runId || '').trim();
   if (s) return s;
@@ -3221,16 +3242,11 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     if (changed.length) {
       appendRuntimeCard(el, '<strong>Pass-state changes</strong>');
 
-      const ordered = changed.slice().sort((a, b) => {
-        const aReg = (!!a.baseline_pass && !a.enabled_pass) ? 1 : 0;
-        const bReg = (!!b.baseline_pass && !b.enabled_pass) ? 1 : 0;
-        if (aReg !== bReg) return bReg - aReg; // regressions first
-        return benchmarkCaseId(a.case_id, '').localeCompare(benchmarkCaseId(b.case_id, ''));
-      });
+      const ordered = benchmarkSortedPassStateChanges(changed);
 
       ordered.slice(0, 20).forEach(c => {
-        const regressedNow = !!c.baseline_pass && !c.enabled_pass;
-        const improvedNow = !c.baseline_pass && !!c.enabled_pass;
+        const regressedNow = benchmarkRegressedNow(c);
+        const improvedNow = benchmarkImprovedNow(c);
         appendBenchFail(
           el,
           '<div><strong>' + benchmarkCaseId(c.case_id, 'case') + '</strong> · ' + benchmarkCaseTransitionHtml(improvedNow, regressedNow) + '</div>' +
