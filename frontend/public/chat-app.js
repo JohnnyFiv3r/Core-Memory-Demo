@@ -493,16 +493,43 @@ async function initAuthGate() {
       try {
         cb = await authClient.handleRedirectCallback();
       } catch (err) {
-        clearAuthBrowserState();
         const emsg = String((err && err.message) || err || 'callback_error');
-        setAuthStatus('Session callback failed. Retrying login...');
-        setAuthButton('Sign in', () => redirectToLogin(true));
-        if (!authRedirecting) {
-          authRedirecting = true;
+        try {
+          const recovered = String(await authClient.getTokenSilently() || '').trim();
+          if (recovered) {
+            window.__CORE_MEMORY_SET_TOKEN(recovered);
+            try {
+              const clean = new URL(window.location.href);
+              clean.searchParams.delete('code');
+              clean.searchParams.delete('state');
+              clean.searchParams.delete('error');
+              clean.searchParams.delete('error_description');
+              clean.searchParams.delete('iss');
+              window.history.replaceState({}, document.title, clean.pathname + clean.search);
+            } catch (_) {
+              // best effort only
+            }
+            callbackReturnTo = requestedNext;
+          } else {
+            clearAuthBrowserState();
+            writeAuthLoopGuard({ count: 2, ts: Date.now(), lastError: emsg });
+            setAuthStatus('Session callback failed. Click Sign in to retry.');
+            setAuthButton('Sign in', () => {
+              clearAuthLoopGuard();
+              redirectToLogin(true);
+            });
+            return false;
+          }
+        } catch (_) {
+          clearAuthBrowserState();
           writeAuthLoopGuard({ count: 2, ts: Date.now(), lastError: emsg });
-          try { await redirectToLogin(true); } catch (_) {}
+          setAuthStatus('Session callback failed. Click Sign in to retry.');
+          setAuthButton('Sign in', () => {
+            clearAuthLoopGuard();
+            redirectToLogin(true);
+          });
+          return false;
         }
-        return false;
       }
       callbackReturnTo = String(((cb || {}).appState || {}).returnTo || '').trim();
       try {

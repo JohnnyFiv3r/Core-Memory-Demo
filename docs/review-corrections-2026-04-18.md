@@ -111,3 +111,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Hotfix: bumped auth recovery cache-bust versions again (`chat.html` script query + root `uiRev`) so clients fetch the updated callback-URI/auth runtime immediately.
 - Auth rollback/fix: removed `offline_access` from requested scopes and restored `redirect_uri` to root (`/`) in `chat-app.js` after Auth0 authorize-page failures; retained callback sanitization/recovery logic and transaction-cookie fallback.
 - Hotfix: bumped auth cache-bust versions again (`chat.html` script query + root `uiRev`) to force clients onto the restored Auth0 scope/redirect configuration.
+- Hotfix: changed callback-failure behavior in `chat-app.js` to avoid forced auto-login loops; on `handleRedirectCallback()` failure it now first attempts `getTokenSilently()` recovery, and only if that fails it shows a manual Sign in retry prompt while preserving the error state for debugging.
