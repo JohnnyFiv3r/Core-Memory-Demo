@@ -9,8 +9,14 @@
   const q = isHostedDemo ? '' : qRaw;
   const defaultApiBase = isHostedDemo ? '' : '';
   const hostedDirectBase = isHostedDemo ? 'https://core-memory-demo.onrender.com' : '';
-  window.__CORE_MEMORY_HOSTED_DIRECT_BASE = hostedDirectBase;
   const apiBase = (q || (isHostedDemo ? defaultApiBase : s) || '').replace(/\/+$/, '');
+  const apiOrigin = (() => {
+    try { return apiBase ? new URL(apiBase, window.location.origin).origin : ''; } catch { return ''; }
+  })();
+  const hostedDirectOrigin = (() => {
+    try { return hostedDirectBase ? new URL(hostedDirectBase, window.location.origin).origin : ''; } catch { return ''; }
+  })();
+  window.__CORE_MEMORY_HOSTED_DIRECT_BASE = hostedDirectBase;
   if (isHostedDemo && qRaw) {
     try {
       const clean = new URL(window.location.href);
@@ -66,28 +72,53 @@
     return next;
   }
 
+  function resolveTargetUrl(input) {
+    try {
+      const raw = (typeof input === 'string') ? input : String((input && input.url) || '');
+      return new URL(raw, window.location.origin);
+    } catch (_) {
+      return null;
+    }
+  }
+
+  function shouldAttachCoreHeaders(targetUrl) {
+    if (!targetUrl) return false;
+    const origin = String(targetUrl.origin || '');
+    if (!origin) return false;
+    if (origin === window.location.origin) return true;
+    if (apiOrigin && origin === apiOrigin) return true;
+    if (hostedDirectOrigin && origin === hostedDirectOrigin) return true;
+    return false;
+  }
+
   window.fetch = (input, init) => {
+    const originalInput = input;
     const nextInit = Object.assign({}, init || {});
     const inheritedHeaders = (!nextInit.headers && input && typeof input !== 'string' && input.headers)
       ? input.headers
       : undefined;
-    const headers = new Headers(nextInit.headers || inheritedHeaders || undefined);
 
-    const token = window.__CORE_MEMORY_GET_TOKEN();
-    if (token && !headers.has('Authorization')) {
-      headers.set('Authorization', 'Bearer ' + token);
-    }
-
-    const sessionId = getOrCreateClientSessionId();
-    if (sessionId && !headers.has('X-Core-Memory-Session')) {
-      headers.set('X-Core-Memory-Session', sessionId);
-    }
-
-    nextInit.headers = headers;
     if (apiBase && typeof input === 'string' && input.startsWith('/')) {
       input = apiBase + input;
     }
-    const rawInput = input;
+
+    const targetUrl = resolveTargetUrl(input);
+    const headers = new Headers(nextInit.headers || inheritedHeaders || undefined);
+
+    if (shouldAttachCoreHeaders(targetUrl)) {
+      const token = window.__CORE_MEMORY_GET_TOKEN();
+      if (token && !headers.has('Authorization')) {
+        headers.set('Authorization', 'Bearer ' + token);
+      }
+
+      const sessionId = getOrCreateClientSessionId();
+      if (sessionId && !headers.has('X-Core-Memory-Session')) {
+        headers.set('X-Core-Memory-Session', sessionId);
+      }
+    }
+
+    nextInit.headers = headers;
+    const rawInput = originalInput;
     const tryHostedDirect = () => {
       if (!hostedDirectBase || typeof rawInput !== 'string' || !rawInput.startsWith('/')) return null;
       return nativeFetch(hostedDirectBase + rawInput, nextInit);
@@ -95,7 +126,7 @@
 
     return nativeFetch(input, nextInit)
       .then((resp) => {
-        if (resp.status === 401 && typeof window.__CORE_MEMORY_REFRESH_TOKEN === 'function') {
+        if (resp.status === 401 && shouldAttachCoreHeaders(targetUrl) && typeof window.__CORE_MEMORY_REFRESH_TOKEN === 'function') {
           return Promise.resolve(window.__CORE_MEMORY_REFRESH_TOKEN())
             .then((freshToken) => {
               const tok = String(freshToken || '').trim();
