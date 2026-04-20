@@ -2863,6 +2863,10 @@ function benchmarkBackendModes(modes) {
   return out || 'unknown';
 }
 
+function benchmarkImprovedRegressed(improved, regressed) {
+  return String((improved || 0) + '/' + (regressed || 0));
+}
+
 function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   const s = summary || {};
   const perf = includePerf
@@ -2936,7 +2940,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const cmp = summary.myelination_compare || null;
   const cmpLine = cmp
     ? ('<div style="margin-top:2px;color:var(--text-dim)">compare Δ=' + benchmarkAcc(cmp.accuracy_delta || 0) +
-       ' · improved/regressed=' + String((cmp.improved_cases || 0) + '/' + (cmp.regressed_cases || 0)) + '</div>')
+       ' · improved/regressed=' + benchmarkImprovedRegressed(cmp.improved_cases || 0, cmp.regressed_cases || 0) + '</div>')
     : '';
   meta.innerHTML =
     '<div><strong>Run config</strong></div>' +
