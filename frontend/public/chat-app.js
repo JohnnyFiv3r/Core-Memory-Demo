@@ -3003,6 +3003,13 @@ function benchmarkBucketRowHtml(bucketName, row) {
     ' · pass/fail=' + benchmarkPassFail(r.pass || 0, r.fail || 0);
 }
 
+function benchmarkRunConfigCompareLine(myelinationCompare) {
+  const cmp = myelinationCompare || null;
+  if (!cmp) return '';
+  return '<div style="margin-top:2px;color:var(--text-dim)">compare Δ=' + benchmarkAcc(cmp.accuracy_delta || 0) +
+    ' · improved/regressed=' + benchmarkImprovedRegressed(cmp.improved_cases || 0, cmp.regressed_cases || 0) + '</div>';
+}
+
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
@@ -3045,10 +3052,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const meta = appendRuntimeCard(el, '');
   const cmp = summary.myelination_compare || null;
   const keyLines = benchmarkRunConfigKeyLines(summary);
-  const cmpLine = cmp
-    ? ('<div style="margin-top:2px;color:var(--text-dim)">compare Δ=' + benchmarkAcc(cmp.accuracy_delta || 0) +
-       ' · improved/regressed=' + benchmarkImprovedRegressed(cmp.improved_cases || 0, cmp.regressed_cases || 0) + '</div>')
-    : '';
+  const cmpLine = benchmarkRunConfigCompareLine(cmp);
   meta.innerHTML =
     '<div><strong>Run config</strong></div>' +
     keyLines.runIdAt +
