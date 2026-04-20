@@ -2867,6 +2867,16 @@ function benchmarkImprovedRegressed(improved, regressed) {
   return String((improved || 0) + '/' + (regressed || 0));
 }
 
+function benchmarkCaseId(caseId, fallback) {
+  const s = String(caseId || '').trim();
+  if (s) return s;
+  return String(fallback || 'detail');
+}
+
+function benchmarkCaseTitle(prefix, caseId) {
+  return String(prefix || 'Benchmark case') + ': ' + benchmarkCaseId(caseId, 'detail');
+}
+
 function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   const s = summary || {};
   const perf = includePerf
@@ -3008,7 +3018,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
         const aReg = (!!a.baseline_pass && !a.enabled_pass) ? 1 : 0;
         const bReg = (!!b.baseline_pass && !b.enabled_pass) ? 1 : 0;
         if (aReg !== bReg) return bReg - aReg; // regressions first
-        return String(a.case_id || '').localeCompare(String(b.case_id || ''));
+        return benchmarkCaseId(a.case_id, '').localeCompare(benchmarkCaseId(b.case_id, ''));
       });
 
       ordered.slice(0, 20).forEach(c => {
@@ -3016,14 +3026,14 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
         const improvedNow = !c.baseline_pass && !!c.enabled_pass;
         appendBenchFail(
           el,
-          '<div><strong>' + String(c.case_id || 'case') + '</strong> · ' + (improvedNow ? '<span class="bench-delta-good">improved</span>' : (regressedNow ? '<span class="bench-delta-bad">regressed</span>' : 'changed')) + '</div>' +
+          '<div><strong>' + benchmarkCaseId(c.case_id, 'case') + '</strong> · ' + (improvedNow ? '<span class="bench-delta-good">improved</span>' : (regressedNow ? '<span class="bench-delta-bad">regressed</span>' : 'changed')) + '</div>' +
           '<div style="color:var(--text-dim);margin-top:2px">baseline=' + String(!!c.baseline_pass) +
           ' · enabled=' + String(!!c.enabled_pass) +
           ' · latency Δ=' + benchmarkLatencyMs(c.latency_delta_ms || 0, 3) + '</div>',
           {
             background: improvedNow ? 'rgba(74, 222, 128, 0.08)' : 'rgba(248, 113, 113, 0.08)',
             borderColor: improvedNow ? 'rgba(74, 222, 128, 0.30)' : 'rgba(248, 113, 113, 0.25)',
-            modalTitle: 'Myelination compare case: ' + String(c.case_id || 'detail'),
+            modalTitle: benchmarkCaseTitle('Myelination compare case', c.case_id),
             payload: c,
           }
         );
@@ -3039,7 +3049,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
       fails.forEach(c => {
         appendBenchFail(
           el,
-          '<div><strong>' + String(c.case_id || 'case') + '</strong></div>' +
+          '<div><strong>' + benchmarkCaseId(c.case_id, 'case') + '</strong></div>' +
           '<div style="color:var(--text-dim);margin-top:2px">expected=' + benchmarkNA(c.expected_answer_class) +
           ' · actual=' + benchmarkNA(c.actual_answer_class) + '</div>' +
           '<div style="color:var(--text-dim);margin-top:2px">surface=' + benchmarkNA(c.top_source_surface) +
@@ -3048,7 +3058,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
           ' · tokens=' + benchmarkTokens(((c.token_usage || {}).total_tokens_est ?? 0), { localize: false }) +
           ' · warnings=' + String(benchmarkWarnCount(c.warnings)) + '</div>',
           {
-            modalTitle: 'Benchmark case: ' + String(c.case_id || 'detail'),
+            modalTitle: benchmarkCaseTitle('Benchmark case', c.case_id),
             payload: c,
           }
         );
