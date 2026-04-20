@@ -437,6 +437,8 @@ async function initAuthGate() {
       },
       cacheLocation: 'localstorage',
       useRefreshTokens: true,
+      useCookiesForTransactions: true,
+      legacySameSiteCookie: true,
     });
     window.__CORE_MEMORY_REFRESH_TOKEN = async () => {
       if (!authClient) return '';
