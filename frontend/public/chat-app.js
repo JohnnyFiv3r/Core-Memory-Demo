@@ -2801,6 +2801,22 @@ function appendBenchBucket(container, html, modalTitle, payload) {
   return row;
 }
 
+function appendBenchFail(container, html, opts) {
+  const cfg = opts || {};
+  const row = document.createElement('div');
+  row.className = 'bench-fail';
+  row.innerHTML = String(html || '');
+  if (cfg.background) row.style.background = String(cfg.background);
+  if (cfg.borderColor) row.style.borderColor = String(cfg.borderColor);
+  if (cfg.modalTitle) {
+    row.addEventListener('click', () => {
+      openJsonModal(String(cfg.modalTitle), cfg.payload);
+    });
+  }
+  container.appendChild(row);
+  return row;
+}
+
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
@@ -2921,19 +2937,19 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
       ordered.slice(0, 20).forEach(c => {
         const regressedNow = !!c.baseline_pass && !c.enabled_pass;
         const improvedNow = !c.baseline_pass && !!c.enabled_pass;
-        const row = document.createElement('div');
-        row.className = 'bench-fail';
-        row.style.background = improvedNow ? 'rgba(74, 222, 128, 0.08)' : 'rgba(248, 113, 113, 0.08)';
-        row.style.borderColor = improvedNow ? 'rgba(74, 222, 128, 0.30)' : 'rgba(248, 113, 113, 0.25)';
-        row.innerHTML =
+        appendBenchFail(
+          el,
           '<div><strong>' + String(c.case_id || 'case') + '</strong> · ' + (improvedNow ? '<span class="bench-delta-good">improved</span>' : (regressedNow ? '<span class="bench-delta-bad">regressed</span>' : 'changed')) + '</div>' +
           '<div style="color:var(--text-dim);margin-top:2px">baseline=' + String(!!c.baseline_pass) +
           ' · enabled=' + String(!!c.enabled_pass) +
-          ' · latency Δ=' + String(Number(c.latency_delta_ms || 0).toFixed(3)) + 'ms</div>';
-        row.addEventListener('click', () => {
-          openJsonModal('Myelination compare case: ' + String(c.case_id || 'detail'), c);
-        });
-        el.appendChild(row);
+          ' · latency Δ=' + String(Number(c.latency_delta_ms || 0).toFixed(3)) + 'ms</div>',
+          {
+            background: improvedNow ? 'rgba(74, 222, 128, 0.08)' : 'rgba(248, 113, 113, 0.08)',
+            borderColor: improvedNow ? 'rgba(74, 222, 128, 0.30)' : 'rgba(248, 113, 113, 0.25)',
+            modalTitle: 'Myelination compare case: ' + String(c.case_id || 'detail'),
+            payload: c,
+          }
+        );
       });
     }
   }
@@ -2944,9 +2960,8 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     if (fails.length) {
       appendRuntimeCard(el, '<strong>Failing cases</strong>');
       fails.forEach(c => {
-        const f = document.createElement('div');
-        f.className = 'bench-fail';
-        f.innerHTML =
+        appendBenchFail(
+          el,
           '<div><strong>' + String(c.case_id || 'case') + '</strong></div>' +
           '<div style="color:var(--text-dim);margin-top:2px">expected=' + String(c.expected_answer_class || 'n/a') +
           ' · actual=' + String(c.actual_answer_class || 'n/a') + '</div>' +
@@ -2954,11 +2969,12 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
           ' · anchor=' + String(c.top_anchor_reason || 'n/a') + '</div>' +
           '<div style="color:var(--text-dim);margin-top:2px">backend=' + String(c.benchmark_backend_mode || 'n/a') +
           ' · tokens=' + String(((c.token_usage || {}).total_tokens_est ?? 0)) +
-          ' · warnings=' + String((c.warnings || []).length) + '</div>';
-        f.addEventListener('click', () => {
-          openJsonModal('Benchmark case: ' + String(c.case_id || 'detail'), c);
-        });
-        el.appendChild(f);
+          ' · warnings=' + String((c.warnings || []).length) + '</div>',
+          {
+            modalTitle: 'Benchmark case: ' + String(c.case_id || 'detail'),
+            payload: c,
+          }
+        );
       });
     }
   }

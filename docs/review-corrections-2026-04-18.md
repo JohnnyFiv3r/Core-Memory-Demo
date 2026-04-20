@@ -76,3 +76,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added `arrayOr()` and `firstPayloadError()` helpers, then rewired remaining array-check/error-extraction patterns (including benchmark history + seed error handling) to remove residual `Array.isArray` boilerplate.
 - Cleanup pass: added benchmark UI helpers `appendBenchCards()` and `appendBenchBucket()` and rewired repeated benchmark card/bucket row construction in `renderBenchmarkFallback()`.
 - Cleanup pass: added shared `appendRuntimeCard()` helper and rewired repeated runtime-card creation blocks in runtime + benchmark fallback rendering.
+- Cleanup pass: added shared `appendBenchFail()` helper and rewired repeated benchmark fail-row creation/click wiring in `renderBenchmarkFallback()`.
