@@ -526,7 +526,7 @@ async function initAuthGate() {
     window.__CORE_MEMORY_SET_TOKEN('');
     window.__CORE_MEMORY_REFRESH_TOKEN = async () => '';
     const emsg = String((err && err.message) || err || 'unknown');
-    if (/login_required|consent_required|interaction_required/i.test(emsg)) {
+    if (/login_required|consent_required|interaction_required|error loading session|invalid_grant|missing_refresh_token/i.test(emsg)) {
       setAuthStatus('Session expired. Redirecting to login...');
       setAuthButton('Sign in', () => redirectToLogin(true));
       if (!authRedirecting) {
