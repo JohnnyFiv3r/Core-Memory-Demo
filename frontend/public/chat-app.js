@@ -284,6 +284,34 @@ function clearAuthLoopGuard() {
   writeAuthLoopGuard({ count: 0, ts: 0, lastError: '' });
 }
 
+function clearAuthBrowserState() {
+  try {
+    if (typeof window.__CORE_MEMORY_SET_TOKEN === 'function') {
+      window.__CORE_MEMORY_SET_TOKEN('');
+    }
+  } catch (_) {
+    // best effort only
+  }
+
+  const clearStore = (store) => {
+    if (!store) return;
+    const keys = [];
+    for (let i = 0; i < store.length; i += 1) {
+      const key = String(store.key(i) || '');
+      if (/auth0|@@auth0spajs|core_memory_auth_token|cm_auth_loop_guard/i.test(key)) {
+        keys.push(key);
+      }
+    }
+    keys.forEach((key) => {
+      try { store.removeItem(key); } catch (_) {}
+    });
+  };
+
+  try { clearStore(window.localStorage); } catch (_) {}
+  try { clearStore(window.sessionStorage); } catch (_) {}
+  clearAuthLoopGuard();
+}
+
 function setAuthStatus(text) {
   if (!authStatusEl) return;
   authStatusEl.style.display = authEnabled ? 'inline' : 'none';
@@ -422,6 +450,29 @@ async function initAuthGate() {
     if (qp.get('error')) {
       const err = String(qp.get('error') || 'auth_error');
       const desc = String(qp.get('error_description') || '').trim();
+      const combined = (err + ' ' + desc).toLowerCase();
+      const recoverable = /login_required|consent_required|interaction_required|error loading session|invalid_grant|missing_refresh_token/.test(combined);
+      if (recoverable) {
+        clearAuthBrowserState();
+        setAuthStatus('Session expired. Redirecting to login...');
+        setAuthButton('Sign in', () => redirectToLogin(true));
+        try {
+          const clean = new URL(window.location.href);
+          clean.searchParams.delete('error');
+          clean.searchParams.delete('error_description');
+          clean.searchParams.delete('state');
+          clean.searchParams.delete('code');
+          window.history.replaceState({}, document.title, clean.pathname + clean.search);
+        } catch (_) {
+          // best effort only
+        }
+        if (!authRedirecting) {
+          authRedirecting = true;
+          clearAuthLoopGuard();
+          try { await redirectToLogin(true); } catch (_) {}
+        }
+        return false;
+      }
       writeAuthLoopGuard({ count: 2, ts: Date.now(), lastError: desc || err });
       setAuthStatus('Auth error: ' + err + (desc ? (' (' + desc + ')') : ''));
       setAuthButton('Sign in', () => redirectToLogin(true));
