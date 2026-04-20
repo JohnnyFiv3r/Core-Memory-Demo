@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react'
 import { getApiBase } from './api'
 
 export function App() {
-  const uiRev = '20260418-chat-default-overlay-01'
+  const uiRev = '20260420-auth-session-01'
   const apiBase = getApiBase()
 
   const targetUrl = useMemo(() => {
