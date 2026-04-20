@@ -2817,6 +2817,23 @@ function appendBenchFail(container, html, opts) {
   return row;
 }
 
+function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
+  const s = summary || {};
+  const perf = includePerf
+    ? (
+      ' · latency=' + Number(s.latency_mean_ms || 0).toFixed(2) + 'ms' +
+      ' · tokens=' + Number(s.tokens_total_est || 0).toLocaleString()
+    )
+    : '';
+  return (
+    '<div><strong>' + escapeHtml(String(s.run_id || fallbackRunId || 'run')) + '</strong></div>' +
+    '<div style="margin-top:2px;color:var(--text-dim)">acc=' + Number(s.accuracy || 0).toFixed(4) +
+    ' · pass/fail=' + String((s.pass || 0) + '/' + (s.fail || 0)) +
+    perf + '</div>' +
+    '<div style="margin-top:2px;color:var(--text-dim)">at=' + escapeHtml(formatIsoShort(String(atIso || ''))) + '</div>'
+  );
+}
+
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
@@ -2832,10 +2849,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
         const s = r.summary || {};
         appendBenchBucket(
           el,
-          '<div><strong>' + escapeHtml(String(s.run_id || r.run_id || 'run')) + '</strong></div>' +
-          '<div style="margin-top:2px;color:var(--text-dim)">acc=' + Number(s.accuracy || 0).toFixed(4) +
-          ' · pass/fail=' + String((s.pass || 0) + '/' + (s.fail || 0)) +
-          ' · at=' + escapeHtml(formatIsoShort(String(s.finished_at || r.created_at || ''))) + '</div>',
+          benchmarkRunRowHtml(s, r.run_id || 'run', s.finished_at || r.created_at || '', false),
           'Benchmark run summary',
           r
         );
@@ -2986,12 +3000,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
       const s = rowData.summary || {};
       appendBenchBucket(
         el,
-        '<div><strong>' + escapeHtml(String(s.run_id || rowData.run_id || ('run-' + idx))) + '</strong></div>' +
-        '<div style="margin-top:2px;color:var(--text-dim)">acc=' + Number(s.accuracy || 0).toFixed(4) +
-        ' · pass/fail=' + String((s.pass || 0) + '/' + (s.fail || 0)) +
-        ' · latency=' + Number(s.latency_mean_ms || 0).toFixed(2) + 'ms' +
-        ' · tokens=' + Number(s.tokens_total_est || 0).toLocaleString() + '</div>' +
-        '<div style="margin-top:2px;color:var(--text-dim)">at=' + escapeHtml(formatIsoShort(String(s.finished_at || rowData.created_at || ''))) + '</div>',
+        benchmarkRunRowHtml(s, rowData.run_id || ('run-' + idx), s.finished_at || rowData.created_at || '', true),
         'Benchmark run',
         rowData
       );
