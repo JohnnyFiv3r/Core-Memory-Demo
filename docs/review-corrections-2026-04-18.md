@@ -116,3 +116,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Hotfix: bumped auth cache-bust versions again (`chat.html` script query + root `uiRev`) so clients immediately load the corrected bootstrap fetch behavior.
 - UX adjustment: simplified the root launcher loading screen in `frontend/src/App.tsx` to spinner-only (removed loading label + Continue link), keeping the dark-screen + green spinner presentation.
 - Cleanup pass: added shared pass-state helpers (`benchmarkRegressedNow()`, `benchmarkImprovedNow()`, `benchmarkPassStateCaseCompare()`, `benchmarkSortedPassStateChanges()`) and rewired myelination pass-state ordering/flag logic in benchmark fallback rendering.
+- Cleanup pass: added shared `benchmarkPassStateRowStyles()` helper and rewired myelination pass-state row style token selection (background/border color) in benchmark fallback rendering.

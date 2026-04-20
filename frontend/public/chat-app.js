@@ -3025,6 +3025,25 @@ function benchmarkSortedPassStateChanges(changedCases) {
   return arrayOrEmpty(changedCases).slice().sort(benchmarkPassStateCaseCompare);
 }
 
+function benchmarkPassStateRowStyles(improvedNow, regressedNow) {
+  if (improvedNow) {
+    return {
+      background: 'rgba(74, 222, 128, 0.08)',
+      borderColor: 'rgba(74, 222, 128, 0.30)',
+    };
+  }
+  if (regressedNow) {
+    return {
+      background: 'rgba(248, 113, 113, 0.08)',
+      borderColor: 'rgba(248, 113, 113, 0.25)',
+    };
+  }
+  return {
+    background: 'rgba(139, 143, 163, 0.08)',
+    borderColor: 'rgba(139, 143, 163, 0.20)',
+  };
+}
+
 function benchmarkRunId(runId, fallback) {
   const s = String(runId || '').trim();
   if (s) return s;
@@ -3247,6 +3266,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
       ordered.slice(0, 20).forEach(c => {
         const regressedNow = benchmarkRegressedNow(c);
         const improvedNow = benchmarkImprovedNow(c);
+        const rowStyles = benchmarkPassStateRowStyles(improvedNow, regressedNow);
         appendBenchFail(
           el,
           '<div><strong>' + benchmarkCaseId(c.case_id, 'case') + '</strong> · ' + benchmarkCaseTransitionHtml(improvedNow, regressedNow) + '</div>' +
@@ -3254,8 +3274,8 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
           ' · enabled=' + benchmarkBool(c.enabled_pass) +
           ' · latency Δ=' + benchmarkLatencyMs(c.latency_delta_ms || 0, 3) + '</div>',
           {
-            background: improvedNow ? 'rgba(74, 222, 128, 0.08)' : 'rgba(248, 113, 113, 0.08)',
-            borderColor: improvedNow ? 'rgba(74, 222, 128, 0.30)' : 'rgba(248, 113, 113, 0.25)',
+            background: rowStyles.background,
+            borderColor: rowStyles.borderColor,
             modalTitle: benchmarkCaseTitle('Myelination compare case', c.case_id),
             payload: c,
           }
