@@ -122,3 +122,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added shared `benchmarkPassStateRowHtml()` helper and rewired pass-state row full markup composition (title + detail) in benchmark fallback rendering.
 - Hosted demo robustness fix: in `chat-app.js`, treat `GET /api/demo/models` 404 as endpoint-unavailable, disable the model selector with an auto-only fallback option, and mark model options as hydrated to stop repeated 404 polling noise during periodic refresh.
 - Cache-bust bump: updated `chat.html` app script query to `chat-app.js?v=20260420-auth-session-5` and root launcher `uiRev` in `frontend/src/App.tsx` to `20260420-auth-session-05`.
+- Hosted demo graph fix: updated CSP in `vercel.json` to include `worker-src 'self' blob:` so Reagraph blob workers used by `graph.html` are allowed (fixes CSP block on graph popup rendering).
