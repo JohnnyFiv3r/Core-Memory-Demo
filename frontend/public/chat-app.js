@@ -2957,6 +2957,17 @@ function benchmarkRunConfigKeyLines(summary) {
   };
 }
 
+function benchmarkLatestCompareMetricsLine(currentSummary, baselineSummary) {
+  const cs = currentSummary || {};
+  const bs = baselineSummary || {};
+  const dAcc = Number(cs.accuracy || 0) - Number(bs.accuracy || 0);
+  const dLat = Number(cs.latency_mean_ms || 0) - Number(bs.latency_mean_ms || 0);
+  const dTok = Number(cs.tokens_total_est || 0) - Number(bs.tokens_total_est || 0);
+  return '<div style="margin-top:4px;color:var(--text-dim)">accuracy Δ=' + benchmarkDeltaSpan(dAcc, 4) +
+    ' · latency Δ=' + benchmarkLatencyMs(dLat, 3) +
+    ' · tokens Δ=' + benchmarkTokens(dTok) + '</div>';
+}
+
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
@@ -3135,17 +3146,12 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
       if (current && baseline) {
         const cs = current.summary || {};
         const bs = baseline.summary || {};
-        const dAcc = Number(cs.accuracy || 0) - Number(bs.accuracy || 0);
-        const dLat = Number(cs.latency_mean_ms || 0) - Number(bs.latency_mean_ms || 0);
-        const dTok = Number(cs.tokens_total_est || 0) - Number(bs.tokens_total_est || 0);
         appendRuntimeCard(
           el,
           '<div><strong>Latest vs previous run</strong></div>' +
           '<div style="margin-top:2px;color:var(--text-dim)">baseline=' + benchmarkRunIdHtml(bs.run_id || baseline.run_id, 'n/a') +
           ' → current=' + benchmarkRunIdHtml(cs.run_id || current.run_id, 'n/a') + '</div>' +
-          '<div style="margin-top:4px;color:var(--text-dim)">accuracy Δ=' + benchmarkDeltaSpan(dAcc, 4) +
-          ' · latency Δ=' + benchmarkLatencyMs(dLat, 3) +
-          ' · tokens Δ=' + benchmarkTokens(dTok) + '</div>'
+          benchmarkLatestCompareMetricsLine(cs, bs)
         );
       }
     }
