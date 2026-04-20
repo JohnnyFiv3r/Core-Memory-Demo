@@ -418,7 +418,7 @@ async function initAuthGate() {
   const clientId = String(auth.client_id || '').trim();
   const audience = String(auth.audience || '').trim();
   const audienceScope = String(auth.scope || '').trim();
-  authRequestedScope = mergeAuthScopes('openid profile email offline_access', audienceScope);
+  authRequestedScope = mergeAuthScopes('openid profile email', audienceScope);
   if (!domain || !clientId || !window.auth0 || typeof window.auth0.createAuth0Client !== 'function') {
     setAuthStatus('Auth is enabled but not fully configured.');
     setAuthButton('Sign in', null);
@@ -426,7 +426,7 @@ async function initAuthGate() {
   }
 
   try {
-    const authRedirectUri = window.location.origin.replace(/\/$/, '') + '/chat.html';
+    const authRedirectUri = window.location.origin.replace(/\/$/, '') + '/';
     authClient = await window.auth0.createAuth0Client({
       domain,
       clientId,
