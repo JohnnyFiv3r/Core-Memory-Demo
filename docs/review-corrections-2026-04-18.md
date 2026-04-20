@@ -75,3 +75,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added shared `arrayOrEmpty()` helper and rewired repeated array-normalization callsites in pane/render flows to reduce defensive `Array.isArray(...) ? ... : []` boilerplate.
 - Cleanup pass: added `arrayOr()` and `firstPayloadError()` helpers, then rewired remaining array-check/error-extraction patterns (including benchmark history + seed error handling) to remove residual `Array.isArray` boilerplate.
 - Cleanup pass: added benchmark UI helpers `appendBenchCards()` and `appendBenchBucket()` and rewired repeated benchmark card/bucket row construction in `renderBenchmarkFallback()`.
+- Cleanup pass: added shared `appendRuntimeCard()` helper and rewired repeated runtime-card creation blocks in runtime + benchmark fallback rendering.

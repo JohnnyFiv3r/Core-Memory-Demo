@@ -2619,6 +2619,14 @@ function escapeHtml(s) {
     .replace(/'/g, '&#039;');
 }
 
+function appendRuntimeCard(container, html) {
+  const card = document.createElement('div');
+  card.className = 'runtime-card';
+  card.innerHTML = String(html || '');
+  container.appendChild(card);
+  return card;
+}
+
 function renderRuntimeFallback(runtime, lastTurn) {
   const el = document.getElementById('tab-runtime-content');
   el.textContent = '';
@@ -2639,13 +2647,13 @@ function renderRuntimeFallback(runtime, lastTurn) {
     !(mode === 'degraded_allowed' && /No semantic backend is currently active/i.test(warningText))
   );
 
-  const c1 = document.createElement('div');
-  c1.className = 'runtime-card';
-  c1.innerHTML =
+  const c1 = appendRuntimeCard(
+    el,
     '<div><strong>Async Queue</strong></div>' +
     '<div style="margin-top:4px;color:var(--text-dim)">pending: ' + String(q.pending_total ?? 0) +
     ' · processable: ' + String(q.processable_now ?? 0) + '</div>' +
-    '<div style="margin-top:2px;color:var(--text-dim)">ok: ' + String(!!q.ok) + '</div>';
+    '<div style="margin-top:2px;color:var(--text-dim)">ok: ' + String(!!q.ok) + '</div>'
+  );
 
   if (qRows.length) {
     const list = document.createElement('div');
@@ -2665,10 +2673,7 @@ function renderRuntimeFallback(runtime, lastTurn) {
     });
     c1.appendChild(list);
   }
-  el.appendChild(c1);
-
-  const c2 = document.createElement('div');
-  c2.className = 'runtime-card';
+  const c2 = appendRuntimeCard(el, '');
   const semanticBadges =
     '<span class="runtime-badge ' + (strictMode ? 'runtime-badge-bad' : 'runtime-badge-warn') + '">mode=' + escapeHtml(mode) + '</span> ' +
     '<span class="runtime-badge ' + (usable ? 'runtime-badge-good' : (strictMode ? 'runtime-badge-bad' : 'runtime-badge-warn')) + '">usable=' + String(usable) + '</span> ' +
@@ -2688,10 +2693,7 @@ function renderRuntimeFallback(runtime, lastTurn) {
     (showBackendWarning
       ? ('<div style="margin-top:2px;color:var(--amber)">warning: ' + escapeHtml(warningText) + '</div>')
       : '');
-  el.appendChild(c2);
-
-  const c3 = document.createElement('div');
-  c3.className = 'runtime-card';
+  const c3 = appendRuntimeCard(el, '');
   const topIds = arrayOrEmpty(p.top_bead_ids).slice(0, 5);
   c3.innerHTML =
     '<div><strong>Last Answer Diagnostics</strong></div>' +
@@ -2716,10 +2718,7 @@ function renderRuntimeFallback(runtime, lastTurn) {
     (warnCount
       ? ('<div style="margin-top:2px;color:var(--amber)">warning list: ' + escapeHtml((p.warnings || []).join(' | ')) + '</div>')
       : '');
-  el.appendChild(c3);
-
-  const c4 = document.createElement('div');
-  c4.className = 'runtime-card';
+  const c4 = appendRuntimeCard(el, '');
   c4.innerHTML =
     '<div><strong>Last Flush</strong></div>' +
     '<div style="margin-top:4px;color:var(--text-dim)">ok: ' + String(!!f.flush_ok) +
@@ -2744,15 +2743,12 @@ function renderRuntimeFallback(runtime, lastTurn) {
     });
     c4.appendChild(hist);
   }
-  el.appendChild(c4);
-
-  const c5 = document.createElement('div');
-  c5.className = 'runtime-card';
-  c5.innerHTML =
+  appendRuntimeCard(
+    el,
     '<div><strong>Myelination</strong></div>' +
     '<div style="margin-top:4px;color:var(--text-dim)">enabled: ' + String(!!my.enabled) +
-    ' · strengthened/weakened: ' + String((my.stats || {}).strengthened || 0) + '/' + String((my.stats || {}).weakened || 0) + '</div>';
-  el.appendChild(c5);
+    ' · strengthened/weakened: ' + String((my.stats || {}).strengthened || 0) + '/' + String((my.stats || {}).weakened || 0) + '</div>'
+  );
 }
 
 function ensureRuntimePaneRenderer() {
@@ -2815,10 +2811,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     empty.textContent = 'No benchmark run yet';
     el.appendChild(empty);
     if (history.length) {
-      const h = document.createElement('div');
-      h.className = 'runtime-card';
-      h.innerHTML = '<strong>Recent runs</strong>';
-      el.appendChild(h);
+      appendRuntimeCard(el, '<strong>Recent runs</strong>');
       history.slice(0, 8).forEach(r => {
         const s = r.summary || {};
         appendBenchBucket(
@@ -2850,8 +2843,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   appendBenchCards(g, cards);
   el.appendChild(g);
 
-  const meta = document.createElement('div');
-  meta.className = 'runtime-card';
+  const meta = appendRuntimeCard(el, '');
   const cmp = summary.myelination_compare || null;
   const cmpLine = cmp
     ? ('<div style="margin-top:2px;color:var(--text-dim)">compare Δ=' + String(Number(cmp.accuracy_delta || 0).toFixed(4)) +
@@ -2867,7 +2859,6 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     '<div style="margin-top:2px;color:var(--text-dim)">warnings: ' + String((summary.warnings || []).length) + '</div>' +
     cmpLine +
     '<div style="margin-top:6px"><button class="btn" id="btn-bench-raw">Open raw JSON</button></div>';
-  el.appendChild(meta);
   const rawBtn = meta.querySelector('#btn-bench-raw');
   if (rawBtn) {
     rawBtn.addEventListener('click', () => {
@@ -2897,16 +2888,15 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     const regressed = cases.filter(c => c.baseline_pass && !c.enabled_pass);
     const changed = cases.filter(c => !!c.pass_changed);
 
-    const m = document.createElement('div');
-    m.className = 'runtime-card';
-    m.innerHTML =
+    appendRuntimeCard(
+      el,
       '<div><strong>Myelination compare</strong></div>' +
       '<div style="margin-top:4px;color:var(--text-dim)">baseline acc=' + String(baseline.accuracy ?? 'n/a') +
       ' · enabled acc=' + String(enabled.accuracy ?? 'n/a') +
       ' · delta=<span class="' + (delta > 0 ? 'bench-delta-good' : delta < 0 ? 'bench-delta-bad' : 'bench-delta-neutral') + '">' + String(delta.toFixed(4)) + '</span></div>' +
       '<div style="margin-top:2px;color:var(--text-dim)">pass/fail baseline=' + String((baseline.pass ?? 0) + '/' + (baseline.fail ?? 0)) +
-      ' · enabled=' + String((enabled.pass ?? 0) + '/' + (enabled.fail ?? 0)) + '</div>';
-    el.appendChild(m);
+      ' · enabled=' + String((enabled.pass ?? 0) + '/' + (enabled.fail ?? 0)) + '</div>'
+    );
 
     const mg = document.createElement('div');
     mg.className = 'bench-grid';
@@ -2919,10 +2909,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     el.appendChild(mg);
 
     if (changed.length) {
-      const h = document.createElement('div');
-      h.className = 'runtime-card';
-      h.innerHTML = '<strong>Pass-state changes</strong>';
-      el.appendChild(h);
+      appendRuntimeCard(el, '<strong>Pass-state changes</strong>');
 
       const ordered = changed.slice().sort((a, b) => {
         const aReg = (!!a.baseline_pass && !a.enabled_pass) ? 1 : 0;
@@ -2955,10 +2942,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   if (cases.length) {
     const fails = cases.filter(c => !c.pass);
     if (fails.length) {
-      const h = document.createElement('div');
-      h.className = 'runtime-card';
-      h.innerHTML = '<strong>Failing cases</strong>';
-      el.appendChild(h);
+      appendRuntimeCard(el, '<strong>Failing cases</strong>');
       fails.forEach(c => {
         const f = document.createElement('div');
         f.className = 'bench-fail';
@@ -2980,10 +2964,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   }
 
   if (history.length) {
-    const h = document.createElement('div');
-    h.className = 'runtime-card';
-    h.innerHTML = '<strong>Recent runs</strong><div style="margin-top:2px;color:var(--text-dim)">Click a row for full payload.</div>';
-    el.appendChild(h);
+    appendRuntimeCard(el, '<strong>Recent runs</strong><div style="margin-top:2px;color:var(--text-dim)">Click a row for full payload.</div>');
 
     history.slice(0, 12).forEach((rowData, idx) => {
       const s = rowData.summary || {};
@@ -3009,16 +2990,15 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
         const dAcc = Number(cs.accuracy || 0) - Number(bs.accuracy || 0);
         const dLat = Number(cs.latency_mean_ms || 0) - Number(bs.latency_mean_ms || 0);
         const dTok = Number(cs.tokens_total_est || 0) - Number(bs.tokens_total_est || 0);
-        const cmp = document.createElement('div');
-        cmp.className = 'runtime-card';
-        cmp.innerHTML =
+        appendRuntimeCard(
+          el,
           '<div><strong>Latest vs previous run</strong></div>' +
           '<div style="margin-top:2px;color:var(--text-dim)">baseline=' + escapeHtml(String(bs.run_id || baseline.run_id || 'n/a')) +
           ' → current=' + escapeHtml(String(cs.run_id || current.run_id || 'n/a')) + '</div>' +
           '<div style="margin-top:4px;color:var(--text-dim)">accuracy Δ=<span class="' + (dAcc > 0 ? 'bench-delta-good' : dAcc < 0 ? 'bench-delta-bad' : 'bench-delta-neutral') + '">' + dAcc.toFixed(4) + '</span>' +
           ' · latency Δ=' + dLat.toFixed(3) + 'ms' +
-          ' · tokens Δ=' + dTok.toLocaleString() + '</div>';
-        el.appendChild(cmp);
+          ' · tokens Δ=' + dTok.toLocaleString() + '</div>'
+        );
       }
     }
   }
