@@ -2976,6 +2976,13 @@ function benchmarkMyelinationSummaryLine(baseline, enabled, delta) {
     ' · delta=' + benchmarkDeltaSpan(delta, 4) + '</div>';
 }
 
+function benchmarkMyelinationPassFailLine(baseline, enabled) {
+  const b = baseline || {};
+  const e = enabled || {};
+  return '<div style="margin-top:2px;color:var(--text-dim)">pass/fail baseline=' + benchmarkPassFail(b.pass ?? 0, b.fail ?? 0) +
+    ' · enabled=' + benchmarkPassFail(e.pass ?? 0, e.fail ?? 0) + '</div>';
+}
+
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
@@ -3063,8 +3070,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
       el,
       '<div><strong>Myelination compare</strong></div>' +
       benchmarkMyelinationSummaryLine(baseline, enabled, delta) +
-      '<div style="margin-top:2px;color:var(--text-dim)">pass/fail baseline=' + benchmarkPassFail(baseline.pass ?? 0, baseline.fail ?? 0) +
-      ' · enabled=' + benchmarkPassFail(enabled.pass ?? 0, enabled.fail ?? 0) + '</div>'
+      benchmarkMyelinationPassFailLine(baseline, enabled)
     );
 
     const mg = document.createElement('div');

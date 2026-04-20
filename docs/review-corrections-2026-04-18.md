@@ -95,3 +95,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added shared `benchmarkHistoryRunId()` / `benchmarkHistoryRunPair()` helpers and rewired latest-vs-previous history run selection in benchmark fallback rendering.
 - Cleanup pass: added shared `benchmarkLatestCompareMetricsLine()` helper and rewired latest-vs-previous compare metrics line rendering (`accuracy Δ`, `latency Δ`, `tokens Δ`) in benchmark fallback rendering.
 - Cleanup pass: added shared `benchmarkMyelinationSummaryLine()` helper and rewired myelination compare summary-line rendering (`baseline acc`, `enabled acc`, `delta`) in benchmark fallback rendering.
+- Cleanup pass: added shared `benchmarkMyelinationPassFailLine()` helper and rewired myelination compare pass/fail line rendering (`pass/fail baseline`, `enabled`) in benchmark fallback rendering.
