@@ -3057,6 +3057,11 @@ function benchmarkPassStateRowTitle(caseRow, improvedNow, regressedNow) {
     benchmarkCaseTransitionHtml(improvedNow, regressedNow) + '</div>';
 }
 
+function benchmarkPassStateRowHtml(caseRow, improvedNow, regressedNow) {
+  return benchmarkPassStateRowTitle(caseRow, improvedNow, regressedNow) +
+    benchmarkPassStateRowDetail(caseRow);
+}
+
 function benchmarkRunId(runId, fallback) {
   const s = String(runId || '').trim();
   if (s) return s;
@@ -3282,8 +3287,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
         const rowStyles = benchmarkPassStateRowStyles(improvedNow, regressedNow);
         appendBenchFail(
           el,
-          benchmarkPassStateRowTitle(c, improvedNow, regressedNow) +
-          benchmarkPassStateRowDetail(c),
+          benchmarkPassStateRowHtml(c, improvedNow, regressedNow),
           {
             background: rowStyles.background,
             borderColor: rowStyles.borderColor,

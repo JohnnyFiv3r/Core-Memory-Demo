@@ -119,3 +119,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added shared `benchmarkPassStateRowStyles()` helper and rewired myelination pass-state row style token selection (background/border color) in benchmark fallback rendering.
 - Cleanup pass: added shared `benchmarkPassStateRowDetail()` helper and rewired pass-state row detail markup (`baseline`, `enabled`, `latency Δ`) in benchmark fallback rendering.
 - Cleanup pass: added shared `benchmarkPassStateRowTitle()` helper and rewired pass-state row title markup (`case id`, transition label) in benchmark fallback rendering.
+- Cleanup pass: added shared `benchmarkPassStateRowHtml()` helper and rewired pass-state row full markup composition (title + detail) in benchmark fallback rendering.
