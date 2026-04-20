@@ -2825,6 +2825,12 @@ function benchmarkAcc(value) {
   return Number(value || 0).toFixed(4);
 }
 
+function benchmarkNA(value) {
+  if (value === null || value === undefined) return 'n/a';
+  const s = String(value).trim();
+  return s ? s : 'n/a';
+}
+
 function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   const s = summary || {};
   const perf = includePerf
@@ -2887,7 +2893,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     ['accuracy', benchmarkAcc(summary.accuracy || 0)],
     ['cases', String(summary.cases || 0)],
     ['pass/fail', benchmarkPassFail(summary.pass || 0, summary.fail || 0)],
-    ['semantic', String(summary.semantic_mode || 'n/a')],
+    ['semantic', benchmarkNA(summary.semantic_mode)],
     ['latency mean (ms)', latencyMean],
     ['tokens est', tokenTotal.toLocaleString()],
   ];
@@ -2902,9 +2908,9 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     : '';
   meta.innerHTML =
     '<div><strong>Run config</strong></div>' +
-    '<div style="margin-top:2px;color:var(--text-dim)">run_id: ' + escapeHtml(String(summary.run_id || 'n/a')) +
+    '<div style="margin-top:2px;color:var(--text-dim)">run_id: ' + escapeHtml(benchmarkNA(summary.run_id)) +
     ' · at: ' + escapeHtml(formatIsoShort(String(summary.finished_at || summary.started_at || ''))) + '</div>' +
-    '<div style="margin-top:4px;color:var(--text-dim)">root mode: ' + String(summary.root_mode || 'n/a') +
+    '<div style="margin-top:4px;color:var(--text-dim)">root mode: ' + benchmarkNA(summary.root_mode) +
     ' · preload turns: ' + String(summary.preload_turn_count || 0) + '</div>' +
     '<div style="margin-top:2px;color:var(--text-dim)">backend modes: ' + String((summary.backend_modes || []).join(', ') || 'unknown') + '</div>' +
     '<div style="margin-top:2px;color:var(--text-dim)">warnings: ' + String((summary.warnings || []).length) + '</div>' +
@@ -2942,8 +2948,8 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     appendRuntimeCard(
       el,
       '<div><strong>Myelination compare</strong></div>' +
-      '<div style="margin-top:4px;color:var(--text-dim)">baseline acc=' + String(baseline.accuracy ?? 'n/a') +
-      ' · enabled acc=' + String(enabled.accuracy ?? 'n/a') +
+      '<div style="margin-top:4px;color:var(--text-dim)">baseline acc=' + benchmarkNA(baseline.accuracy) +
+      ' · enabled acc=' + benchmarkNA(enabled.accuracy) +
       ' · delta=' + benchmarkDeltaSpan(delta, 4) + '</div>' +
       '<div style="margin-top:2px;color:var(--text-dim)">pass/fail baseline=' + benchmarkPassFail(baseline.pass ?? 0, baseline.fail ?? 0) +
       ' · enabled=' + benchmarkPassFail(enabled.pass ?? 0, enabled.fail ?? 0) + '</div>'
@@ -2998,11 +3004,11 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
         appendBenchFail(
           el,
           '<div><strong>' + String(c.case_id || 'case') + '</strong></div>' +
-          '<div style="color:var(--text-dim);margin-top:2px">expected=' + String(c.expected_answer_class || 'n/a') +
-          ' · actual=' + String(c.actual_answer_class || 'n/a') + '</div>' +
-          '<div style="color:var(--text-dim);margin-top:2px">surface=' + String(c.top_source_surface || 'n/a') +
-          ' · anchor=' + String(c.top_anchor_reason || 'n/a') + '</div>' +
-          '<div style="color:var(--text-dim);margin-top:2px">backend=' + String(c.benchmark_backend_mode || 'n/a') +
+          '<div style="color:var(--text-dim);margin-top:2px">expected=' + benchmarkNA(c.expected_answer_class) +
+          ' · actual=' + benchmarkNA(c.actual_answer_class) + '</div>' +
+          '<div style="color:var(--text-dim);margin-top:2px">surface=' + benchmarkNA(c.top_source_surface) +
+          ' · anchor=' + benchmarkNA(c.top_anchor_reason) + '</div>' +
+          '<div style="color:var(--text-dim);margin-top:2px">backend=' + benchmarkNA(c.benchmark_backend_mode) +
           ' · tokens=' + String(((c.token_usage || {}).total_tokens_est ?? 0)) +
           ' · warnings=' + String((c.warnings || []).length) + '</div>',
           {
@@ -3384,11 +3390,11 @@ function formatBenchmarkSummary(s) {
   return (
     'LOCOMO test completed\n' +
     'mode: isolated benchmark store (demo state not mutated)\n' +
-    'root mode: ' + (s.root_mode || 'n/a') + '\n' +
+    'root mode: ' + benchmarkNA(s.root_mode) + '\n' +
     'cases: ' + (s.cases ?? 0) + '\n' +
     'pass/fail: ' + benchmarkPassFail(s.pass ?? 0, s.fail ?? 0) + '\n' +
     'accuracy: ' + benchmarkAcc(s.accuracy || 0) + '\n' +
-    'semantic mode: ' + (s.semantic_mode || 'n/a') + '\n' +
+    'semantic mode: ' + benchmarkNA(s.semantic_mode) + '\n' +
     'backend modes: ' + modes + '\n' +
     'preload turns: ' + (s.preload_turn_count ?? 0) + '\n' +
     'warnings: ' + warns
