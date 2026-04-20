@@ -129,3 +129,5 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - CSP compatibility hardening: updated `vercel.json` `script-src` to include `blob:` in addition to `worker-src 'self' blob:` for browsers that still fall back worker checks to `script-src`.
 - Cache-bust bump: updated `chat.html` app script query to `chat-app.js?v=20260420-auth-session-7` and root launcher `uiRev` in `frontend/src/App.tsx` to `20260420-auth-session-07`.
 - CSP connect-src fix for graph rendering: added `https://cdn.jsdelivr.net` to `connect-src` in `vercel.json` so Reagraph/Troika unicode font resolver fetches are not blocked in the graph popup.
+- Chat API compatibility fix: in `chat-app.js` `sendMessage()`, added legacy fallback to `POST /api/chat` whenever `POST /api/chat/start` returns `404`, so message send works against older backend deployments that do not expose job-based chat endpoints.
+- Cache-bust bump: updated `chat.html` app script query to `chat-app.js?v=20260420-auth-session-8` and root launcher `uiRev` in `frontend/src/App.tsx` to `20260420-auth-session-08`.

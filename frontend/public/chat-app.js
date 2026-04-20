@@ -1002,6 +1002,16 @@ async function parseApiJsonResponse(res, label) {
   return data || {};
 }
 
+async function sendMessageLegacyApi(text, progressMsg) {
+  if (progressMsg) progressMsg.textContent = 'Chat pipeline: sending';
+  const res = await fetch('/api/chat', {
+    method: 'POST',
+    headers: {'Content-Type': 'application/json'},
+    body: JSON.stringify({message: text}),
+  });
+  return parseApiJsonResponse(res, 'chat');
+}
+
 async function sendMessage() {
   if (authEnabled && !authReady) {
     addMsg('system', 'Sign in required before sending messages.');
@@ -1020,35 +1030,40 @@ async function sendMessage() {
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({message: text}),
     });
-    const start = await parseApiJsonResponse(startRes, 'chat start');
-    const jobId = String(start.job_id || '').trim();
-    if (!jobId) throw new Error('chat_job_missing_id');
-
-    let cursor = 0;
     let data = null;
-    const deadline = Date.now() + 180000;
 
-    while (Date.now() < deadline) {
-      const statusRes = await fetch('/api/chat/status/' + encodeURIComponent(jobId) + '?cursor=' + String(cursor));
-      const status = await parseApiJsonResponse(statusRes, 'chat status');
-      const events = arrayOrEmpty(status.events);
-      if (events.length > 0) {
-        cursor = Number(status.cursor_next || cursor || 0);
-        const lastEvt = events[events.length - 1] || {};
-        const msg = String(lastEvt.message || lastEvt.stage || status.stage || 'running').trim();
-        if (msg) {
-          progressMsg.textContent = 'Chat pipeline: ' + msg;
+    if (startRes.status === 404) {
+      data = await sendMessageLegacyApi(text, progressMsg);
+    } else {
+      const start = await parseApiJsonResponse(startRes, 'chat start');
+      const jobId = String(start.job_id || '').trim();
+      if (!jobId) throw new Error('chat_job_missing_id');
+
+      let cursor = 0;
+      const deadline = Date.now() + 180000;
+
+      while (Date.now() < deadline) {
+        const statusRes = await fetch('/api/chat/status/' + encodeURIComponent(jobId) + '?cursor=' + String(cursor));
+        const status = await parseApiJsonResponse(statusRes, 'chat status');
+        const events = arrayOrEmpty(status.events);
+        if (events.length > 0) {
+          cursor = Number(status.cursor_next || cursor || 0);
+          const lastEvt = events[events.length - 1] || {};
+          const msg = String(lastEvt.message || lastEvt.stage || status.stage || 'running').trim();
+          if (msg) {
+            progressMsg.textContent = 'Chat pipeline: ' + msg;
+          }
         }
-      }
 
-      if (status.done) {
-        if (status.error) throw new Error(String(status.error));
-        data = status.result || null;
-        break;
-      }
+        if (status.done) {
+          if (status.error) throw new Error(String(status.error));
+          data = status.result || null;
+          break;
+        }
 
-      const waitMs = Math.max(200, Math.min(1200, Number(status.poll_after_ms || 450)));
-      await new Promise((resolve) => setTimeout(resolve, waitMs));
+        const waitMs = Math.max(200, Math.min(1200, Number(status.poll_after_ms || 450)));
+        await new Promise((resolve) => setTimeout(resolve, waitMs));
+      }
     }
 
     if (!data) {
