@@ -52,10 +52,6 @@ export function App() {
             animation: 'cmSpin 1s linear infinite',
           }}
         />
-        <div style={{ fontSize: 12, letterSpacing: '0.08em', textTransform: 'uppercase' }}>Opening Core Memory</div>
-        <a href={targetUrl} style={{ color: '#9beaa4', fontSize: 12 }}>
-          Continue
-        </a>
       </div>
       <style>{'@keyframes cmSpin { to { transform: rotate(360deg); } }'}</style>
     </main>
