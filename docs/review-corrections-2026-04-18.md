@@ -84,3 +84,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added shared `benchmarkNA()` helper and rewired benchmark `n/a` fallback text formatting callsites in fallback rendering and summary text.
 - Cleanup pass: added shared `benchmarkAtValue()` helper and rewired benchmark timestamp label formatting callsites in fallback rendering.
 - Cleanup pass: added shared benchmark latency/token helpers (`benchmarkLatency()`, `benchmarkLatencyMs()`, `benchmarkTokens()`) and rewired benchmark formatting callsites in fallback rendering.
+- Cleanup pass: added shared `benchmarkWarnCount()` helper and rewired benchmark warning-count formatting callsites in fallback rendering and summary text.

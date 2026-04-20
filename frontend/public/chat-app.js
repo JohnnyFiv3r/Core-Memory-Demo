@@ -2851,6 +2851,10 @@ function benchmarkTokens(value, opts) {
   return cfg.localize === false ? String(n) : n.toLocaleString();
 }
 
+function benchmarkWarnCount(warnings) {
+  return arrayOrEmpty(warnings).length;
+}
+
 function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   const s = summary || {};
   const perf = includePerf
@@ -2933,7 +2937,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     '<div style="margin-top:4px;color:var(--text-dim)">root mode: ' + benchmarkNA(summary.root_mode) +
     ' · preload turns: ' + String(summary.preload_turn_count || 0) + '</div>' +
     '<div style="margin-top:2px;color:var(--text-dim)">backend modes: ' + String((summary.backend_modes || []).join(', ') || 'unknown') + '</div>' +
-    '<div style="margin-top:2px;color:var(--text-dim)">warnings: ' + String((summary.warnings || []).length) + '</div>' +
+    '<div style="margin-top:2px;color:var(--text-dim)">warnings: ' + String(benchmarkWarnCount(summary.warnings)) + '</div>' +
     cmpLine +
     '<div style="margin-top:6px"><button class="btn" id="btn-bench-raw">Open raw JSON</button></div>';
   const rawBtn = meta.querySelector('#btn-bench-raw');
@@ -3030,7 +3034,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
           ' · anchor=' + benchmarkNA(c.top_anchor_reason) + '</div>' +
           '<div style="color:var(--text-dim);margin-top:2px">backend=' + benchmarkNA(c.benchmark_backend_mode) +
           ' · tokens=' + benchmarkTokens(((c.token_usage || {}).total_tokens_est ?? 0), { localize: false }) +
-          ' · warnings=' + String((c.warnings || []).length) + '</div>',
+          ' · warnings=' + String(benchmarkWarnCount(c.warnings)) + '</div>',
           {
             modalTitle: 'Benchmark case: ' + String(c.case_id || 'detail'),
             payload: c,
@@ -3406,7 +3410,7 @@ async function flushSession() {
 function formatBenchmarkSummary(s) {
   if (!s) return 'Benchmark completed.';
   const modes = (s.backend_modes || []).join(', ') || 'unknown';
-  const warns = Number((s.warnings || []).length || 0);
+  const warns = benchmarkWarnCount(s.warnings);
   return (
     'LOCOMO test completed\n' +
     'mode: isolated benchmark store (demo state not mutated)\n' +
