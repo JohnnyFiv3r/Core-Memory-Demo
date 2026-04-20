@@ -2881,6 +2881,12 @@ function benchmarkBool(value) {
   return String(!!value);
 }
 
+function benchmarkCaseTransitionHtml(improvedNow, regressedNow) {
+  if (improvedNow) return '<span class="bench-delta-good">improved</span>';
+  if (regressedNow) return '<span class="bench-delta-bad">regressed</span>';
+  return 'changed';
+}
+
 function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   const s = summary || {};
   const perf = includePerf
@@ -3030,7 +3036,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
         const improvedNow = !c.baseline_pass && !!c.enabled_pass;
         appendBenchFail(
           el,
-          '<div><strong>' + benchmarkCaseId(c.case_id, 'case') + '</strong> · ' + (improvedNow ? '<span class="bench-delta-good">improved</span>' : (regressedNow ? '<span class="bench-delta-bad">regressed</span>' : 'changed')) + '</div>' +
+          '<div><strong>' + benchmarkCaseId(c.case_id, 'case') + '</strong> · ' + benchmarkCaseTransitionHtml(improvedNow, regressedNow) + '</div>' +
           '<div style="color:var(--text-dim);margin-top:2px">baseline=' + benchmarkBool(c.baseline_pass) +
           ' · enabled=' + benchmarkBool(c.enabled_pass) +
           ' · latency Δ=' + benchmarkLatencyMs(c.latency_delta_ms || 0, 3) + '</div>',
