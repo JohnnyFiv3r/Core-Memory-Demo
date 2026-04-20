@@ -99,3 +99,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added shared `benchmarkMyelinationCountCards()` helper and rewired myelination changed-count card tuple construction (`improved`, `regressed`, `changed`, `unchanged`) in benchmark fallback rendering.
 - Cleanup pass: added shared `benchmarkBucketRowHtml()` helper and rewired per-bucket benchmark row markup rendering (`bucket`, `acc`, `pass/fail`) in benchmark fallback rendering.
 - Cleanup pass: added shared `benchmarkRunConfigCompareLine()` helper and rewired run-config compare-line rendering (`compare Δ`, `improved/regressed`) in benchmark fallback rendering.
+- Hotfix: removed default top-level `/chat.html -> /` redirect loop in `chat-bootstrap.js` (now only enabled via explicit `force_root=1`) to stop launcher ping-pong/blinking and allow direct chat surface load.

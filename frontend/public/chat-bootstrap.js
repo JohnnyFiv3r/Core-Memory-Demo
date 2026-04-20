@@ -18,9 +18,11 @@
       window.history.replaceState({}, document.title, clean.toString());
     } catch {}
   }
-  if (window.self === window.top && /\/chat\.html$/.test(window.location.pathname)) {
+  const forceRoot = String(params.get('force_root') || '').trim() === '1';
+  if (forceRoot && window.self === window.top && /\/chat\.html$/.test(window.location.pathname)) {
     const rootUrl = new URL('/', window.location.origin);
     if (window.location.search) rootUrl.search = window.location.search;
+    rootUrl.searchParams.delete('force_root');
     window.location.replace(rootUrl.toString());
     return;
   }
