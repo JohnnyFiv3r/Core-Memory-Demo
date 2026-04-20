@@ -2877,6 +2877,10 @@ function benchmarkCaseTitle(prefix, caseId) {
   return String(prefix || 'Benchmark case') + ': ' + benchmarkCaseId(caseId, 'detail');
 }
 
+function benchmarkBool(value) {
+  return String(!!value);
+}
+
 function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   const s = summary || {};
   const perf = includePerf
@@ -3027,8 +3031,8 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
         appendBenchFail(
           el,
           '<div><strong>' + benchmarkCaseId(c.case_id, 'case') + '</strong> · ' + (improvedNow ? '<span class="bench-delta-good">improved</span>' : (regressedNow ? '<span class="bench-delta-bad">regressed</span>' : 'changed')) + '</div>' +
-          '<div style="color:var(--text-dim);margin-top:2px">baseline=' + String(!!c.baseline_pass) +
-          ' · enabled=' + String(!!c.enabled_pass) +
+          '<div style="color:var(--text-dim);margin-top:2px">baseline=' + benchmarkBool(c.baseline_pass) +
+          ' · enabled=' + benchmarkBool(c.enabled_pass) +
           ' · latency Δ=' + benchmarkLatencyMs(c.latency_delta_ms || 0, 3) + '</div>',
           {
             background: improvedNow ? 'rgba(74, 222, 128, 0.08)' : 'rgba(248, 113, 113, 0.08)',

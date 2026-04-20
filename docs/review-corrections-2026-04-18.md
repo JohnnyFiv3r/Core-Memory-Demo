@@ -88,3 +88,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added shared `benchmarkBackendModes()` helper and rewired backend-mode label formatting callsites in fallback rendering and summary text.
 - Cleanup pass: added shared `benchmarkImprovedRegressed()` helper and rewired improved/regressed pair formatting in benchmark fallback rendering.
 - Cleanup pass: added shared `benchmarkCaseId()` / `benchmarkCaseTitle()` helpers and rewired benchmark case-id/title composition callsites in fallback rendering.
+- Cleanup pass: added shared `benchmarkBool()` helper and rewired benchmark baseline/enabled boolean label formatting in pass-state change rows.
