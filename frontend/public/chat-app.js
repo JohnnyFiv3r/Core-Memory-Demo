@@ -2917,6 +2917,22 @@ function benchmarkDeltaSpan(delta, digits) {
   return '<span class="' + benchmarkDeltaClass(d) + '">' + d.toFixed(n) + '</span>';
 }
 
+function benchmarkRunConfigKeyLines(summary) {
+  const s = summary || {};
+  return {
+    runIdAt:
+      '<div style="margin-top:2px;color:var(--text-dim)">run_id: ' + escapeHtml(benchmarkNA(s.run_id)) +
+      ' · at: ' + benchmarkAtValue(s.finished_at || s.started_at || '') + '</div>',
+    rootPreload:
+      '<div style="margin-top:4px;color:var(--text-dim)">root mode: ' + benchmarkNA(s.root_mode) +
+      ' · preload turns: ' + String(s.preload_turn_count || 0) + '</div>',
+    backendModes:
+      '<div style="margin-top:2px;color:var(--text-dim)">backend modes: ' + benchmarkBackendModes(s.backend_modes) + '</div>',
+    warnings:
+      '<div style="margin-top:2px;color:var(--text-dim)">warnings: ' + String(benchmarkWarnCount(s.warnings)) + '</div>',
+  };
+}
+
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
@@ -2958,18 +2974,17 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
 
   const meta = appendRuntimeCard(el, '');
   const cmp = summary.myelination_compare || null;
+  const keyLines = benchmarkRunConfigKeyLines(summary);
   const cmpLine = cmp
     ? ('<div style="margin-top:2px;color:var(--text-dim)">compare Δ=' + benchmarkAcc(cmp.accuracy_delta || 0) +
        ' · improved/regressed=' + benchmarkImprovedRegressed(cmp.improved_cases || 0, cmp.regressed_cases || 0) + '</div>')
     : '';
   meta.innerHTML =
     '<div><strong>Run config</strong></div>' +
-    '<div style="margin-top:2px;color:var(--text-dim)">run_id: ' + escapeHtml(benchmarkNA(summary.run_id)) +
-    ' · at: ' + benchmarkAtValue(summary.finished_at || summary.started_at || '') + '</div>' +
-    '<div style="margin-top:4px;color:var(--text-dim)">root mode: ' + benchmarkNA(summary.root_mode) +
-    ' · preload turns: ' + String(summary.preload_turn_count || 0) + '</div>' +
-    '<div style="margin-top:2px;color:var(--text-dim)">backend modes: ' + benchmarkBackendModes(summary.backend_modes) + '</div>' +
-    '<div style="margin-top:2px;color:var(--text-dim)">warnings: ' + String(benchmarkWarnCount(summary.warnings)) + '</div>' +
+    keyLines.runIdAt +
+    keyLines.rootPreload +
+    keyLines.backendModes +
+    keyLines.warnings +
     cmpLine +
     '<div style="margin-top:6px"><button class="btn" id="btn-bench-raw">Open raw JSON</button></div>';
   const rawBtn = meta.querySelector('#btn-bench-raw');

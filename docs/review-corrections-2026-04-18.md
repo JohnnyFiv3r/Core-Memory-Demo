@@ -90,3 +90,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added shared `benchmarkCaseId()` / `benchmarkCaseTitle()` helpers and rewired benchmark case-id/title composition callsites in fallback rendering.
 - Cleanup pass: added shared `benchmarkBool()` helper and rewired benchmark baseline/enabled boolean label formatting in pass-state change rows.
 - Cleanup pass: added shared `benchmarkCaseTransitionHtml()` helper and rewired benchmark case transition label rendering (`improved`/`regressed`/`changed`) in pass-state change rows.
+- Cleanup pass: added shared `benchmarkRunConfigKeyLines()` helper and rewired benchmark run-config key line composition (`run_id/at`, `root/preload`, `backend modes`, `warnings`) in fallback rendering.
