@@ -125,3 +125,6 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Hosted demo graph fix: updated CSP in `vercel.json` to include `worker-src 'self' blob:` so Reagraph blob workers used by `graph.html` are allowed (fixes CSP block on graph popup rendering).
 - Hosted demo hard-stop for model endpoint calls: in `chat-app.js`, `loadDemoModels()` now skips network calls entirely on `demo.usecorememory.com` and disables the model selector locally (prevents any `/api/demo/models` 404 console noise on hosted demo).
 - Cache-bust bump: updated `chat.html` app script query to `chat-app.js?v=20260420-auth-session-6` and root launcher `uiRev` in `frontend/src/App.tsx` to `20260420-auth-session-06`.
+- Hosted graph overlay reload fix: in `chat-app.js` `openReagraphArchive()`, always refresh iframe `src` and append `v=<timestamp>` (plus current `ui_rev`) so open overlay fetches a fresh `/graph` document/header instead of reusing stale in-tab iframe state.
+- CSP compatibility hardening: updated `vercel.json` `script-src` to include `blob:` in addition to `worker-src 'self' blob:` for browsers that still fall back worker checks to `script-src`.
+- Cache-bust bump: updated `chat.html` app script query to `chat-app.js?v=20260420-auth-session-7` and root launcher `uiRev` in `frontend/src/App.tsx` to `20260420-auth-session-07`.

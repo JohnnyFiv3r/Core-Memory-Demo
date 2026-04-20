@@ -719,12 +719,13 @@ function openReagraphArchive() {
   const qp = new URLSearchParams(window.location.search);
   const graphUrl = new URL('./graph', window.location.href);
   const apiBase = String(qp.get('api_base') || '').trim();
+  const uiRev = String(qp.get('ui_rev') || '').trim();
   if (apiBase) graphUrl.searchParams.set('api_base', apiBase);
+  if (uiRev) graphUrl.searchParams.set('ui_rev', uiRev);
   graphUrl.searchParams.set('overlay', '1');
+  graphUrl.searchParams.set('v', String(Date.now()));
 
-  if (!frame.getAttribute('src')) {
-    frame.setAttribute('src', graphUrl.toString());
-  }
+  frame.setAttribute('src', graphUrl.toString());
 
   overlay.classList.add('open');
   document.body.style.overflow = 'hidden';

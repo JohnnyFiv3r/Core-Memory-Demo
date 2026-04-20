@@ -10,7 +10,7 @@
       "headers": [
         {
           "key": "Content-Security-Policy",
-          "value": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self'; script-src 'self' https://cdn.auth0.com https://esm.sh; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://core-memory-demo.onrender.com https://*.auth0.com https://cdn.auth0.com https://esm.sh; frame-src 'self' https://*.auth0.com"
+          "value": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'self'; form-action 'self'; script-src 'self' blob: https://cdn.auth0.com https://esm.sh; worker-src 'self' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; font-src 'self' data:; connect-src 'self' https://core-memory-demo.onrender.com https://*.auth0.com https://cdn.auth0.com https://esm.sh; frame-src 'self' https://*.auth0.com"
         },
         {
           "key": "Referrer-Policy",
