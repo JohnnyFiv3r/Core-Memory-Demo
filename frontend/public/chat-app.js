@@ -2887,6 +2887,16 @@ function benchmarkCaseTransitionHtml(improvedNow, regressedNow) {
   return 'changed';
 }
 
+function benchmarkRunId(runId, fallback) {
+  const s = String(runId || '').trim();
+  if (s) return s;
+  return String(fallback || 'run');
+}
+
+function benchmarkRunIdHtml(runId, fallback) {
+  return escapeHtml(benchmarkRunId(runId, fallback));
+}
+
 function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   const s = summary || {};
   const perf = includePerf
@@ -2896,7 +2906,7 @@ function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
     )
     : '';
   return (
-    '<div><strong>' + escapeHtml(String(s.run_id || fallbackRunId || 'run')) + '</strong></div>' +
+    '<div><strong>' + benchmarkRunIdHtml(s.run_id, fallbackRunId || 'run') + '</strong></div>' +
     '<div style="margin-top:2px;color:var(--text-dim)">acc=' + benchmarkAcc(s.accuracy || 0) +
     ' · pass/fail=' + benchmarkPassFail(s.pass || 0, s.fail || 0) +
     perf + '</div>' +
@@ -3116,8 +3126,8 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
         appendRuntimeCard(
           el,
           '<div><strong>Latest vs previous run</strong></div>' +
-          '<div style="margin-top:2px;color:var(--text-dim)">baseline=' + escapeHtml(String(bs.run_id || baseline.run_id || 'n/a')) +
-          ' → current=' + escapeHtml(String(cs.run_id || current.run_id || 'n/a')) + '</div>' +
+          '<div style="margin-top:2px;color:var(--text-dim)">baseline=' + benchmarkRunIdHtml(bs.run_id || baseline.run_id, 'n/a') +
+          ' → current=' + benchmarkRunIdHtml(cs.run_id || current.run_id, 'n/a') + '</div>' +
           '<div style="margin-top:4px;color:var(--text-dim)">accuracy Δ=' + benchmarkDeltaSpan(dAcc, 4) +
           ' · latency Δ=' + benchmarkLatencyMs(dLat, 3) +
           ' · tokens Δ=' + benchmarkTokens(dTok) + '</div>'
