@@ -2968,6 +2968,14 @@ function benchmarkLatestCompareMetricsLine(currentSummary, baselineSummary) {
     ' · tokens Δ=' + benchmarkTokens(dTok) + '</div>';
 }
 
+function benchmarkMyelinationSummaryLine(baseline, enabled, delta) {
+  const b = baseline || {};
+  const e = enabled || {};
+  return '<div style="margin-top:4px;color:var(--text-dim)">baseline acc=' + benchmarkNA(b.accuracy) +
+    ' · enabled acc=' + benchmarkNA(e.accuracy) +
+    ' · delta=' + benchmarkDeltaSpan(delta, 4) + '</div>';
+}
+
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
@@ -3054,9 +3062,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     appendRuntimeCard(
       el,
       '<div><strong>Myelination compare</strong></div>' +
-      '<div style="margin-top:4px;color:var(--text-dim)">baseline acc=' + benchmarkNA(baseline.accuracy) +
-      ' · enabled acc=' + benchmarkNA(enabled.accuracy) +
-      ' · delta=' + benchmarkDeltaSpan(delta, 4) + '</div>' +
+      benchmarkMyelinationSummaryLine(baseline, enabled, delta) +
       '<div style="margin-top:2px;color:var(--text-dim)">pass/fail baseline=' + benchmarkPassFail(baseline.pass ?? 0, baseline.fail ?? 0) +
       ' · enabled=' + benchmarkPassFail(enabled.pass ?? 0, enabled.fail ?? 0) + '</div>'
     );
