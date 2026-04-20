@@ -426,7 +426,7 @@ async function initAuthGate() {
   }
 
   try {
-    const authRedirectUri = window.location.origin.replace(/\/$/, '') + '/';
+    const authRedirectUri = window.location.origin.replace(/\/$/, '') + '/chat.html';
     authClient = await window.auth0.createAuth0Client({
       domain,
       clientId,
