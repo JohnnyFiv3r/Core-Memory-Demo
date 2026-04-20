@@ -236,6 +236,10 @@ function disableDemoModelOptions(reason) {
 
 async function loadDemoModels() {
   if (!modelSelectEl) return;
+  if (window.location.hostname === 'demo.usecorememory.com') {
+    disableDemoModelOptions('Model options disabled on hosted demo');
+    return;
+  }
   try {
     const res = await fetch('/api/demo/models');
     if (res.status === 404) {
