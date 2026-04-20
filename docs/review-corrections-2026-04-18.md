@@ -80,3 +80,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added shared `benchmarkRunRowHtml()` helper and rewired repeated benchmark run-summary row markup construction in `renderBenchmarkFallback()`.
 - Cleanup pass: added shared `benchmarkDeltaClass()`/`benchmarkDeltaSpan()` helpers and rewired benchmark delta rendering callsites to use them.
 - Cleanup pass: added shared `benchmarkPassFail()` helper and rewired benchmark pass/fail formatting callsites in fallback rendering and summary text.
+- Cleanup pass: added shared `benchmarkAcc()` helper and rewired benchmark accuracy formatting callsites to remove repeated `toFixed(4)` boilerplate.

@@ -2821,6 +2821,10 @@ function benchmarkPassFail(pass, fail) {
   return String((pass ?? 0) + '/' + (fail ?? 0));
 }
 
+function benchmarkAcc(value) {
+  return Number(value || 0).toFixed(4);
+}
+
 function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   const s = summary || {};
   const perf = includePerf
@@ -2831,7 +2835,7 @@ function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
     : '';
   return (
     '<div><strong>' + escapeHtml(String(s.run_id || fallbackRunId || 'run')) + '</strong></div>' +
-    '<div style="margin-top:2px;color:var(--text-dim)">acc=' + Number(s.accuracy || 0).toFixed(4) +
+    '<div style="margin-top:2px;color:var(--text-dim)">acc=' + benchmarkAcc(s.accuracy || 0) +
     ' · pass/fail=' + benchmarkPassFail(s.pass || 0, s.fail || 0) +
     perf + '</div>' +
     '<div style="margin-top:2px;color:var(--text-dim)">at=' + escapeHtml(formatIsoShort(String(atIso || ''))) + '</div>'
@@ -2880,7 +2884,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const latencyMean = Number(((report || {}).latency_ms || {}).mean || 0).toFixed(2);
   const tokenTotal = Number(((report || {}).token_usage || {}).total_tokens_est || 0);
   const cards = [
-    ['accuracy', Number(summary.accuracy || 0).toFixed(4)],
+    ['accuracy', benchmarkAcc(summary.accuracy || 0)],
     ['cases', String(summary.cases || 0)],
     ['pass/fail', benchmarkPassFail(summary.pass || 0, summary.fail || 0)],
     ['semantic', String(summary.semantic_mode || 'n/a')],
@@ -2893,7 +2897,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const meta = appendRuntimeCard(el, '');
   const cmp = summary.myelination_compare || null;
   const cmpLine = cmp
-    ? ('<div style="margin-top:2px;color:var(--text-dim)">compare Δ=' + String(Number(cmp.accuracy_delta || 0).toFixed(4)) +
+    ? ('<div style="margin-top:2px;color:var(--text-dim)">compare Δ=' + benchmarkAcc(cmp.accuracy_delta || 0) +
        ' · improved/regressed=' + String((cmp.improved_cases || 0) + '/' + (cmp.regressed_cases || 0)) + '</div>')
     : '';
   meta.innerHTML =
@@ -2919,7 +2923,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
       const row = r.per_bucket[k] || {};
       appendBenchBucket(
         el,
-        '<strong>' + k + '</strong> · acc=' + Number(row.accuracy || 0).toFixed(4) +
+        '<strong>' + k + '</strong> · acc=' + benchmarkAcc(row.accuracy || 0) +
         ' · pass/fail=' + benchmarkPassFail(row.pass || 0, row.fail || 0)
       );
     });
@@ -3383,7 +3387,7 @@ function formatBenchmarkSummary(s) {
     'root mode: ' + (s.root_mode || 'n/a') + '\n' +
     'cases: ' + (s.cases ?? 0) + '\n' +
     'pass/fail: ' + benchmarkPassFail(s.pass ?? 0, s.fail ?? 0) + '\n' +
-    'accuracy: ' + Number(s.accuracy || 0).toFixed(4) + '\n' +
+    'accuracy: ' + benchmarkAcc(s.accuracy || 0) + '\n' +
     'semantic mode: ' + (s.semantic_mode || 'n/a') + '\n' +
     'backend modes: ' + modes + '\n' +
     'preload turns: ' + (s.preload_turn_count ?? 0) + '\n' +
