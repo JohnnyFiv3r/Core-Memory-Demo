@@ -2835,12 +2835,28 @@ function benchmarkAtValue(atIso) {
   return escapeHtml(formatIsoShort(String(atIso || '')));
 }
 
+function benchmarkLatency(value, digits) {
+  const n = Number(value || 0);
+  const d = Number.isFinite(Number(digits)) ? Number(digits) : 2;
+  return n.toFixed(d);
+}
+
+function benchmarkLatencyMs(value, digits) {
+  return benchmarkLatency(value, digits) + 'ms';
+}
+
+function benchmarkTokens(value, opts) {
+  const n = Number(value ?? 0);
+  const cfg = opts || {};
+  return cfg.localize === false ? String(n) : n.toLocaleString();
+}
+
 function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   const s = summary || {};
   const perf = includePerf
     ? (
-      ' · latency=' + Number(s.latency_mean_ms || 0).toFixed(2) + 'ms' +
-      ' · tokens=' + Number(s.tokens_total_est || 0).toLocaleString()
+      ' · latency=' + benchmarkLatencyMs(s.latency_mean_ms || 0, 2) +
+      ' · tokens=' + benchmarkTokens(s.tokens_total_est || 0)
     )
     : '';
   return (
@@ -2891,7 +2907,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
 
   const g = document.createElement('div');
   g.className = 'bench-grid';
-  const latencyMean = Number(((report || {}).latency_ms || {}).mean || 0).toFixed(2);
+  const latencyMean = benchmarkLatency(((report || {}).latency_ms || {}).mean || 0, 2);
   const tokenTotal = Number(((report || {}).token_usage || {}).total_tokens_est || 0);
   const cards = [
     ['accuracy', benchmarkAcc(summary.accuracy || 0)],
@@ -2899,7 +2915,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     ['pass/fail', benchmarkPassFail(summary.pass || 0, summary.fail || 0)],
     ['semantic', benchmarkNA(summary.semantic_mode)],
     ['latency mean (ms)', latencyMean],
-    ['tokens est', tokenTotal.toLocaleString()],
+    ['tokens est', benchmarkTokens(tokenTotal)],
   ];
   appendBenchCards(g, cards);
   el.appendChild(g);
@@ -2987,7 +3003,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
           '<div><strong>' + String(c.case_id || 'case') + '</strong> · ' + (improvedNow ? '<span class="bench-delta-good">improved</span>' : (regressedNow ? '<span class="bench-delta-bad">regressed</span>' : 'changed')) + '</div>' +
           '<div style="color:var(--text-dim);margin-top:2px">baseline=' + String(!!c.baseline_pass) +
           ' · enabled=' + String(!!c.enabled_pass) +
-          ' · latency Δ=' + String(Number(c.latency_delta_ms || 0).toFixed(3)) + 'ms</div>',
+          ' · latency Δ=' + benchmarkLatencyMs(c.latency_delta_ms || 0, 3) + '</div>',
           {
             background: improvedNow ? 'rgba(74, 222, 128, 0.08)' : 'rgba(248, 113, 113, 0.08)',
             borderColor: improvedNow ? 'rgba(74, 222, 128, 0.30)' : 'rgba(248, 113, 113, 0.25)',
@@ -3013,7 +3029,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
           '<div style="color:var(--text-dim);margin-top:2px">surface=' + benchmarkNA(c.top_source_surface) +
           ' · anchor=' + benchmarkNA(c.top_anchor_reason) + '</div>' +
           '<div style="color:var(--text-dim);margin-top:2px">backend=' + benchmarkNA(c.benchmark_backend_mode) +
-          ' · tokens=' + String(((c.token_usage || {}).total_tokens_est ?? 0)) +
+          ' · tokens=' + benchmarkTokens(((c.token_usage || {}).total_tokens_est ?? 0), { localize: false }) +
           ' · warnings=' + String((c.warnings || []).length) + '</div>',
           {
             modalTitle: 'Benchmark case: ' + String(c.case_id || 'detail'),
@@ -3052,8 +3068,8 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
           '<div style="margin-top:2px;color:var(--text-dim)">baseline=' + escapeHtml(String(bs.run_id || baseline.run_id || 'n/a')) +
           ' → current=' + escapeHtml(String(cs.run_id || current.run_id || 'n/a')) + '</div>' +
           '<div style="margin-top:4px;color:var(--text-dim)">accuracy Δ=' + benchmarkDeltaSpan(dAcc, 4) +
-          ' · latency Δ=' + dLat.toFixed(3) + 'ms' +
-          ' · tokens Δ=' + dTok.toLocaleString() + '</div>'
+          ' · latency Δ=' + benchmarkLatencyMs(dLat, 3) +
+          ' · tokens Δ=' + benchmarkTokens(dTok) + '</div>'
         );
       }
     }

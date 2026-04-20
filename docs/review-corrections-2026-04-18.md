@@ -83,3 +83,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added shared `benchmarkAcc()` helper and rewired benchmark accuracy formatting callsites to remove repeated `toFixed(4)` boilerplate.
 - Cleanup pass: added shared `benchmarkNA()` helper and rewired benchmark `n/a` fallback text formatting callsites in fallback rendering and summary text.
 - Cleanup pass: added shared `benchmarkAtValue()` helper and rewired benchmark timestamp label formatting callsites in fallback rendering.
+- Cleanup pass: added shared benchmark latency/token helpers (`benchmarkLatency()`, `benchmarkLatencyMs()`, `benchmarkTokens()`) and rewired benchmark formatting callsites in fallback rendering.
