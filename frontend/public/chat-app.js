@@ -3044,6 +3044,13 @@ function benchmarkPassStateRowStyles(improvedNow, regressedNow) {
   };
 }
 
+function benchmarkPassStateRowDetail(caseRow) {
+  const c = caseRow || {};
+  return '<div style="color:var(--text-dim);margin-top:2px">baseline=' + benchmarkBool(c.baseline_pass) +
+    ' · enabled=' + benchmarkBool(c.enabled_pass) +
+    ' · latency Δ=' + benchmarkLatencyMs(c.latency_delta_ms || 0, 3) + '</div>';
+}
+
 function benchmarkRunId(runId, fallback) {
   const s = String(runId || '').trim();
   if (s) return s;
@@ -3270,9 +3277,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
         appendBenchFail(
           el,
           '<div><strong>' + benchmarkCaseId(c.case_id, 'case') + '</strong> · ' + benchmarkCaseTransitionHtml(improvedNow, regressedNow) + '</div>' +
-          '<div style="color:var(--text-dim);margin-top:2px">baseline=' + benchmarkBool(c.baseline_pass) +
-          ' · enabled=' + benchmarkBool(c.enabled_pass) +
-          ' · latency Δ=' + benchmarkLatencyMs(c.latency_delta_ms || 0, 3) + '</div>',
+          benchmarkPassStateRowDetail(c),
           {
             background: rowStyles.background,
             borderColor: rowStyles.borderColor,
