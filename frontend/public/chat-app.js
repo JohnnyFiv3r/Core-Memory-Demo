@@ -2897,6 +2897,20 @@ function benchmarkRunIdHtml(runId, fallback) {
   return escapeHtml(benchmarkRunId(runId, fallback));
 }
 
+function benchmarkHistoryRunId(row) {
+  const r = row || {};
+  return benchmarkRunId((r.summary || {}).run_id || r.run_id, '');
+}
+
+function benchmarkHistoryRunPair(history, currentRunId) {
+  const list = arrayOrEmpty(history);
+  const target = String(currentRunId || '');
+  return {
+    current: list.find((row) => benchmarkHistoryRunId(row) === target),
+    baseline: list.find((row) => benchmarkHistoryRunId(row) !== target),
+  };
+}
+
 function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   const s = summary || {};
   const perf = includePerf
@@ -3115,8 +3129,9 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     });
 
     if (summary.run_id && history.length >= 2) {
-      const current = history.find(hx => String((hx.summary || {}).run_id || hx.run_id || '') === String(summary.run_id));
-      const baseline = history.find(hx => String((hx.summary || {}).run_id || hx.run_id || '') !== String(summary.run_id));
+      const pair = benchmarkHistoryRunPair(history, summary.run_id);
+      const current = pair.current;
+      const baseline = pair.baseline;
       if (current && baseline) {
         const cs = current.summary || {};
         const bs = baseline.summary || {};
