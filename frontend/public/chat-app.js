@@ -2817,6 +2817,10 @@ function appendBenchFail(container, html, opts) {
   return row;
 }
 
+function benchmarkPassFail(pass, fail) {
+  return String((pass ?? 0) + '/' + (fail ?? 0));
+}
+
 function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   const s = summary || {};
   const perf = includePerf
@@ -2828,7 +2832,7 @@ function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   return (
     '<div><strong>' + escapeHtml(String(s.run_id || fallbackRunId || 'run')) + '</strong></div>' +
     '<div style="margin-top:2px;color:var(--text-dim)">acc=' + Number(s.accuracy || 0).toFixed(4) +
-    ' · pass/fail=' + String((s.pass || 0) + '/' + (s.fail || 0)) +
+    ' · pass/fail=' + benchmarkPassFail(s.pass || 0, s.fail || 0) +
     perf + '</div>' +
     '<div style="margin-top:2px;color:var(--text-dim)">at=' + escapeHtml(formatIsoShort(String(atIso || ''))) + '</div>'
   );
@@ -2878,7 +2882,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const cards = [
     ['accuracy', Number(summary.accuracy || 0).toFixed(4)],
     ['cases', String(summary.cases || 0)],
-    ['pass/fail', String((summary.pass || 0) + '/' + (summary.fail || 0))],
+    ['pass/fail', benchmarkPassFail(summary.pass || 0, summary.fail || 0)],
     ['semantic', String(summary.semantic_mode || 'n/a')],
     ['latency mean (ms)', latencyMean],
     ['tokens est', tokenTotal.toLocaleString()],
@@ -2916,7 +2920,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
       appendBenchBucket(
         el,
         '<strong>' + k + '</strong> · acc=' + Number(row.accuracy || 0).toFixed(4) +
-        ' · pass/fail=' + String((row.pass || 0) + '/' + (row.fail || 0))
+        ' · pass/fail=' + benchmarkPassFail(row.pass || 0, row.fail || 0)
       );
     });
   }
@@ -2937,8 +2941,8 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
       '<div style="margin-top:4px;color:var(--text-dim)">baseline acc=' + String(baseline.accuracy ?? 'n/a') +
       ' · enabled acc=' + String(enabled.accuracy ?? 'n/a') +
       ' · delta=' + benchmarkDeltaSpan(delta, 4) + '</div>' +
-      '<div style="margin-top:2px;color:var(--text-dim)">pass/fail baseline=' + String((baseline.pass ?? 0) + '/' + (baseline.fail ?? 0)) +
-      ' · enabled=' + String((enabled.pass ?? 0) + '/' + (enabled.fail ?? 0)) + '</div>'
+      '<div style="margin-top:2px;color:var(--text-dim)">pass/fail baseline=' + benchmarkPassFail(baseline.pass ?? 0, baseline.fail ?? 0) +
+      ' · enabled=' + benchmarkPassFail(enabled.pass ?? 0, enabled.fail ?? 0) + '</div>'
     );
 
     const mg = document.createElement('div');
@@ -3378,7 +3382,7 @@ function formatBenchmarkSummary(s) {
     'mode: isolated benchmark store (demo state not mutated)\n' +
     'root mode: ' + (s.root_mode || 'n/a') + '\n' +
     'cases: ' + (s.cases ?? 0) + '\n' +
-    'pass/fail: ' + (s.pass ?? 0) + '/' + (s.fail ?? 0) + '\n' +
+    'pass/fail: ' + benchmarkPassFail(s.pass ?? 0, s.fail ?? 0) + '\n' +
     'accuracy: ' + Number(s.accuracy || 0).toFixed(4) + '\n' +
     'semantic mode: ' + (s.semantic_mode || 'n/a') + '\n' +
     'backend modes: ' + modes + '\n' +
