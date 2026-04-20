@@ -2831,6 +2831,10 @@ function benchmarkNA(value) {
   return s ? s : 'n/a';
 }
 
+function benchmarkAtValue(atIso) {
+  return escapeHtml(formatIsoShort(String(atIso || '')));
+}
+
 function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   const s = summary || {};
   const perf = includePerf
@@ -2844,7 +2848,7 @@ function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
     '<div style="margin-top:2px;color:var(--text-dim)">acc=' + benchmarkAcc(s.accuracy || 0) +
     ' · pass/fail=' + benchmarkPassFail(s.pass || 0, s.fail || 0) +
     perf + '</div>' +
-    '<div style="margin-top:2px;color:var(--text-dim)">at=' + escapeHtml(formatIsoShort(String(atIso || ''))) + '</div>'
+    '<div style="margin-top:2px;color:var(--text-dim)">at=' + benchmarkAtValue(atIso) + '</div>'
   );
 }
 
@@ -2909,7 +2913,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   meta.innerHTML =
     '<div><strong>Run config</strong></div>' +
     '<div style="margin-top:2px;color:var(--text-dim)">run_id: ' + escapeHtml(benchmarkNA(summary.run_id)) +
-    ' · at: ' + escapeHtml(formatIsoShort(String(summary.finished_at || summary.started_at || ''))) + '</div>' +
+    ' · at: ' + benchmarkAtValue(summary.finished_at || summary.started_at || '') + '</div>' +
     '<div style="margin-top:4px;color:var(--text-dim)">root mode: ' + benchmarkNA(summary.root_mode) +
     ' · preload turns: ' + String(summary.preload_turn_count || 0) + '</div>' +
     '<div style="margin-top:2px;color:var(--text-dim)">backend modes: ' + String((summary.backend_modes || []).join(', ') || 'unknown') + '</div>' +
