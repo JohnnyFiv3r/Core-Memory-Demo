@@ -2996,6 +2996,13 @@ function benchmarkMyelinationCountCards(improvedCount, regressedCount, changedCo
   ];
 }
 
+function benchmarkBucketRowHtml(bucketName, row) {
+  const key = String(bucketName || 'bucket');
+  const r = row || {};
+  return '<strong>' + key + '</strong> · acc=' + benchmarkAcc(r.accuracy || 0) +
+    ' · pass/fail=' + benchmarkPassFail(r.pass || 0, r.fail || 0);
+}
+
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
@@ -3063,8 +3070,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
       const row = r.per_bucket[k] || {};
       appendBenchBucket(
         el,
-        '<strong>' + k + '</strong> · acc=' + benchmarkAcc(row.accuracy || 0) +
-        ' · pass/fail=' + benchmarkPassFail(row.pass || 0, row.fail || 0)
+        benchmarkBucketRowHtml(k, row)
       );
     });
   }

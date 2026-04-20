@@ -97,3 +97,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added shared `benchmarkMyelinationSummaryLine()` helper and rewired myelination compare summary-line rendering (`baseline acc`, `enabled acc`, `delta`) in benchmark fallback rendering.
 - Cleanup pass: added shared `benchmarkMyelinationPassFailLine()` helper and rewired myelination compare pass/fail line rendering (`pass/fail baseline`, `enabled`) in benchmark fallback rendering.
 - Cleanup pass: added shared `benchmarkMyelinationCountCards()` helper and rewired myelination changed-count card tuple construction (`improved`, `regressed`, `changed`, `unchanged`) in benchmark fallback rendering.
+- Cleanup pass: added shared `benchmarkBucketRowHtml()` helper and rewired per-bucket benchmark row markup rendering (`bucket`, `acc`, `pass/fail`) in benchmark fallback rendering.
