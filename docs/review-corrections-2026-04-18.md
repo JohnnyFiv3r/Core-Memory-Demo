@@ -78,3 +78,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup pass: added shared `appendRuntimeCard()` helper and rewired repeated runtime-card creation blocks in runtime + benchmark fallback rendering.
 - Cleanup pass: added shared `appendBenchFail()` helper and rewired repeated benchmark fail-row creation/click wiring in `renderBenchmarkFallback()`.
 - Cleanup pass: added shared `benchmarkRunRowHtml()` helper and rewired repeated benchmark run-summary row markup construction in `renderBenchmarkFallback()`.
+- Cleanup pass: added shared `benchmarkDeltaClass()`/`benchmarkDeltaSpan()` helpers and rewired benchmark delta rendering callsites to use them.

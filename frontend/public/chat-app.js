@@ -2834,6 +2834,19 @@ function benchmarkRunRowHtml(summary, fallbackRunId, atIso, includePerf) {
   );
 }
 
+function benchmarkDeltaClass(delta) {
+  const d = Number(delta || 0);
+  if (d > 0) return 'bench-delta-good';
+  if (d < 0) return 'bench-delta-bad';
+  return 'bench-delta-neutral';
+}
+
+function benchmarkDeltaSpan(delta, digits) {
+  const d = Number(delta || 0);
+  const n = Number.isFinite(Number(digits)) ? Number(digits) : 4;
+  return '<span class="' + benchmarkDeltaClass(d) + '">' + d.toFixed(n) + '</span>';
+}
+
 function renderBenchmarkFallback(summary, report, benchmarkMeta) {
   const el = document.getElementById('tab-benchmark-content');
   el.textContent = '';
@@ -2923,7 +2936,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
       '<div><strong>Myelination compare</strong></div>' +
       '<div style="margin-top:4px;color:var(--text-dim)">baseline acc=' + String(baseline.accuracy ?? 'n/a') +
       ' · enabled acc=' + String(enabled.accuracy ?? 'n/a') +
-      ' · delta=<span class="' + (delta > 0 ? 'bench-delta-good' : delta < 0 ? 'bench-delta-bad' : 'bench-delta-neutral') + '">' + String(delta.toFixed(4)) + '</span></div>' +
+      ' · delta=' + benchmarkDeltaSpan(delta, 4) + '</div>' +
       '<div style="margin-top:2px;color:var(--text-dim)">pass/fail baseline=' + String((baseline.pass ?? 0) + '/' + (baseline.fail ?? 0)) +
       ' · enabled=' + String((enabled.pass ?? 0) + '/' + (enabled.fail ?? 0)) + '</div>'
     );
@@ -3020,7 +3033,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
           '<div><strong>Latest vs previous run</strong></div>' +
           '<div style="margin-top:2px;color:var(--text-dim)">baseline=' + escapeHtml(String(bs.run_id || baseline.run_id || 'n/a')) +
           ' → current=' + escapeHtml(String(cs.run_id || current.run_id || 'n/a')) + '</div>' +
-          '<div style="margin-top:4px;color:var(--text-dim)">accuracy Δ=<span class="' + (dAcc > 0 ? 'bench-delta-good' : dAcc < 0 ? 'bench-delta-bad' : 'bench-delta-neutral') + '">' + dAcc.toFixed(4) + '</span>' +
+          '<div style="margin-top:4px;color:var(--text-dim)">accuracy Δ=' + benchmarkDeltaSpan(dAcc, 4) +
           ' · latency Δ=' + dLat.toFixed(3) + 'ms' +
           ' · tokens Δ=' + dTok.toLocaleString() + '</div>'
         );
