@@ -221,10 +221,27 @@ function renderDemoModelOptions(payload) {
   modelSelectEl.value = selected;
 }
 
+function disableDemoModelOptions(reason) {
+  if (!modelSelectEl) return;
+  modelOptionsHydrated = true;
+  modelSelectEl.innerHTML = '';
+  const autoOpt = document.createElement('option');
+  autoOpt.value = '';
+  autoOpt.textContent = 'auto';
+  modelSelectEl.appendChild(autoOpt);
+  modelSelectEl.value = '';
+  modelSelectEl.disabled = true;
+  modelSelectEl.title = String(reason || 'Model options unavailable on this backend');
+}
+
 async function loadDemoModels() {
   if (!modelSelectEl) return;
   try {
     const res = await fetch('/api/demo/models');
+    if (res.status === 404) {
+      disableDemoModelOptions('Model options endpoint unavailable on this backend');
+      return;
+    }
     const data = await res.json();
     if (!res.ok || !data || !data.ok) return;
     renderDemoModelOptions(data);
