@@ -353,7 +353,14 @@ async function redirectToLogin(forcePrompt) {
   const guard = readAuthLoopGuard();
   writeAuthLoopGuard({ count: guard.count + 1, ts: Date.now(), lastError: guard.lastError || '' });
   const qp = new URLSearchParams(window.location.search);
-  const next = String(qp.get('next') || (window.location.pathname + window.location.search) || '/').trim();
+  const cleaned = new URL(window.location.href);
+  cleaned.searchParams.delete('code');
+  cleaned.searchParams.delete('state');
+  cleaned.searchParams.delete('error');
+  cleaned.searchParams.delete('error_description');
+  cleaned.searchParams.delete('iss');
+  const cleanedNext = cleaned.pathname + cleaned.search;
+  const next = String(qp.get('next') || cleanedNext || '/').trim();
   const loginOpts = {
     appState: { returnTo: next },
     authorizationParams: forcePrompt ? { prompt: 'login', scope: authRequestedScope } : { scope: authRequestedScope },
@@ -480,12 +487,42 @@ async function initAuthGate() {
     }
 
     if (qp.get('code') && qp.get('state')) {
-      const cb = await authClient.handleRedirectCallback();
+      let cb = null;
+      try {
+        cb = await authClient.handleRedirectCallback();
+      } catch (err) {
+        clearAuthBrowserState();
+        const emsg = String((err && err.message) || err || 'callback_error');
+        setAuthStatus('Session callback failed. Retrying login...');
+        setAuthButton('Sign in', () => redirectToLogin(true));
+        if (!authRedirecting) {
+          authRedirecting = true;
+          writeAuthLoopGuard({ count: 2, ts: Date.now(), lastError: emsg });
+          try { await redirectToLogin(true); } catch (_) {}
+        }
+        return false;
+      }
       callbackReturnTo = String(((cb || {}).appState || {}).returnTo || '').trim();
-      window.history.replaceState({}, document.title, window.location.pathname);
+      try {
+        const clean = new URL(window.location.href);
+        clean.searchParams.delete('code');
+        clean.searchParams.delete('state');
+        clean.searchParams.delete('error');
+        clean.searchParams.delete('error_description');
+        clean.searchParams.delete('iss');
+        window.history.replaceState({}, document.title, clean.pathname + clean.search);
+      } catch (_) {
+        window.history.replaceState({}, document.title, window.location.pathname);
+      }
       try {
         if (window.self !== window.top && window.top.location.origin === window.location.origin) {
-          window.top.history.replaceState({}, document.title, window.top.location.pathname);
+          const topClean = new URL(window.top.location.href);
+          topClean.searchParams.delete('code');
+          topClean.searchParams.delete('state');
+          topClean.searchParams.delete('error');
+          topClean.searchParams.delete('error_description');
+          topClean.searchParams.delete('iss');
+          window.top.history.replaceState({}, document.title, topClean.pathname + topClean.search);
         }
       } catch (_) {
         // ignore
