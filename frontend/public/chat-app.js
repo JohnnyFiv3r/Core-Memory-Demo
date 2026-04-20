@@ -3051,6 +3051,12 @@ function benchmarkPassStateRowDetail(caseRow) {
     ' · latency Δ=' + benchmarkLatencyMs(c.latency_delta_ms || 0, 3) + '</div>';
 }
 
+function benchmarkPassStateRowTitle(caseRow, improvedNow, regressedNow) {
+  const c = caseRow || {};
+  return '<div><strong>' + benchmarkCaseId(c.case_id, 'case') + '</strong> · ' +
+    benchmarkCaseTransitionHtml(improvedNow, regressedNow) + '</div>';
+}
+
 function benchmarkRunId(runId, fallback) {
   const s = String(runId || '').trim();
   if (s) return s;
@@ -3276,7 +3282,7 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
         const rowStyles = benchmarkPassStateRowStyles(improvedNow, regressedNow);
         appendBenchFail(
           el,
-          '<div><strong>' + benchmarkCaseId(c.case_id, 'case') + '</strong> · ' + benchmarkCaseTransitionHtml(improvedNow, regressedNow) + '</div>' +
+          benchmarkPassStateRowTitle(c, improvedNow, regressedNow) +
           benchmarkPassStateRowDetail(c),
           {
             background: rowStyles.background,
