@@ -1036,6 +1036,94 @@ async function sendMessageLegacyApi(text, progressMsg) {
   return parseApiJsonResponse(res, 'chat');
 }
 
+function isQuestionLikeText(text) {
+  const s = String(text || '').trim();
+  if (!s) return false;
+  if (s.endsWith('?')) return true;
+  return /^(what|why|how|which|who|when|where|was|is|are|did|does|do|can|could|should)\b/i.test(s);
+}
+
+function rescueTermsFromQuery(query) {
+  const toks = String(query || '').toLowerCase().match(/[a-z0-9_]{4,}/g) || [];
+  const stop = new Set([
+    'what','why','when','where','which','that','this','with','from','about',
+    'using','database','there','would','could','should','your','you','have',
+    'our','ours','were','been','into','then','than'
+  ]);
+  return toks.filter((t) => !stop.has(t));
+}
+
+function buildStateRescueFacts(state, query, limit = 3) {
+  const terms = rescueTermsFromQuery(query);
+  if (!terms.length) return [];
+
+  const scored = [];
+  const beads = arrayOrEmpty(state && state.beads);
+  for (const b of beads) {
+    const row = b || {};
+    const type = String(row.type || '').toLowerCase();
+    if (type === 'session_start' || type === 'process_flush') continue;
+
+    const title = String(row.title || '').trim();
+    const summaryArr = arrayOrEmpty(row.summary).map((x) => String(x || '').trim()).filter(Boolean);
+    const summary = summaryArr.join(' ').trim();
+    const blob = (title + ' ' + summary).toLowerCase();
+
+    let score = 0;
+    for (const t of terms) {
+      if (blob.includes(t)) score += 1;
+    }
+    if (score <= 0) continue;
+
+    let fact = title;
+    if (!fact || isQuestionLikeText(fact)) {
+      fact = summaryArr.find((x) => x && !isQuestionLikeText(x)) || summaryArr[0] || title;
+    }
+    if (!fact) continue;
+    if (!isQuestionLikeText(fact)) score += 1;
+    scored.push({score, fact: String(fact).slice(0, 180)});
+  }
+
+  scored.sort((a, b) => b.score - a.score);
+  const out = [];
+  const seen = new Set();
+  for (const r of scored) {
+    const key = String(r.fact || '').toLowerCase();
+    if (!key || seen.has(key)) continue;
+    seen.add(key);
+    out.push(r.fact);
+    if (out.length >= Math.max(1, Number(limit) || 3)) break;
+  }
+  return out;
+}
+
+async function maybeClientRescueAnswer(data, queryText) {
+  const answer = String((data && (data.assistant || data.response)) || '').trim();
+  if (!answer) return answer;
+  if (/^From memory, here is what I can ground right now:/i.test(answer)) return answer;
+
+  const d = (data && data.last_answer && data.last_answer.diagnostics) ? data.last_answer.diagnostics : (data && data.last_answer) || {};
+  const resultCount = Number(d.result_count || 0);
+  const groundingLevel = String(d.grounding_level || '').toLowerCase();
+  const warnings = arrayOrEmpty(d.warnings).map((w) => String(w || '').toLowerCase());
+  const severeSemanticWarn = warnings.some((w) => w.includes('semantic_backend_') && (w.includes('unavailable') || w.includes('query_error') || w.includes('query_failed')));
+  const answerSignalsMiss = /(unable to find|couldn\'?t find|not currently accessible in memory|provide more details|check any other sources)/i.test(answer);
+
+  if (!(resultCount === 0 || severeSemanticWarn || groundingLevel === 'none' || answerSignalsMiss)) {
+    return answer;
+  }
+
+  try {
+    const sr = await fetch('/api/demo/state');
+    const st = await parseApiJsonResponse(sr, 'state rescue');
+    const facts = buildStateRescueFacts(st, queryText, 3);
+    if (!facts.length) return answer;
+    return 'From memory, here is what I can ground right now:\n- ' + facts.join('\n- ');
+  } catch (_) {
+    return answer;
+  }
+}
+
 async function sendMessage() {
   if (authEnabled && !authReady) {
     addMsg('system', 'Sign in required before sending messages.');
@@ -1102,7 +1190,8 @@ async function sendMessage() {
     }
 
     progressMsg.remove();
-    addMsg('assistant', (data.assistant || data.response || ''), data.turn_id);
+    const assistantText = await maybeClientRescueAnswer(data, text);
+    addMsg('assistant', assistantText, data.turn_id);
     if (data.last_answer) {
       const d = (data.last_answer && data.last_answer.diagnostics) ? data.last_answer.diagnostics : data.last_answer;
       const gLevel = String(d.grounding_level || 'n/a');
