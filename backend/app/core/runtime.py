@@ -1583,23 +1583,8 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
     )
 
     grounding = dict(retrieval.get("grounding") or {})
-    retrieval_results = list(retrieval.get("results") or [])
-    retrieval_warnings = [str(w or "").strip().lower() for w in list(retrieval.get("warnings") or [])]
     answer_rescued = False
     rescue_facts: list[str] = []
-    needs_rescue = _answer_signals_missing_context(answer)
-    if not needs_rescue and not retrieval_results and _is_question_like(message):
-        needs_rescue = True
-    if not needs_rescue and any("semantic_backend_" in w and ("unavailable" in w or "query_error" in w) for w in retrieval_warnings):
-        needs_rescue = True
-
-    if needs_rescue:
-        rescue_facts = _retrieval_fact_lines(retrieval, limit=3)
-        if not rescue_facts:
-            rescue_facts = _state_fact_lines_for_query(message, limit=3)
-        if rescue_facts:
-            answer_rescued = True
-            answer = "From memory, here is what I can ground right now:\n- " + "\n- ".join(rescue_facts)
 
     _emit_chat_progress(progress, "tokenize", "Updating token usage")
     record_turn_tokens(message, answer, model_id=model_id)
