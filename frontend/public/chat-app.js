@@ -201,6 +201,10 @@ try {
   // best effort only
 }
 
+if (chatApiMode === 'auto' && window.location.hostname === 'demo.usecorememory.com') {
+  chatApiMode = 'legacy';
+}
+
 function setChatApiMode(mode) {
   const next = (mode === 'legacy' || mode === 'jobs') ? mode : 'auto';
   chatApiMode = next;
