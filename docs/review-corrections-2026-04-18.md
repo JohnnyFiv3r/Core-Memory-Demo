@@ -143,3 +143,6 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Root-cause dependency correction: `backend/requirements.txt` now pins Core-Memory to commit `8bdee7b...` (includes pgvector SQL bind-order fix in `PgvectorBackend.search`) instead of broken commit `d9212ef...`.
 - Removed forced client rescue rewriting so chat now reflects real retrieval output; root-cause pgvector SQL hotfix remains in place as the actual fix path.
 - Cache-bust bump: updated `chat.html` app script query to `chat-app.js?v=20260420-auth-session-12` and root launcher `uiRev` in `frontend/src/App.tsx` to `20260420-auth-session-12`.
+- Cleanup: removed runtime monkey patch module (`backend/app/core/hotfixes.py`) and startup patch wiring now that backend dependency is repinned to Core-Memory commit `8bdee7b...` containing the real upstream pgvector fix.
+- Cleanup: removed temporary `hotfixes` debug field from `GET /api/meta` and restored original public meta response shape.
+- Cleanup: removed dead retrieval-rescue helper functions from `backend/app/core/runtime.py` that were left behind from interim fallback experiments.
