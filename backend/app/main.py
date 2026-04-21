@@ -68,6 +68,7 @@ app.include_router(demo_router)
 app.include_router(inspect_router)
 
 STATE_PATHS = {'/api/demo/state', '/v1/memory/inspect/state'}
+# Deploy tick: keep backend commits observable for Render auto-deploy health.
 
 
 @app.middleware('http')
