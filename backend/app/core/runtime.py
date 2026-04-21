@@ -1382,6 +1382,110 @@ def _build_fallback_answer(message: str, retrieval: dict[str, Any] | None = None
     return base
 
 
+def _answer_signals_missing_context(answer: str) -> bool:
+    s = str(answer or "").strip().lower()
+    if not s:
+        return False
+    markers = (
+        "wasn't able to find",
+        "unable to find",
+        "unable to access prior records",
+        "couldn't find",
+        "could not find",
+        "provide more context",
+        "remind me",
+    )
+    return any(m in s for m in markers)
+
+
+def _is_question_like(text: str) -> bool:
+    s = str(text or "").strip()
+    if not s:
+        return False
+    if s.endswith("?"):
+        return True
+    lower = s.lower()
+    return lower.startswith(("what ", "why ", "how ", "which ", "who ", "when ", "where "))
+
+
+def _retrieval_fact_lines(retrieval: dict[str, Any] | None, *, limit: int = 3) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for r in list((retrieval or {}).get("results") or []):
+        row = dict(r or {})
+        title = str(row.get("title") or "").strip()
+        summary = str(row.get("summary") or "").strip()
+        candidates = [title, summary]
+        chosen = ""
+        for c in candidates:
+            c_norm = str(c or "").strip()
+            if not c_norm:
+                continue
+            if _is_question_like(c_norm):
+                continue
+            chosen = c_norm
+            break
+        if not chosen:
+            continue
+        key = chosen.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(chosen[:180])
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
+def _state_fact_lines_for_query(query: str, *, limit: int = 3) -> list[str]:
+    terms = [t.lower() for t in re.findall(r"[A-Za-z0-9_]{4,}", str(query or ""))]
+    stop = {
+        "what", "why", "when", "where", "which", "that", "this", "with", "from", "about",
+        "using", "database", "there", "would", "could", "should", "your", "you", "have",
+    }
+    terms = [t for t in terms if t not in stop]
+    if not terms:
+        return []
+
+    try:
+        state = inspect_state_payload()
+    except Exception:
+        return []
+
+    scored: list[tuple[int, str]] = []
+    for b in list(state.get("beads") or []):
+        row = dict(b or {})
+        bead_type = str(row.get("type") or "").strip().lower()
+        if bead_type in {"session_start", "process_flush"}:
+            continue
+
+        title = str(row.get("title") or "").strip()
+        summary_lines = [str(x or "").strip() for x in list(row.get("summary") or [])[:2]]
+        summary = " ".join([x for x in summary_lines if x]).strip()
+        candidate = title or summary
+        if not candidate or _is_question_like(candidate):
+            continue
+
+        blob = (title + " " + summary).lower()
+        score = sum(1 for t in terms if t in blob)
+        if score <= 0:
+            continue
+        scored.append((score, candidate[:180]))
+
+    scored.sort(key=lambda x: x[0], reverse=True)
+    out: list[str] = []
+    seen: set[str] = set()
+    for _score, text in scored:
+        key = str(text).lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        out.append(text)
+        if len(out) >= max(1, int(limit)):
+            break
+    return out
+
+
 def _chat_semantic_mode_name() -> str:
     demo_mode = str(os.getenv("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "").strip().lower()
     mode = demo_mode or "degraded_allowed"
@@ -1457,9 +1561,6 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
     except Exception as exc:
         association_linking = {"ok": False, "error": str(exc or "association_link_failed")}
 
-    _emit_chat_progress(progress, "tokenize", "Updating token usage")
-    record_turn_tokens(message, answer, model_id=model_id)
-
     intent_probe = classify_intent(str(message or "")) or {}
     intent_class = str(intent_probe.get("intent_class") or "").strip().lower()
 
@@ -1479,6 +1580,19 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
     )
 
     grounding = dict(retrieval.get("grounding") or {})
+    answer_rescued = False
+    rescue_facts: list[str] = []
+    if _answer_signals_missing_context(answer):
+        rescue_facts = _retrieval_fact_lines(retrieval, limit=3)
+        if not rescue_facts:
+            rescue_facts = _state_fact_lines_for_query(message, limit=3)
+        if rescue_facts:
+            answer_rescued = True
+            answer = "From memory, here is what I can ground right now:\n- " + "\n- ".join(rescue_facts)
+
+    _emit_chat_progress(progress, "tokenize", "Updating token usage")
+    record_turn_tokens(message, answer, model_id=model_id)
+
     LAST_TURN_DIAGNOSTICS = {
         "ok": True,
         "turn_id": turn_id,
@@ -1500,6 +1614,8 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
             "warnings": list(retrieval.get("warnings") or []),
             "fallback_mode": bool(fallback_error),
             "fallback_error": fallback_error,
+            "answer_rescued": bool(answer_rescued),
+            "rescue_fact_count": int(len(rescue_facts)),
             "association_linking": association_linking,
         },
     }

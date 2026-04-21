@@ -190,7 +190,27 @@ let refreshTimerId = null;
 let refreshErrorStreak = 0;
 let authRedirecting = false;
 const AUTH_LOOP_GUARD_KEY = 'CM_AUTH_LOOP_GUARD';
+const CHAT_API_MODE_KEY = 'CM_CHAT_API_MODE';
 let modelOptionsHydrated = false;
+let chatApiMode = 'auto';
+
+try {
+  const raw = String(localStorage.getItem(CHAT_API_MODE_KEY) || '').trim().toLowerCase();
+  if (raw === 'legacy' || raw === 'jobs') chatApiMode = raw;
+} catch (_) {
+  // best effort only
+}
+
+function setChatApiMode(mode) {
+  const next = (mode === 'legacy' || mode === 'jobs') ? mode : 'auto';
+  chatApiMode = next;
+  try {
+    if (next === 'auto') localStorage.removeItem(CHAT_API_MODE_KEY);
+    else localStorage.setItem(CHAT_API_MODE_KEY, next);
+  } catch (_) {
+    // best effort only
+  }
+}
 
 function renderDemoModelOptions(payload) {
   if (!modelSelectEl) return;
@@ -1025,44 +1045,51 @@ async function sendMessage() {
   inputEl.disabled = true;
 
   try {
-    const startRes = await fetch('/api/chat/start', {
-      method: 'POST',
-      headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({message: text}),
-    });
     let data = null;
 
-    if (startRes.status === 404) {
+    if (chatApiMode === 'legacy') {
       data = await sendMessageLegacyApi(text, progressMsg);
     } else {
-      const start = await parseApiJsonResponse(startRes, 'chat start');
-      const jobId = String(start.job_id || '').trim();
-      if (!jobId) throw new Error('chat_job_missing_id');
+      const startRes = await fetch('/api/chat/start', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify({message: text}),
+      });
 
-      let cursor = 0;
-      const deadline = Date.now() + 180000;
+      if (startRes.status === 404) {
+        setChatApiMode('legacy');
+        data = await sendMessageLegacyApi(text, progressMsg);
+      } else {
+        setChatApiMode('jobs');
+        const start = await parseApiJsonResponse(startRes, 'chat start');
+        const jobId = String(start.job_id || '').trim();
+        if (!jobId) throw new Error('chat_job_missing_id');
 
-      while (Date.now() < deadline) {
-        const statusRes = await fetch('/api/chat/status/' + encodeURIComponent(jobId) + '?cursor=' + String(cursor));
-        const status = await parseApiJsonResponse(statusRes, 'chat status');
-        const events = arrayOrEmpty(status.events);
-        if (events.length > 0) {
-          cursor = Number(status.cursor_next || cursor || 0);
-          const lastEvt = events[events.length - 1] || {};
-          const msg = String(lastEvt.message || lastEvt.stage || status.stage || 'running').trim();
-          if (msg) {
-            progressMsg.textContent = 'Chat pipeline: ' + msg;
+        let cursor = 0;
+        const deadline = Date.now() + 180000;
+
+        while (Date.now() < deadline) {
+          const statusRes = await fetch('/api/chat/status/' + encodeURIComponent(jobId) + '?cursor=' + String(cursor));
+          const status = await parseApiJsonResponse(statusRes, 'chat status');
+          const events = arrayOrEmpty(status.events);
+          if (events.length > 0) {
+            cursor = Number(status.cursor_next || cursor || 0);
+            const lastEvt = events[events.length - 1] || {};
+            const msg = String(lastEvt.message || lastEvt.stage || status.stage || 'running').trim();
+            if (msg) {
+              progressMsg.textContent = 'Chat pipeline: ' + msg;
+            }
           }
-        }
 
-        if (status.done) {
-          if (status.error) throw new Error(String(status.error));
-          data = status.result || null;
-          break;
-        }
+          if (status.done) {
+            if (status.error) throw new Error(String(status.error));
+            data = status.result || null;
+            break;
+          }
 
-        const waitMs = Math.max(200, Math.min(1200, Number(status.poll_after_ms || 450)));
-        await new Promise((resolve) => setTimeout(resolve, waitMs));
+          const waitMs = Math.max(200, Math.min(1200, Number(status.poll_after_ms || 450)));
+          await new Promise((resolve) => setTimeout(resolve, waitMs));
+        }
       }
     }
 
