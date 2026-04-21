@@ -8,6 +8,7 @@ from fastapi.responses import JSONResponse
 from core_memory.runtime.jobs import run_async_jobs
 
 from app.core.config import settings
+from app.core.hotfixes import apply_runtime_hotfixes
 from app.core.state_fallback import safe_state_fallback
 from app.routes.health import router as health_router
 from app.routes.demo import public_router as demo_public_router
@@ -88,6 +89,8 @@ async def state_error_fallback_middleware(request: Request, call_next):
 @app.on_event('startup')
 def on_startup():
     global _async_jobs_thread
+    hotfixes = apply_runtime_hotfixes()
+    logger.warning('runtime_hotfixes: %s', hotfixes)
     ensure_roots_writable()
     if bool(settings.async_jobs_tick_enabled):
         _async_jobs_stop.clear()
