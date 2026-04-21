@@ -6,6 +6,7 @@ import re
 import shutil
 import time
 import uuid
+from collections import deque
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -78,6 +79,7 @@ LAST_TURN_DIAGNOSTICS: dict[str, Any] = {}
 LAST_BENCHMARK_REPORT: dict[str, Any] = {}
 LAST_BENCHMARK_SUMMARY: dict[str, Any] = {}
 LAST_BENCHMARK_HISTORY: list[dict[str, Any]] = []
+_RETRIEVAL_ALERT_TIMESTAMPS: deque[float] = deque(maxlen=2048)
 
 DEFAULT_SEED_USER_MESSAGES: list[str] = [
     "Should we use MySQL or PostgreSQL for JSON-heavy service?",
@@ -1382,6 +1384,43 @@ def _build_fallback_answer(message: str, retrieval: dict[str, Any] | None = None
     return base
 
 
+def _retrieval_alert_flags(retrieval: dict[str, Any] | None) -> list[str]:
+    row = dict(retrieval or {})
+    warnings = [str(w or "").strip().lower() for w in list(row.get("warnings") or [])]
+    result_count = int(len(list(row.get("results") or [])))
+    out: list[str] = []
+
+    if any("semantic_backend_query_error:programmingerror" in w for w in warnings):
+        out.append("semantic_backend_programmingerror")
+    if any("semantic_backend_unavailable" in w for w in warnings):
+        out.append("semantic_backend_unavailable")
+    if result_count == 0 and any("semantic_backend_unavailable" in w for w in warnings):
+        out.append("empty_results_with_semantic_backend_unavailable")
+    if result_count == 0 and any("semantic_backend_query_failed_lexical_fallback" in w for w in warnings):
+        out.append("empty_results_with_semantic_query_fallback")
+    return out
+
+
+def _record_retrieval_alert(flags: list[str], *, now_epoch: float | None = None) -> dict[str, Any]:
+    now = float(now_epoch if now_epoch is not None else time.time())
+    window_seconds = max(60, int(settings.retrieval_alert_window_seconds))
+    spike_threshold = max(1, int(settings.retrieval_alert_spike_threshold))
+
+    while _RETRIEVAL_ALERT_TIMESTAMPS and (now - float(_RETRIEVAL_ALERT_TIMESTAMPS[0])) > float(window_seconds):
+        _RETRIEVAL_ALERT_TIMESTAMPS.popleft()
+
+    if list(flags or []):
+        _RETRIEVAL_ALERT_TIMESTAMPS.append(now)
+
+    recent_count = int(len(_RETRIEVAL_ALERT_TIMESTAMPS))
+    return {
+        "window_seconds": int(window_seconds),
+        "spike_threshold": int(spike_threshold),
+        "recent_count": int(recent_count),
+        "spike": bool(recent_count >= spike_threshold),
+    }
+
+
 def _chat_semantic_mode_name() -> str:
     demo_mode = str(os.getenv("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "").strip().lower()
     mode = demo_mode or "degraded_allowed"
@@ -1476,6 +1515,8 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
     )
 
     grounding = dict(retrieval.get("grounding") or {})
+    retrieval_alert_flags = _retrieval_alert_flags(retrieval)
+    retrieval_alert = _record_retrieval_alert(retrieval_alert_flags)
     answer_rescued = False
     rescue_facts: list[str] = []
 
@@ -1501,6 +1542,11 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
             "semantic_mode": chat_semantic_mode,
             "intent_class": intent_class or "remember",
             "warnings": list(retrieval.get("warnings") or []),
+            "retrieval_alert_flags": list(retrieval_alert_flags),
+            "retrieval_alert_window_seconds": int(retrieval_alert.get("window_seconds") or 0),
+            "retrieval_alert_recent_count": int(retrieval_alert.get("recent_count") or 0),
+            "retrieval_alert_spike_threshold": int(retrieval_alert.get("spike_threshold") or 0),
+            "retrieval_alert_spike": bool(retrieval_alert.get("spike")),
             "fallback_mode": bool(fallback_error),
             "fallback_error": fallback_error,
             "answer_rescued": bool(answer_rescued),

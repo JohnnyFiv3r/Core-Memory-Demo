@@ -146,3 +146,5 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Cleanup: removed runtime monkey patch module (`backend/app/core/hotfixes.py`) and startup patch wiring now that backend dependency is repinned to Core-Memory commit `8bdee7b...` containing the real upstream pgvector fix.
 - Cleanup: removed temporary `hotfixes` debug field from `GET /api/meta` and restored original public meta response shape.
 - Cleanup: removed dead retrieval-rescue helper functions from `backend/app/core/runtime.py` that were left behind from interim fallback experiments.
+- Regression coverage: added backend tests for pgvector search bind ordering, retrieval smoke asserting no `semantic_backend_query_error:programmingerror` on a known query, and retrieval alert-spike tracking behavior (`backend/tests/test_retrieval_regressions.py`).
+- Deploy guard: added `backend/scripts/check_retrieval_health.py` to fail deploy checks on critical retrieval regression signals (`programmingerror`, `result_count=0 + semantic_backend_unavailable`, optional spike alarms).

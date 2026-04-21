@@ -33,3 +33,11 @@
 3. Run benchmark once.
 4. Flush session once.
 5. Restart backend service and confirm seeded state still visible.
+6. Run retrieval health guard:
+
+```bash
+cd backend
+python scripts/check_retrieval_health.py --base-url https://demo.usecorememory.com
+```
+
+Expected: `"ok": true` with no programming-error or empty+unavailable regression flags.

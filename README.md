@@ -34,6 +34,14 @@ Local auth behavior:
 - `DEMO_AUTH_ENABLED=false` (default) keeps local evaluation simple with no Auth0 setup.
 - Set `DEMO_AUTH_ENABLED=true` only when you want JWT/admin-email enforcement.
 
+### Backend regression checks
+
+```bash
+cd backend
+python -m unittest tests/test_api_smoke.py tests/test_retrieval_regressions.py
+python scripts/check_retrieval_health.py --base-url http://127.0.0.1:8000
+```
+
 ### Frontend
 
 ```bash
