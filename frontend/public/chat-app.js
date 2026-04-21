@@ -201,8 +201,19 @@ try {
   // best effort only
 }
 
+try {
+  const u = new URL(window.location.href);
+  const q = String(u.searchParams.get('cm_chat_mode') || '').trim().toLowerCase();
+  if (q === 'legacy' || q === 'jobs') {
+    chatApiMode = q;
+    localStorage.setItem(CHAT_API_MODE_KEY, q);
+  }
+} catch (_) {
+  // best effort only
+}
+
 if (chatApiMode === 'auto' && window.location.hostname === 'demo.usecorememory.com') {
-  chatApiMode = 'legacy';
+  chatApiMode = 'jobs';
 }
 
 function setChatApiMode(mode) {
