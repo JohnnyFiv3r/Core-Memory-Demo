@@ -1436,6 +1436,33 @@ def _emit_chat_progress(progress: Callable[..., Any] | None, stage: str, message
         return
 
 
+def _sync_semantic_for_chat_turn(*, progress: Callable[..., Any] | None = None) -> dict[str, Any]:
+    if not bool(settings.demo_chat_sync_semantic_each_turn):
+        return {
+            "attempted": False,
+            "ok": True,
+            "ran": False,
+            "reason": "disabled",
+            "semantic_run": {},
+        }
+
+    _emit_chat_progress(progress, "semantic_sync", "Syncing semantic index delta")
+    out = run_async_jobs(
+        root=settings.core_memory_root,
+        run_semantic=True,
+        max_compaction=0,
+        max_side_effects=0,
+    )
+    sem = dict(out.get("semantic_run") or {})
+    return {
+        "attempted": True,
+        "ok": bool(out.get("ok")),
+        "ran": bool(sem.get("ran")),
+        "reason": str(sem.get("reason") or ""),
+        "semantic_run": sem,
+    }
+
+
 async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) -> dict[str, Any]:
     global LAST_TURN_DIAGNOSTICS
     _sync_session_context_budget()
@@ -1499,6 +1526,8 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
     intent_probe = classify_intent(str(message or "")) or {}
     intent_class = str(intent_probe.get("intent_class") or "").strip().lower()
 
+    semantic_sync = _sync_semantic_for_chat_turn(progress=progress)
+
     req: dict[str, Any] = {"query": message, "k": 8}
     if intent_class in {"causal", "why", "what_changed"}:
         req["intent"] = "causal"
@@ -1542,6 +1571,10 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
             "semantic_mode": chat_semantic_mode,
             "intent_class": intent_class or "remember",
             "warnings": list(retrieval.get("warnings") or []),
+            "semantic_sync_attempted": bool(semantic_sync.get("attempted")),
+            "semantic_sync_ok": bool(semantic_sync.get("ok")),
+            "semantic_sync_ran": bool(semantic_sync.get("ran")),
+            "semantic_sync_reason": str(semantic_sync.get("reason") or ""),
             "retrieval_alert_flags": list(retrieval_alert_flags),
             "retrieval_alert_window_seconds": int(retrieval_alert.get("window_seconds") or 0),
             "retrieval_alert_recent_count": int(retrieval_alert.get("recent_count") or 0),
