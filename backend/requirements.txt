@@ -5,4 +5,4 @@ python-dotenv==1.2.2
 pyjwt[crypto]==2.10.1
 pydantic-ai==1.80.0
 # Pinned to explicit Core-Memory commit for deploy stability.
-core-memory[semantic,pgvector] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@d9212efdf74bd9177ed88d9d33a5e22a2de3383d
+core-memory[semantic,pgvector] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@8bdee7b1d3144af292a74f5ec46fbb4da3f8ba5f
