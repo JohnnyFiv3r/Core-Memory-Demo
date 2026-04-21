@@ -82,3 +82,19 @@ def apply_runtime_hotfixes() -> dict[str, Any]:
     return {
         "pgvector_search_param_order": _patch_pgvector_search(),
     }
+
+
+def runtime_hotfix_status() -> dict[str, Any]:
+    out: dict[str, Any] = {}
+    try:
+        from core_memory.retrieval import vector_backend as vb  # type: ignore
+
+        cls = getattr(vb, "PgvectorBackend", None)
+        out["pgvector_search_param_order"] = bool(
+            cls is not None and bool(getattr(cls, "_cmdemo_search_hotfix_applied", False))
+        )
+        out["vector_backend_module"] = str(getattr(vb, "__file__", ""))
+    except Exception as exc:
+        out["pgvector_search_param_order"] = False
+        out["error"] = str(exc)
+    return out

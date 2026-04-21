@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse
 from app.core.abuse import heavy_operation_slot, rate_limit_chat, rate_limit_general, rate_limit_heavy
 from app.core.auth import auth_meta_payload, require_admin
 from app.core.config import settings
+from app.core.hotfixes import runtime_hotfix_status
 from app.core.state_fallback import safe_state_fallback
 from app.core.runtime import (
     compare_benchmark_runs,
@@ -161,6 +162,7 @@ def meta():
         'message': 'Core Memory Demo backend active',
         'contract_status': 't2_in_progress',
         'auth': auth_meta_payload(),
+        'hotfixes': runtime_hotfix_status(),
     }
 
 
