@@ -51,7 +51,7 @@ class Settings(BaseSettings):
     async_jobs_tick_max_side_effects: int = 8
     async_jobs_tick_run_semantic: bool = True
 
-    demo_chat_sync_semantic_each_turn: bool = True
+    demo_chat_sync_semantic_on_write: bool = True
 
     retrieval_alert_window_seconds: int = 900
     retrieval_alert_spike_threshold: int = 3

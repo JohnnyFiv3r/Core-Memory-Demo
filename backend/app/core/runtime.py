@@ -1436,8 +1436,8 @@ def _emit_chat_progress(progress: Callable[..., Any] | None, stage: str, message
         return
 
 
-def _sync_semantic_for_chat_turn(*, progress: Callable[..., Any] | None = None) -> dict[str, Any]:
-    if not bool(settings.demo_chat_sync_semantic_each_turn):
+def _sync_semantic_on_write(*, progress: Callable[..., Any] | None = None) -> dict[str, Any]:
+    if not bool(settings.demo_chat_sync_semantic_on_write):
         return {
             "attempted": False,
             "ok": True,
@@ -1446,7 +1446,7 @@ def _sync_semantic_for_chat_turn(*, progress: Callable[..., Any] | None = None) 
             "semantic_run": {},
         }
 
-    _emit_chat_progress(progress, "semantic_sync", "Syncing semantic index delta")
+    _emit_chat_progress(progress, "semantic_sync", "Syncing semantic index on write")
     out = run_async_jobs(
         root=settings.core_memory_root,
         run_semantic=True,
@@ -1516,6 +1516,8 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
             },
         )
 
+    semantic_sync = _sync_semantic_on_write(progress=progress)
+
     association_linking: dict[str, Any] = {}
     _emit_chat_progress(progress, "associations", "Linking temporal associations")
     try:
@@ -1525,8 +1527,6 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
 
     intent_probe = classify_intent(str(message or "")) or {}
     intent_class = str(intent_probe.get("intent_class") or "").strip().lower()
-
-    semantic_sync = _sync_semantic_for_chat_turn(progress=progress)
 
     req: dict[str, Any] = {"query": message, "k": 8}
     if intent_class in {"causal", "why", "what_changed"}:
