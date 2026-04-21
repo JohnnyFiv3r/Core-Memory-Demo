@@ -38,7 +38,7 @@ Local auth behavior:
 
 ```bash
 cd backend
-python -m unittest tests/test_api_smoke.py tests/test_retrieval_regressions.py
+python -m unittest tests/test_api_smoke.py tests/test_retrieval_regressions.py tests/test_semantic_write_only_contract.py
 python scripts/check_retrieval_health.py --base-url http://127.0.0.1:8000
 ```
 
