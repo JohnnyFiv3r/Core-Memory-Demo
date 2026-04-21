@@ -150,3 +150,4 @@ This note captures stale/inaccurate items observed in `core-memory-demo-fix-list
 - Deploy guard: added `backend/scripts/check_retrieval_health.py` to fail deploy checks on critical retrieval regression signals (`programmingerror`, `result_count=0 + semantic_backend_unavailable`, optional spike alarms).
 - Chat-mode update: hosted demo default chat mode switched back to async jobs (`/api/chat/start` + `/api/chat/status/{job_id}`) for richer stage progress events; added emergency query override `?cm_chat_mode=legacy|jobs` that persists in local storage for quick rollback testing.
 - Cache-bust bump: updated `chat.html` app script query to `chat-app.js?v=20260420-auth-session-13` and root launcher `uiRev` in `frontend/src/App.tsx` to `20260420-auth-session-13`.
+- Build fix: corrected Core-Memory dependency pin to the real commit SHA `8bdee7b515e564b9f629e3f8e566a12c84ff85c0` (prior SHA typo caused Render pip fetch failure: `not our ref`).
