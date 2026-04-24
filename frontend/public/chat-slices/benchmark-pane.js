@@ -100,6 +100,7 @@ function BenchmarkPane(props) {
 
   const cmp = summary.myelination_compare || null
   const r = report || null
+  const benchmarkTable = Array.isArray((r || {}).benchmark_table) ? r.benchmark_table : []
 
   let compareSection = null
   if (r && r.myelination_comparison) {
@@ -356,6 +357,53 @@ function BenchmarkPane(props) {
               ' · mrr=', Number(row.mrr || 0).toFixed(4)
             )
           })
+        )
+      : null,
+    isLocomo && benchmarkTable.length
+      ? React.createElement(
+          React.Fragment,
+          null,
+          React.createElement('div', { className: 'runtime-card' }, React.createElement('strong', null, 'Benchmark table')),
+          React.createElement(
+            'div',
+            { style: { overflowX: 'auto', border: '1px solid rgba(255,255,255,0.08)', borderRadius: '12px' } },
+            React.createElement(
+              'table',
+              { style: { width: '100%', borderCollapse: 'collapse', fontSize: '12px' } },
+              React.createElement(
+                'thead',
+                null,
+                React.createElement(
+                  'tr',
+                  { style: { textAlign: 'left', background: 'rgba(255,255,255,0.03)' } },
+                  ...['qa_id', 'cat', 'f1', 'hit', 'r@5', 'used ids', 'prediction'].map((h) =>
+                    React.createElement('th', { key: h, style: { padding: '8px', borderBottom: '1px solid rgba(255,255,255,0.08)' } }, h)
+                  )
+                )
+              ),
+              React.createElement(
+                'tbody',
+                null,
+                ...benchmarkTable.map((row, idx) =>
+                  React.createElement(
+                    'tr',
+                    {
+                      key: String(row.qa_id || idx),
+                      onClick: () => openPayload('Benchmark table row: ' + String(row.qa_id || idx), row),
+                      style: { cursor: 'pointer', borderBottom: '1px solid rgba(255,255,255,0.05)' },
+                    },
+                    React.createElement('td', { style: { padding: '8px', verticalAlign: 'top' } }, String(row.qa_id || '')),
+                    React.createElement('td', { style: { padding: '8px', verticalAlign: 'top' } }, String(row.category || '')),
+                    React.createElement('td', { style: { padding: '8px', verticalAlign: 'top' } }, Number(row.answer_f1 || 0).toFixed(4)),
+                    React.createElement('td', { style: { padding: '8px', verticalAlign: 'top' } }, String(!!row.hit_any)),
+                    React.createElement('td', { style: { padding: '8px', verticalAlign: 'top' } }, Number(row['recall@5'] || 0).toFixed(4)),
+                    React.createElement('td', { style: { padding: '8px', verticalAlign: 'top', color: 'var(--text-dim)' } }, String((row.used_dia_ids || []).join(', ') || '—')),
+                    React.createElement('td', { style: { padding: '8px', verticalAlign: 'top', maxWidth: '480px', color: 'var(--text-dim)' } }, String(row.prediction || '').slice(0, 220) || '—')
+                  )
+                )
+              )
+            )
+          )
         )
       : null,
     !isLocomo && r && r.per_bucket

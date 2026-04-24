@@ -2420,6 +2420,31 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "subset": str(subset or "local"),
             "legacy_request": bool(legacy_mode),
         }
+        cases_inline = list(retrieval_report.get("cases") or [])[: max(0, int(settings.locomo_case_artifact_limit_inline))]
+        benchmark_table = [
+            {
+                "qa_id": str(c.get("qa_id") or ""),
+                "sample_id": str(c.get("sample_id") or ""),
+                "category": int(c.get("category") or 0),
+                "question": str(c.get("question") or ""),
+                "gold_answer": str(c.get("gold_answer") or ""),
+                "prediction": str(c.get("prediction") or ""),
+                "answer_f1": float(c.get("answer_f1") or 0.0),
+                "backend": str(c.get("backend") or "unknown"),
+                "raw_result_count": int(c.get("raw_result_count") or 0),
+                "unsupported": bool(c.get("unsupported")),
+                "used_dia_ids": list(c.get("used_dia_ids") or []),
+                "gold_evidence": list((c.get("evidence_recall") or {}).get("gold_evidence") or c.get("gold_evidence") or []),
+                "hit_any": bool((c.get("evidence_recall") or {}).get("hit_any")),
+                "mrr": float((c.get("evidence_recall") or {}).get("mrr") or 0.0),
+                "recall@1": float((c.get("evidence_recall") or {}).get("recall@1") or 0.0),
+                "recall@3": float((c.get("evidence_recall") or {}).get("recall@3") or 0.0),
+                "recall@5": float((c.get("evidence_recall") or {}).get("recall@5") or 0.0),
+                "warnings": list(c.get("warnings") or []),
+                "status": str(c.get("status") or ""),
+            }
+            for c in cases_inline
+        ]
         report = {
             "config": {
                 "suite": suite_name,
@@ -2461,7 +2486,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "provider_model": str(generator_model or ""),
             },
             "ingestion": dict(ingestion_meta or {}),
-            "cases": list(retrieval_report.get("cases") or [])[: max(0, int(settings.locomo_case_artifact_limit_inline))],
+            "cases": cases_inline,
+            "benchmark_table": benchmark_table,
         }
         artifacts = write_locomo_run_artifacts(
             run_id=run_id,
