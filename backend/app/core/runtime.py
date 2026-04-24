@@ -32,12 +32,13 @@ from core_memory.integrations.api import (
     list_turn_summaries,
 )
 from core_memory.integrations.pydanticai.memory_tools import (
-    continuity_prompt,
     memory_execute_tool,
     memory_search_tool,
     memory_trace_tool,
 )
 from core_memory.integrations.pydanticai.run import run_with_memory
+
+from app.core.agent_runtime import create_agent_for_root
 from core_memory.retrieval.tools import memory as memory_tools
 from core_memory.retrieval.normalize import classify_intent
 from core_memory.persistence.store import MemoryStore
@@ -398,32 +399,7 @@ _sync_session_context_budget()
 
 
 def create_agent(model_id: str):
-    from pydantic_ai import Agent
-
-    agent = Agent(
-        model_id,
-        system_prompt=(
-            "You are a helpful project assistant. You have access to the team's "
-            "persistent memory — decisions, lessons, goals, and context from prior "
-            "conversations. Use your memory tools proactively to ground your answers "
-            "in what the team has recorded. Be specific and cite what you find. "
-            "Tool policy: call execute_memory_request first for recall questions; "
-            "use search_memory as a secondary check; use trace_memory for "
-            "explicit causal trace questions. Do not claim memory is missing unless "
-            "both execute and search return no anchors/results."
-        ),
-        tools=[
-            memory_execute_tool(root=settings.core_memory_root),
-            memory_search_tool(root=settings.core_memory_root),
-            memory_trace_tool(root=settings.core_memory_root),
-        ],
-    )
-
-    @agent.system_prompt
-    def inject_memory():
-        return continuity_prompt(root=settings.core_memory_root, session_id=SESSION.session_id)
-
-    return agent
+    return create_agent_for_root(model_id, root=settings.core_memory_root, session_id=SESSION.session_id)
 
 
 _AGENT: Any | None = None

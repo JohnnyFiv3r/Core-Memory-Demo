@@ -33,25 +33,23 @@ class TestLocomoAnswer(unittest.TestCase):
         self.assertIn("7 May 2023", out["answer"])
         self.assertEqual(["D1:3"], out["used_dia_ids"])
 
-    def test_llm_mode_uses_agent(self):
-        class _FakeRun:
-            output = '{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}'
-
-        class _FakeAgent:
-            def __init__(self, model_id):
-                self.model_id = model_id
-            async def run(self, prompt):
-                return _FakeRun()
-
-        with patch("app.benchmarks.locomo_answer.Agent", _FakeAgent):
+    def test_llm_mode_uses_shared_demo_agent_path(self):
+        with patch("app.benchmarks.locomo_answer.run_agent_for_root") as run_agent:
+            run_agent.return_value = {
+                "ok": True,
+                "assistant": "7 May 2023",
+                "model_id": "openai:gpt-4o-mini",
+            }
             out = generate_locomo_answer(
                 mode="llm",
+                root="/tmp/fake",
+                sample_id="conv-1",
                 qa={"question": "When?"},
                 retrieved_context=[{"text": "Caroline went on 7 May 2023", "dia_ids": ["D1:3"]}],
                 generator_model="openai:gpt-4o-mini",
             )
         self.assertEqual("7 May 2023", out["answer"])
-        self.assertEqual(["D1:3"], out["used_dia_ids"])
+        self.assertEqual([], out["used_dia_ids"])
 
 
 if __name__ == "__main__":

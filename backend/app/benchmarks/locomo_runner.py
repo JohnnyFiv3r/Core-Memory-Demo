@@ -87,6 +87,8 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             gold_context = [dict(lookup.get(did) or {}) for did in list(qa.get("evidence") or []) if dict(lookup.get(did) or {})]
         answer = generate_locomo_answer(
             mode=answer_mode,
+            root=root,
+            sample_id=sample_id,
             qa=qa,
             retrieved_context=retrieved,
             generator_model=generator_model,
