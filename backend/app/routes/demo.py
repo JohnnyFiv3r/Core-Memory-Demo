@@ -8,6 +8,8 @@ from typing import Any
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.responses import JSONResponse
 
+from app.benchmarks.locomo_loader import LocomoLoaderError
+from app.benchmarks.locomo_suite import build_locomo_suite_metadata
 from app.core.abuse import heavy_operation_slot, rate_limit_chat, rate_limit_general, rate_limit_heavy
 from app.core.auth import auth_meta_payload, require_admin
 from app.core.config import settings
@@ -460,6 +462,81 @@ async def story_pack_replay(request: Request):
         return _http_exc_response(exc)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+
+
+@router.get('/demo/benchmark/preflight')
+def benchmark_preflight(
+    suite: str = 'locomo_mini',
+    semantic_mode: str = 'required',
+    answer_mode: str = 'none',
+    generator_model: str = '',
+):
+    import importlib.util
+    import os
+
+    suite_name = str(suite or 'locomo_mini').strip().lower() or 'locomo_mini'
+    semantic_mode_name = str(semantic_mode or 'required').strip().lower() or 'required'
+    answer_mode_name = str(answer_mode or 'none').strip().lower() or 'none'
+    generator_model_name = str(generator_model or '').strip()
+    embeddings_provider = str(os.environ.get('CORE_MEMORY_EMBEDDINGS_PROVIDER') or '').strip() or 'hash'
+    embeddings_model = str(os.environ.get('CORE_MEMORY_EMBEDDINGS_MODEL') or '').strip()
+
+    dataset_ok = True
+    dataset_error: dict[str, Any] | None = None
+    try:
+        build_locomo_suite_metadata(suite=suite_name, sample_limit=1, qa_limit=1)
+    except LocomoLoaderError as exc:
+        dataset_ok = False
+        dataset_error = {'type': exc.__class__.__name__, 'message': str(exc)}
+
+    provider_dependencies: list[dict[str, Any]] = []
+    if embeddings_provider == 'openai':
+        provider_dependencies.append({'name': 'openai', 'installed': importlib.util.find_spec('openai') is not None, 'required_for': 'provider_embeddings'})
+    if embeddings_provider not in {'hash', ''}:
+        provider_dependencies.append({'name': 'numpy', 'installed': importlib.util.find_spec('numpy') is not None, 'required_for': 'semantic_vectors'})
+        provider_dependencies.append({'name': 'faiss', 'installed': importlib.util.find_spec('faiss') is not None, 'required_for': 'semantic_index'})
+
+    answer_dependencies: list[dict[str, Any]] = []
+    llm_answer_ready = True
+    llm_answer_error: str | None = None
+    if answer_mode_name == 'llm':
+        answer_dependencies.append({'name': 'pydantic_ai', 'installed': importlib.util.find_spec('pydantic_ai') is not None, 'required_for': 'llm_answering'})
+        if not generator_model_name:
+            llm_answer_ready = False
+            llm_answer_error = 'missing_generator_model'
+        elif generator_model_name.startswith('openai:') and importlib.util.find_spec('openai') is None:
+            llm_answer_ready = False
+            llm_answer_error = 'missing_openai_client'
+
+    semantic_required_ready = all(bool(row.get('installed')) for row in provider_dependencies)
+    overall_ok = bool(dataset_ok)
+    if semantic_mode_name == 'required':
+        overall_ok = overall_ok and semantic_required_ready
+    if answer_mode_name == 'llm':
+        overall_ok = overall_ok and llm_answer_ready and all(bool(row.get('installed')) for row in answer_dependencies)
+
+    return {
+        'ok': overall_ok,
+        'suite': suite_name,
+        'semantic_mode': semantic_mode_name,
+        'answer_mode': answer_mode_name,
+        'generator_model': generator_model_name,
+        'dataset': {
+            'ok': dataset_ok,
+            'error': dataset_error,
+        },
+        'semantic': {
+            'provider': embeddings_provider,
+            'model': embeddings_model,
+            'required_ready': semantic_required_ready,
+            'dependencies': provider_dependencies,
+        },
+        'answering': {
+            'ready': llm_answer_ready if answer_mode_name == 'llm' else True,
+            'error': llm_answer_error,
+            'dependencies': answer_dependencies,
+        },
+    }
 
 
 @router.post('/benchmark-run')
