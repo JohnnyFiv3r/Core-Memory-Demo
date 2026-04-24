@@ -40,6 +40,7 @@ from core_memory.integrations.pydanticai.run import run_with_memory
 
 from app.core.agent_runtime import create_agent_for_root
 from core_memory.retrieval.tools import memory as memory_tools
+from core_memory.retrieval.semantic_index import build_semantic_index
 from core_memory.retrieval.normalize import classify_intent
 from core_memory.persistence.store import MemoryStore
 from core_memory.persistence.store_claim_ops import write_claim_updates_to_bead, write_claims_to_bead
@@ -2394,7 +2395,9 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
 
         resolved_answer_mode = str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm"))
         benchmark_embeddings_provider = _resolve_benchmark_embeddings_provider(embeddings_provider)
+        benchmark_semantic_build: dict[str, Any] | None = None
         with semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
+            benchmark_semantic_build = build_semantic_index(Path(base_root))
             retrieval_report = run_locomo_retrieval_suite(
                 root=str(base_root),
                 qa_cases=selected_cases,
@@ -2496,6 +2499,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "provider_model": str(generator_model or ""),
             },
             "ingestion": dict(ingestion_meta or {}),
+            "semantic_build": dict(benchmark_semantic_build or {}),
             "cases": cases_inline,
             "benchmark_table": benchmark_table,
         }
