@@ -898,6 +898,11 @@
             <option value="snapshot" selected>snapshot</option>
             <option value="clean">clean</option>
           </select>
+          <span class="control-label">embeddings</span>
+          <select id="bench-embeddings-provider" class="control-select" title="Benchmark embeddings provider">
+            <option value="hash" selected>hash</option>
+            <option value="openai">openai</option>
+          </select>
           <span class="control-label">preload</span>
           <input id="bench-preload-max" class="control-input" type="number" min="0" step="50" value="200" style="width:74px" title="Max demo turns to preload">
           <label class="control-inline" title="Preload turns from demo session">

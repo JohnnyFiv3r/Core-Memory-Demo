@@ -101,6 +101,7 @@ function BenchmarkPane(props) {
   const cmp = summary.myelination_compare || null
   const r = report || null
   const benchmarkTable = Array.isArray((r || {}).benchmark_table) ? r.benchmark_table : []
+  const semanticBuild = (r || {}).semantic_build || null
 
   let compareSection = null
   if (r && r.myelination_comparison) {
@@ -308,6 +309,16 @@ function BenchmarkPane(props) {
             ' · retrieval k: ' + String(summary.retrieval_k || 'n/a'))
           : ('root mode: ' + String(summary.root_mode || 'n/a') + ' · preload turns: ' + String(summary.preload_turn_count || 0))
       ),
+      isLocomo
+        ? React.createElement(
+            'div',
+            { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+            'embeddings: ' + String((((r || {}).environment || {}).embeddings_provider) || 'n/a') +
+              ' · semantic build: ' + String(!!(semanticBuild && semanticBuild.ok)) +
+              ' · backend: ' + String((semanticBuild || {}).backend || 'n/a') +
+              ' · entries: ' + String((semanticBuild || {}).entries ?? 'n/a')
+          )
+        : null,
       React.createElement(
         'div',
         { style: { marginTop: '2px', color: 'var(--text-dim)' } },
@@ -340,6 +351,24 @@ function BenchmarkPane(props) {
         )
       )
     ),
+    isLocomo && semanticBuild
+      ? React.createElement(
+          'div',
+          {
+            className: 'runtime-card',
+            onClick: () => openPayload('Benchmark semantic build', semanticBuild),
+            style: { cursor: 'pointer' },
+          },
+          React.createElement('strong', null, 'Semantic build'),
+          React.createElement(
+            'div',
+            { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+            'ok=' + String(!!semanticBuild.ok) +
+              ' · backend=' + String(semanticBuild.backend || 'n/a') +
+              ' · entries=' + String(semanticBuild.entries ?? 'n/a')
+          )
+        )
+      : null,
     isLocomo && r && r.scores && r.scores.by_category
       ? React.createElement(
           React.Fragment,

@@ -3804,6 +3804,7 @@ async function runBenchmark() {
   const semanticMode = document.getElementById('bench-semantic')?.value || 'required';
   const myelination = document.getElementById('bench-myelination')?.value || 'off';
   const rootMode = document.getElementById('bench-root-mode')?.value || 'snapshot';
+  const embeddingsProvider = document.getElementById('bench-embeddings-provider')?.value || 'hash';
   const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
   const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
   const preloadMax = Number.isFinite(preloadRaw) ? Math.max(0, Math.floor(preloadRaw)) : 200;
@@ -3813,7 +3814,7 @@ async function runBenchmark() {
   btn.textContent = 'Running...';
   addMsg(
     'system',
-    'Running LOCOMO benchmark (' + subset + ', semantic=' + semanticMode + ', myelination=' + myelination + ', root=' + rootMode +
+    'Running LOCOMO benchmark (' + subset + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
       ', preload=' + (preloadEnabled ? preloadMax : 0) + ')...'
   );
   try {
@@ -3826,6 +3827,7 @@ async function runBenchmark() {
         vector_backend: 'local-faiss',
         myelination,
         root_mode: rootMode,
+        embeddings_provider: embeddingsProvider,
         preload_from_demo: preloadEnabled,
         preload_turns_max: preloadMax,
       }),
