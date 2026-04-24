@@ -34,7 +34,10 @@ function BenchmarkPane(props) {
   const formatIsoShort = typeof props.formatIsoShort === 'function' ? props.formatIsoShort : fmtIso
   const openPayload = typeof props.onOpenPayload === 'function' ? props.onOpenPayload : () => {}
 
-  if (!summary || !summary.cases) {
+  const suite = String((summary || {}).suite || '')
+  const isLocomo = suite && suite !== 'fixture_smoke'
+
+  if (!summary || (!summary.cases && !summary.qa_cases)) {
     return React.createElement(
       React.Fragment,
       null,
@@ -57,11 +60,16 @@ function BenchmarkPane(props) {
                 React.createElement(
                   'div',
                   { style: { marginTop: '2px', color: 'var(--text-dim)' } },
-                  'acc=' + Number(s.accuracy || 0).toFixed(4) +
+                  (String(s.suite || '') && String(s.suite || '') !== 'fixture_smoke'
+                  ? ('suite=' + String(s.suite || 'locomo') +
+                    ' · f1=' + Number(s.answer_f1_mean || 0).toFixed(4) +
+                    ' · recall@5=' + Number(s.evidence_recall_at_5 || 0).toFixed(4))
+                  : ('acc=' + Number(s.accuracy || 0).toFixed(4) +
                     ' · pass/fail=' +
-                    String((s.pass || 0) + '/' + (s.fail || 0)) +
-                    ' · at=' +
-                    formatIsoShort(String(s.finished_at || r.created_at || ''))
+                    String((s.pass || 0) + '/' + (s.fail || 0)))
+                ) +
+                ' · at=' +
+                formatIsoShort(String(s.finished_at || r.created_at || ''))
                 )
               )
             })
@@ -72,14 +80,23 @@ function BenchmarkPane(props) {
 
   const latencyMean = Number(((report || {}).latency_ms || {}).mean || 0).toFixed(2)
   const tokenTotal = Number(((report || {}).token_usage || {}).total_tokens_est || 0)
-  const cards = [
-    ['accuracy', Number(summary.accuracy || 0).toFixed(4)],
-    ['cases', String(summary.cases || 0)],
-    ['pass/fail', String((summary.pass || 0) + '/' + (summary.fail || 0))],
-    ['semantic', String(summary.semantic_mode || 'n/a')],
-    ['latency mean (ms)', latencyMean],
-    ['tokens est', tokenTotal.toLocaleString()],
-  ]
+  const cards = isLocomo
+    ? [
+        ['suite', String(summary.suite || 'locomo')],
+        ['samples', String(summary.samples || 0)],
+        ['qa cases', String(summary.qa_cases || 0)],
+        ['turns ingested', String(summary.turns_ingested || 0)],
+        ['answer f1', Number(summary.answer_f1_mean || 0).toFixed(4)],
+        ['recall@5', Number(summary.evidence_recall_at_5 || 0).toFixed(4)],
+      ]
+    : [
+        ['accuracy', Number(summary.accuracy || 0).toFixed(4)],
+        ['cases', String(summary.cases || 0)],
+        ['pass/fail', String((summary.pass || 0) + '/' + (summary.fail || 0))],
+        ['semantic', String(summary.semantic_mode || 'n/a')],
+        ['latency mean (ms)', latencyMean],
+        ['tokens est', tokenTotal.toLocaleString()],
+      ]
 
   const cmp = summary.myelination_compare || null
   const r = report || null
@@ -201,30 +218,56 @@ function BenchmarkPane(props) {
     if (current && baseline) {
       const cs = current.summary || {}
       const bs = baseline.summary || {}
-      const dAcc = Number(cs.accuracy || 0) - Number(bs.accuracy || 0)
-      const dLat = Number(cs.latency_mean_ms || 0) - Number(bs.latency_mean_ms || 0)
-      const dTok = Number(cs.tokens_total_est || 0) - Number(bs.tokens_total_est || 0)
-      recentRunsCompare = React.createElement(
-        'div',
-        { className: 'runtime-card' },
-        React.createElement('div', null, React.createElement('strong', null, 'Latest vs previous run')),
-        React.createElement(
+      if (isLocomo) {
+        const dF1 = Number(cs.answer_f1_mean || 0) - Number(bs.answer_f1_mean || 0)
+        const dRecall = Number(cs.evidence_recall_at_5 || 0) - Number(bs.evidence_recall_at_5 || 0)
+        recentRunsCompare = React.createElement(
           'div',
-          { style: { marginTop: '2px', color: 'var(--text-dim)' } },
-          'baseline=' + String(bs.run_id || baseline.run_id || 'n/a') + ' → current=' + String(cs.run_id || current.run_id || 'n/a')
-        ),
-        React.createElement(
-          'div',
-          { style: { marginTop: '4px', color: 'var(--text-dim)' } },
-          'accuracy Δ='
-        ),
-        React.createElement('div', { className: deltaClass(dAcc), style: { marginTop: '2px' } }, dAcc.toFixed(4)),
-        React.createElement(
-          'div',
-          { style: { marginTop: '2px', color: 'var(--text-dim)' } },
-          'latency Δ=' + dLat.toFixed(3) + 'ms · tokens Δ=' + dTok.toLocaleString()
+          { className: 'runtime-card' },
+          React.createElement('div', null, React.createElement('strong', null, 'Latest vs previous run')),
+          React.createElement(
+            'div',
+            { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+            'baseline=' + String(bs.run_id || baseline.run_id || 'n/a') + ' → current=' + String(cs.run_id || current.run_id || 'n/a')
+          ),
+          React.createElement(
+            'div',
+            { style: { marginTop: '4px', color: 'var(--text-dim)' } },
+            'answer f1 Δ='
+          ),
+          React.createElement('div', { className: deltaClass(dF1), style: { marginTop: '2px' } }, dF1.toFixed(4)),
+          React.createElement(
+            'div',
+            { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+            'recall@5 Δ=' + dRecall.toFixed(4)
+          )
         )
-      )
+      } else {
+        const dAcc = Number(cs.accuracy || 0) - Number(bs.accuracy || 0)
+        const dLat = Number(cs.latency_mean_ms || 0) - Number(bs.latency_mean_ms || 0)
+        const dTok = Number(cs.tokens_total_est || 0) - Number(bs.tokens_total_est || 0)
+        recentRunsCompare = React.createElement(
+          'div',
+          { className: 'runtime-card' },
+          React.createElement('div', null, React.createElement('strong', null, 'Latest vs previous run')),
+          React.createElement(
+            'div',
+            { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+            'baseline=' + String(bs.run_id || baseline.run_id || 'n/a') + ' → current=' + String(cs.run_id || current.run_id || 'n/a')
+          ),
+          React.createElement(
+            'div',
+            { style: { marginTop: '4px', color: 'var(--text-dim)' } },
+            'accuracy Δ='
+          ),
+          React.createElement('div', { className: deltaClass(dAcc), style: { marginTop: '2px' } }, dAcc.toFixed(4)),
+          React.createElement(
+            'div',
+            { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+            'latency Δ=' + dLat.toFixed(3) + 'ms · tokens Δ=' + dTok.toLocaleString()
+          )
+        )
+      }
     }
   }
 
@@ -258,12 +301,18 @@ function BenchmarkPane(props) {
       React.createElement(
         'div',
         { style: { marginTop: '4px', color: 'var(--text-dim)' } },
-        'root mode: ' + String(summary.root_mode || 'n/a') + ' · preload turns: ' + String(summary.preload_turn_count || 0)
+        isLocomo
+          ? ('root mode: ' + String(summary.root_mode || 'n/a') +
+            ' · answer mode: ' + String(summary.answer_mode || 'n/a') +
+            ' · retrieval k: ' + String(summary.retrieval_k || 'n/a'))
+          : ('root mode: ' + String(summary.root_mode || 'n/a') + ' · preload turns: ' + String(summary.preload_turn_count || 0))
       ),
       React.createElement(
         'div',
         { style: { marginTop: '2px', color: 'var(--text-dim)' } },
-        'backend modes: ' + String((summary.backend_modes || []).join(', ') || 'unknown')
+        isLocomo
+          ? ('artifact path: ' + String(summary.artifact_path || 'n/a'))
+          : ('backend modes: ' + String((summary.backend_modes || []).join(', ') || 'unknown'))
       ),
       React.createElement(
         'div',
@@ -290,7 +339,26 @@ function BenchmarkPane(props) {
         )
       )
     ),
-    r && r.per_bucket
+    isLocomo && r && r.scores && r.scores.by_category
+      ? React.createElement(
+          React.Fragment,
+          null,
+          React.createElement('div', { className: 'runtime-card' }, React.createElement('strong', null, 'By category')),
+          ...Object.keys(r.scores.by_category || {}).sort().map((k) => {
+            const row = (r.scores.by_category || {})[k] || {}
+            return React.createElement(
+              'div',
+              { className: 'bench-bucket', key: k },
+              React.createElement('strong', null, 'category ' + k),
+              ' · qa=', String(row.qa_count || 0),
+              ' · f1=', Number(row.answer_f1_mean || 0).toFixed(4),
+              ' · recall@5=', Number(row['evidence_recall@5'] || 0).toFixed(4),
+              ' · mrr=', Number(row.mrr || 0).toFixed(4)
+            )
+          })
+        )
+      : null,
+    !isLocomo && r && r.per_bucket
       ? React.createElement(
           React.Fragment,
           null,
@@ -309,7 +377,7 @@ function BenchmarkPane(props) {
         )
       : null,
     compareSection,
-    fails.length
+    !isLocomo && fails.length
       ? React.createElement(
           React.Fragment,
           null,

@@ -870,10 +870,12 @@
       <div class="tab-content" id="tab-entities"></div>
       <div class="tab-content" id="tab-runtime">
         <div class="panel-controls" id="runtime-controls">
-          <span class="control-label">subset</span>
-          <select id="bench-subset" class="control-select" title="Benchmark subset">
-            <option value="local" selected>local</option>
-            <option value="full">full</option>
+          <span class="control-label">suite</span>
+          <select id="bench-subset" class="control-select" title="Benchmark suite">
+            <option value="fixture_smoke">fixture_smoke</option>
+            <option value="locomo_mini" selected>locomo_mini</option>
+            <option value="locomo_retrieval">locomo_retrieval</option>
+            <option value="locomo_qa">locomo_qa</option>
           </select>
           <span class="control-label">semantic</span>
           <select id="bench-semantic" class="control-select" title="Semantic mode">

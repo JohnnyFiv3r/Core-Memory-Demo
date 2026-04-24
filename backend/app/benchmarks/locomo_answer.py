@@ -27,8 +27,8 @@ def _build_prompt(question: str, retrieved_context: list[dict[str, Any]]) -> str
         )
     context_block = "\n".join(ctx_lines) if ctx_lines else "[]"
     return (
-        "You are answering a LoCoMo benchmark question.\n"
-        "Use only the provided retrieved context.\n"
+        "Answer the user question using only the provided context.\n"
+        "Do not use outside knowledge.\n"
         "If the answer is not supported by the context, answer exactly 'No information available'.\n"
         "Return strict JSON with keys: answer, used_dia_ids, confidence, unsupported.\n"
         "confidence must be one of: low, medium, high.\n"
@@ -57,13 +57,18 @@ def _extractive_answer(retrieved_context: list[dict[str, Any]]) -> dict[str, Any
 
 def _oracle_answer(*, qa: dict[str, Any], gold_context: list[dict[str, Any]]) -> dict[str, Any]:
     used = []
+    parts = []
     for row in gold_context:
         used.extend([str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip()])
+        text = str(row.get("text") or "").strip()
+        if text:
+            parts.append(text)
+    answer = " ".join(parts).strip() or "No information available"
     return {
-        "answer": str(qa.get("gold_answer") or qa.get("answer") or "").strip() or "No information available",
+        "answer": answer,
         "used_dia_ids": sorted(set(used)),
-        "confidence": "high",
-        "unsupported": False,
+        "confidence": "high" if parts else "low",
+        "unsupported": not bool(parts),
     }
 
 

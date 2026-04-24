@@ -28,9 +28,9 @@ class TestLocomoAnswer(unittest.TestCase):
             mode="oracle_context",
             qa={"gold_answer": "7 May 2023"},
             retrieved_context=[],
-            gold_context=[{"dia_ids": ["D1:3"]}],
+            gold_context=[{"dia_ids": ["D1:3"], "text": "Caroline went to the support group on 7 May 2023"}],
         )
-        self.assertEqual("7 May 2023", out["answer"])
+        self.assertIn("7 May 2023", out["answer"])
         self.assertEqual(["D1:3"], out["used_dia_ids"])
 
     def test_llm_mode_uses_agent(self):

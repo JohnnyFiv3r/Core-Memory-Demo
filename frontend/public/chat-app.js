@@ -3765,16 +3765,34 @@ async function flushSession() {
 function formatBenchmarkSummary(s) {
   if (!s) return 'Benchmark completed.';
   const warns = benchmarkWarnCount(s.warnings);
+  const suite = String(s.suite || 'fixture_smoke')
+  if (suite === 'fixture_smoke') {
+    return (
+      'LOCOMO test completed\n' +
+      'mode: isolated benchmark store (demo state not mutated)\n' +
+      'suite: ' + suite + '\n' +
+      'root mode: ' + benchmarkNA(s.root_mode) + '\n' +
+      'cases: ' + (s.cases ?? 0) + '\n' +
+      'pass/fail: ' + benchmarkPassFail(s.pass ?? 0, s.fail ?? 0) + '\n' +
+      'accuracy: ' + benchmarkAcc(s.accuracy || 0) + '\n' +
+      'semantic mode: ' + benchmarkNA(s.semantic_mode) + '\n' +
+      'backend modes: ' + benchmarkBackendModes(s.backend_modes) + '\n' +
+      'preload turns: ' + (s.preload_turn_count ?? 0) + '\n' +
+      'warnings: ' + warns
+    );
+  }
   return (
-    'LOCOMO test completed\n' +
+    'LOCOMO benchmark completed\n' +
+    'suite: ' + suite + '\n' +
     'mode: isolated benchmark store (demo state not mutated)\n' +
     'root mode: ' + benchmarkNA(s.root_mode) + '\n' +
-    'cases: ' + (s.cases ?? 0) + '\n' +
-    'pass/fail: ' + benchmarkPassFail(s.pass ?? 0, s.fail ?? 0) + '\n' +
-    'accuracy: ' + benchmarkAcc(s.accuracy || 0) + '\n' +
+    'samples: ' + (s.samples ?? 0) + '\n' +
+    'qa cases: ' + (s.qa_cases ?? 0) + '\n' +
+    'turns ingested: ' + (s.turns_ingested ?? 0) + '\n' +
+    'answer f1 mean: ' + benchmarkAcc(s.answer_f1_mean || 0) + '\n' +
+    'evidence recall@5: ' + benchmarkAcc(s.evidence_recall_at_5 || 0) + '\n' +
     'semantic mode: ' + benchmarkNA(s.semantic_mode) + '\n' +
-    'backend modes: ' + benchmarkBackendModes(s.backend_modes) + '\n' +
-    'preload turns: ' + (s.preload_turn_count ?? 0) + '\n' +
+    'answer mode: ' + benchmarkNA(s.answer_mode) + '\n' +
     'warnings: ' + warns
   );
 }
@@ -3782,7 +3800,7 @@ function formatBenchmarkSummary(s) {
 async function runBenchmark() {
   const btn = document.getElementById('btn-benchmark');
   if (!btn) return;
-  const subset = document.getElementById('bench-subset')?.value || 'local';
+  const subset = document.getElementById('bench-subset')?.value || 'locomo_mini';
   const semanticMode = document.getElementById('bench-semantic')?.value || 'required';
   const myelination = document.getElementById('bench-myelination')?.value || 'off';
   const rootMode = document.getElementById('bench-root-mode')?.value || 'snapshot';
@@ -3803,7 +3821,7 @@ async function runBenchmark() {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
       body: JSON.stringify({
-        subset,
+        suite: subset,
         semantic_mode: semanticMode,
         vector_backend: 'local-faiss',
         myelination,

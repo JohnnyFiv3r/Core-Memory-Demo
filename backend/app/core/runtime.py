@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import platform
 import re
 import shutil
 import time
@@ -2399,11 +2400,13 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         )
         score_summary = aggregate_case_scores(list(retrieval_report.get("cases") or []))
 
+        finished_at = _utc_now_iso()
+        duration_ms = max(0, int((datetime.fromisoformat(finished_at.replace('Z', '+00:00')) - datetime.fromisoformat(started.replace('Z', '+00:00'))).total_seconds() * 1000)) if started else 0
         summary = {
             "run_id": run_id,
             "started_at": started,
-            "finished_at": _utc_now_iso(),
-            "duration_ms": 0,
+            "finished_at": finished_at,
+            "duration_ms": duration_ms,
             "suite": suite_name,
             "samples": int((dataset_meta.get("dataset") or {}).get("selected_samples") or 0),
             "qa_cases": int((dataset_meta.get("dataset") or {}).get("selected_qa_cases") or 0),
@@ -2417,6 +2420,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "root_mode": root_mode,
             "warnings": warnings,
             "dataset_path": str((dataset_meta.get("dataset") or {}).get("dataset_path") or ""),
+            "locomo_repo_commit": str((dataset_meta.get("dataset") or {}).get("repo_commit") or ""),
             "subset": str(subset or "local"),
             "legacy_request": bool(legacy_mode),
         }
@@ -2451,6 +2455,14 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "reason": "milestone_5_answer_generation" if resolved_answer_mode != "none" else "milestone_4_retrieval_only",
             },
             "scores": dict(score_summary or {}),
+            "environment": {
+                "python_version": platform.python_version(),
+                "core_memory_demo_commit": "",
+                "core_memory_engine_commit": "",
+                "core_memory_version": "",
+                "semantic_mode": semantic_mode_name,
+                "provider_model": str(generator_model or ""),
+            },
             "ingestion": dict(ingestion_meta or {}),
             "cases": list(retrieval_report.get("cases") or [])[: max(0, int(settings.locomo_case_artifact_limit_inline))],
         }
