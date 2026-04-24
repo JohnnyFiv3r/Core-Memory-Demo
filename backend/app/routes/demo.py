@@ -577,6 +577,7 @@ async def benchmark_run(request: Request):
     ingestion_mode = str((body or {}).get('ingestion_mode') or settings.locomo_ingest_mode_default).strip() or settings.locomo_ingest_mode_default
     answer_mode = str((body or {}).get('answer_mode') or '').strip() or None
     generator_model = str((body or {}).get('generator_model') or '').strip() or None
+    embeddings_provider = str((body or {}).get('embeddings_provider') or '').strip() or None
     evidence_recall_k = [int(x) for x in ((body or {}).get('evidence_recall_k') or [1, 3, 5, 8, 10]) if str(x).strip()]
     persist_case_artifacts = bool((body or {}).get('persist_case_artifacts', True))
 
@@ -602,6 +603,7 @@ async def benchmark_run(request: Request):
                 evidence_recall_k=evidence_recall_k,
                 persist_case_artifacts=persist_case_artifacts,
                 legacy_mode=legacy_mode,
+                embeddings_provider=embeddings_provider,
             )
         return out
     except HTTPException as exc:

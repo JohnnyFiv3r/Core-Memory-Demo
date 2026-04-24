@@ -2346,7 +2346,17 @@ def _materialize_locomo_setup(*, root: str, setup: dict[str, Any], case_id: str)
         write_claim_updates_to_bead(root, bead_id, list(row.get("rows") or []))
 
 
-def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False) -> dict[str, Any]:
+def _resolve_benchmark_embeddings_provider(explicit_provider: str | None = None) -> str:
+    explicit = str(explicit_provider or "").strip().lower()
+    if explicit:
+        return explicit
+    default_env = str(os.environ.get("CORE_MEMORY_DEMO_BENCHMARK_EMBEDDINGS_PROVIDER") or "").strip().lower()
+    if default_env:
+        return default_env
+    return "hash"
+
+
+def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
         try:
@@ -2383,7 +2393,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
 
         resolved_answer_mode = str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm"))
-        benchmark_embeddings_provider = str(os.environ.get("CORE_MEMORY_EMBEDDINGS_PROVIDER") or "").strip() or "hash"
+        benchmark_embeddings_provider = _resolve_benchmark_embeddings_provider(embeddings_provider)
         with semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
             retrieval_report = run_locomo_retrieval_suite(
                 root=str(base_root),
