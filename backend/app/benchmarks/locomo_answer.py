@@ -79,6 +79,22 @@ def _normalize_answer_payload(raw: str) -> dict[str, Any]:
     }
 
 
+def _reconcile_used_dia_ids(*, used_dia_ids: list[str], retrieved_context: list[dict[str, Any]], gold_context: list[dict[str, Any]] | None = None) -> list[str]:
+    allowed = set()
+    for row in list(retrieved_context or []) + list(gold_context or []):
+        allowed.update(str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip())
+    used = [str(x).strip() for x in (used_dia_ids or []) if str(x).strip()]
+    normalized = [x for x in used if x in allowed]
+    if normalized:
+        return sorted(set(normalized))
+    fallback = []
+    for row in retrieved_context or []:
+        fallback.extend(str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip())
+    if fallback:
+        return sorted(set(fallback[:3]))
+    return []
+
+
 async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_id: str) -> dict[str, Any]:
     out = await run_agent_for_root(
         root=root,
@@ -120,5 +136,11 @@ def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str
         sample_id_value = str(sample_id or qa.get("sample_id") or "").strip()
         if not sample_id_value:
             raise RuntimeError("missing_sample_id")
-        return asyncio.run(_llm_answer_async(root=root_path, sample_id=sample_id_value, question=str(qa.get("question") or ""), model_id=model_id))
+        out = asyncio.run(_llm_answer_async(root=root_path, sample_id=sample_id_value, question=str(qa.get("question") or ""), model_id=model_id))
+        out["used_dia_ids"] = _reconcile_used_dia_ids(
+            used_dia_ids=list(out.get("used_dia_ids") or []),
+            retrieved_context=retrieved_context,
+            gold_context=gold_context,
+        )
+        return out
     raise ValueError(f"unsupported_locomo_answer_mode:{mode_name}")

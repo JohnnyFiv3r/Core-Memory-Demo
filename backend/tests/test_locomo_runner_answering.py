@@ -34,12 +34,13 @@ class TestLocomoRunnerAnswering(unittest.TestCase):
         fake_bead = {
             "id": "bead-1",
             "detail": "Alice: Caroline went to the support group on 7 May 2023",
-            "source_turn_ids": ["D1:3"],
+            "source_turn_ids": ["turn-0001"],
             "metadata": {
                 "sample_id": "conv-1",
                 "session_index": 1,
                 "speaker": "Alice",
                 "session_date_time": "7 May 2023",
+                "dia_id": "D1:3",
             },
         }
         gold_context_map = {

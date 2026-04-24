@@ -30,7 +30,18 @@ def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[st
     bead = inspect_bead(root=root, bead_id=bead_id) if bead_id and inspect_bead is not None else None
     bead = dict(bead or {})
     metadata = dict(bead.get("metadata") or {})
-    dia_ids = [str(x).strip() for x in (bead.get("source_turn_ids") or []) if str(x).strip()]
+    raw_dia_ids = []
+    for key in ("dia_ids", "dia_id", "locomo_dia_ids", "locomo_dia_id"):
+        value = metadata.get(key)
+        if isinstance(value, list):
+            raw_dia_ids.extend([str(x).strip() for x in value if str(x).strip()])
+        elif str(value or "").strip():
+            raw_dia_ids.append(str(value).strip())
+    if not raw_dia_ids:
+        raw_dia_ids.extend([str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip()])
+    if not raw_dia_ids:
+        raw_dia_ids.extend([str(x).strip() for x in (bead.get("source_turn_ids") or []) if str(x).strip().startswith("D")])
+    dia_ids = sorted(set(x for x in raw_dia_ids if x))
     return {
         "rank": rank,
         "bead_id": bead_id,

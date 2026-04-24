@@ -64,6 +64,23 @@ class TestLocomoAnswer(unittest.TestCase):
         self.assertEqual("high", out["confidence"])
         self.assertFalse(out["unsupported"])
 
+    def test_llm_mode_reconciles_non_dataset_used_ids_back_to_retrieved_dia_ids(self):
+        with patch("app.benchmarks.locomo_answer.run_agent_for_root") as run_agent:
+            run_agent.return_value = {
+                "ok": True,
+                "assistant": '```json\n{"answer":"7 May 2023","used_dia_ids":["turn-abc123"],"confidence":"high","unsupported":false}\n```',
+                "model_id": "openai:gpt-4o-mini",
+            }
+            out = generate_locomo_answer(
+                mode="llm",
+                root="/tmp/fake",
+                sample_id="conv-1",
+                qa={"question": "When?"},
+                retrieved_context=[{"text": "Caroline went on 7 May 2023", "dia_ids": ["D1:3", "D1:4"]}],
+                generator_model="openai:gpt-4o-mini",
+            )
+        self.assertEqual(["D1:3", "D1:4"], out["used_dia_ids"])
+
 
 if __name__ == "__main__":
     unittest.main()
