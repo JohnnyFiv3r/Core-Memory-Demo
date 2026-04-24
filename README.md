@@ -42,6 +42,20 @@ python -m unittest tests/test_api_smoke.py tests/test_retrieval_regressions.py t
 python scripts/check_retrieval_health.py --base-url http://127.0.0.1:8000
 ```
 
+### Provider-backed benchmark note
+
+If you want LoCoMo benchmark runs to use provider-backed semantic embeddings, the backend Python environment needs both:
+- a provider key such as `OPENAI_API_KEY` or `GEMINI_API_KEY`
+- the matching client/runtime deps installed in that same environment
+
+For OpenAI-backed semantic benchmarking, make sure the backend environment includes:
+
+```bash
+pip install openai faiss-cpu numpy
+```
+
+If no explicit embedding provider is configured for isolated benchmark runs, the demo can still use deterministic local `hash` embeddings for reproducible readiness runs.
+
 ### Frontend
 
 ```bash
