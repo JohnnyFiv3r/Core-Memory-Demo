@@ -2123,17 +2123,35 @@ async def replay_story_pack(
 
 
 @contextmanager
-def semantic_mode(mode: str):
+def semantic_mode(mode: str, *, build_on_read: bool | None = None, embeddings_provider: str | None = None):
     key = "CORE_MEMORY_CANONICAL_SEMANTIC_MODE"
+    build_key = "CORE_MEMORY_SEMANTIC_BUILD_ON_READ"
+    provider_key = "CORE_MEMORY_EMBEDDINGS_PROVIDER"
     old = os.environ.get(key)
+    old_build = os.environ.get(build_key)
+    old_provider = os.environ.get(provider_key)
     try:
         os.environ[key] = str(mode or "degraded_allowed")
+        if build_on_read is not None:
+            os.environ[build_key] = "1" if build_on_read else "0"
+        if embeddings_provider is not None:
+            os.environ[provider_key] = str(embeddings_provider)
         yield
     finally:
         if old is None:
             os.environ.pop(key, None)
         else:
             os.environ[key] = old
+        if build_on_read is not None:
+            if old_build is None:
+                os.environ.pop(build_key, None)
+            else:
+                os.environ[build_key] = old_build
+        if embeddings_provider is not None:
+            if old_provider is None:
+                os.environ.pop(provider_key, None)
+            else:
+                os.environ[provider_key] = old_provider
 
 
 def _benchmark_history_file() -> Path:
@@ -2389,15 +2407,17 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
 
         resolved_answer_mode = str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm"))
-        retrieval_report = run_locomo_retrieval_suite(
-            root=str(base_root),
-            qa_cases=selected_cases,
-            retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
-            evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
-            answer_mode=resolved_answer_mode,
-            generator_model=generator_model,
-            gold_context_map=gold_context_map,
-        )
+        benchmark_embeddings_provider = str(os.environ.get("CORE_MEMORY_EMBEDDINGS_PROVIDER") or "").strip() or "hash"
+        with semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
+            retrieval_report = run_locomo_retrieval_suite(
+                root=str(base_root),
+                qa_cases=selected_cases,
+                retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
+                evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
+                answer_mode=resolved_answer_mode,
+                generator_model=generator_model,
+                gold_context_map=gold_context_map,
+            )
         score_summary = aggregate_case_scores(list(retrieval_report.get("cases") or []))
 
         finished_at = _utc_now_iso()
@@ -2461,6 +2481,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "core_memory_engine_commit": "",
                 "core_memory_version": "",
                 "semantic_mode": semantic_mode_name,
+                "embeddings_provider": benchmark_embeddings_provider,
                 "provider_model": str(generator_model or ""),
             },
             "ingestion": dict(ingestion_meta or {}),
