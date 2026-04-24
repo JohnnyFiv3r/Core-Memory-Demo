@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import json
+import re
 from typing import Any
 
 from app.core.agent_runtime import run_agent_for_root
@@ -41,20 +43,58 @@ def _oracle_answer(*, qa: dict[str, Any], gold_context: list[dict[str, Any]]) ->
     }
 
 
+_JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
+
+
+def _normalize_answer_payload(raw: str) -> dict[str, Any]:
+    text = str(raw or "").strip()
+    stripped = _JSON_FENCE_RE.sub("", text).strip() if text else ""
+    parsed: dict[str, Any] | None = None
+    if stripped.startswith("{") and stripped.endswith("}"):
+        try:
+            loaded = json.loads(stripped)
+            if isinstance(loaded, dict):
+                parsed = dict(loaded)
+        except Exception:
+            parsed = None
+    if parsed is None:
+        parsed = {"answer": text or "No information available"}
+
+    answer = str(parsed.get("answer") or "No information available").strip() or "No information available"
+    raw_used = parsed.get("used_dia_ids") or []
+    used = [str(x).strip() for x in raw_used if str(x).strip()] if isinstance(raw_used, list) else []
+    confidence = str(parsed.get("confidence") or "low").strip().lower() or "low"
+    unsupported_raw = parsed.get("unsupported")
+    if isinstance(unsupported_raw, bool):
+        unsupported = unsupported_raw
+    elif isinstance(unsupported_raw, str):
+        unsupported = unsupported_raw.strip().lower() in {"true", "1", "yes", "unsupported"}
+    else:
+        unsupported = answer == "No information available"
+    return {
+        "answer": answer,
+        "used_dia_ids": used,
+        "confidence": confidence if confidence in {"low", "medium", "high"} else "low",
+        "unsupported": unsupported,
+    }
+
+
 async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_id: str) -> dict[str, Any]:
     out = await run_agent_for_root(
         root=root,
         session_id=f"locomo:{sample_id}",
         message=question,
         model_id=model_id,
+        instruction_prefix=(
+            "You are answering a benchmark evaluation question through the normal demo agent path. "
+            "Use memory tools normally, stay grounded in stored memory, and answer concisely. "
+            "When possible, return strict JSON with keys: answer, used_dia_ids, confidence, unsupported. "
+            "If you cannot support an answer from memory, answer exactly 'No information available'."
+        ),
+        metadata={"benchmark_answering": True, "sample_id": sample_id},
     )
     raw = str(out.get("assistant") or "").strip()
-    return {
-        "answer": raw or "No information available",
-        "used_dia_ids": [],
-        "confidence": "low",
-        "unsupported": not bool(raw) or raw == "No information available",
-    }
+    return _normalize_answer_payload(raw)
 
 
 def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str | None = None, qa: dict[str, Any], retrieved_context: list[dict[str, Any]], generator_model: str | None = None, gold_context: list[dict[str, Any]] | None = None) -> dict[str, Any]:

@@ -9,6 +9,17 @@ from app.benchmarks.locomo_answer import generate_locomo_answer
 
 
 class TestLocomoAnswer(unittest.TestCase):
+    def test_normalize_answer_payload_handles_fenced_json(self):
+        from app.benchmarks.locomo_answer import _normalize_answer_payload
+
+        out = _normalize_answer_payload(
+            '```json\n{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}\n```'
+        )
+        self.assertEqual("7 May 2023", out["answer"])
+        self.assertEqual(["D1:3"], out["used_dia_ids"])
+        self.assertEqual("high", out["confidence"])
+        self.assertFalse(out["unsupported"])
+
     def test_none_mode(self):
         out = generate_locomo_answer(mode="none", qa={}, retrieved_context=[])
         self.assertEqual("", out["answer"])
@@ -37,7 +48,7 @@ class TestLocomoAnswer(unittest.TestCase):
         with patch("app.benchmarks.locomo_answer.run_agent_for_root") as run_agent:
             run_agent.return_value = {
                 "ok": True,
-                "assistant": "7 May 2023",
+                "assistant": '```json\n{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}\n```',
                 "model_id": "openai:gpt-4o-mini",
             }
             out = generate_locomo_answer(
@@ -49,7 +60,9 @@ class TestLocomoAnswer(unittest.TestCase):
                 generator_model="openai:gpt-4o-mini",
             )
         self.assertEqual("7 May 2023", out["answer"])
-        self.assertEqual([], out["used_dia_ids"])
+        self.assertEqual(["D1:3"], out["used_dia_ids"])
+        self.assertEqual("high", out["confidence"])
+        self.assertFalse(out["unsupported"])
 
 
 if __name__ == "__main__":

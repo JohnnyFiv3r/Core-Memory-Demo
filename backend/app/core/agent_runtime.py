@@ -41,18 +41,22 @@ def create_agent_for_root(model_id: str, *, root: str, session_id: str):
     return agent
 
 
-async def run_agent_for_root(*, root: str, session_id: str, message: str, model_id: str) -> dict[str, Any]:
+async def run_agent_for_root(*, root: str, session_id: str, message: str, model_id: str, instruction_prefix: str | None = None, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     chosen_model = str(model_id or '').strip()
     if not chosen_model:
         raise RuntimeError('no_model_configured')
+    prompt = str(message or '')
+    prefix = str(instruction_prefix or '').strip()
+    if prefix:
+        prompt = f"{prefix}\n\nUser question: {prompt}"
     agent = create_agent_for_root(chosen_model, root=root, session_id=session_id)
     result = await run_with_memory(
         agent,
-        message,
+        prompt,
         root=root,
         session_id=session_id,
         turn_id=uuid.uuid4().hex[:12],
-        metadata={'source': 'core_memory_demo_benchmark'},
+        metadata={'source': 'core_memory_demo_benchmark', **dict(metadata or {})},
     )
     return {
         'ok': True,
