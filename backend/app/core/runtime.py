@@ -49,7 +49,7 @@ from core_memory.write_pipeline.continuity_injection import load_continuity_inje
 
 from app.benchmarks.fixture_smoke import load_fixture_smoke_cases
 from app.benchmarks.locomo_loader import LocomoLoaderError
-from app.benchmarks.locomo_suite import build_locomo_suite_metadata, make_locomo_missing_dataset_response, write_locomo_run_artifacts
+from app.benchmarks.locomo_suite import build_locomo_suite_metadata, ingest_locomo_samples, make_locomo_missing_dataset_response, write_locomo_run_artifacts
 from app.core.config import settings
 
 
@@ -2353,7 +2353,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
         try:
-            dataset_meta, selected_cases = build_locomo_suite_metadata(
+            dataset_meta, selected_cases, selected_samples = build_locomo_suite_metadata(
                 suite=suite_name,
                 sample_limit=sample_limit,
                 qa_limit=qa_limit,
@@ -2376,6 +2376,15 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         if legacy_mode:
             warnings.append("legacy_locomo_like_fixture")
 
+        run_root = Path(settings.core_memory_demo_benchmark_root) / run_id
+        run_root.mkdir(parents=True, exist_ok=True)
+        base_root = run_root / "base"
+        base_root.mkdir(parents=True, exist_ok=True)
+        if str(root_mode or "snapshot") == "snapshot":
+            _copy_tree(Path(settings.core_memory_root), base_root)
+        ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
+        ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
+
         summary = {
             "run_id": run_id,
             "started_at": started,
@@ -2384,7 +2393,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "suite": suite_name,
             "samples": int((dataset_meta.get("dataset") or {}).get("selected_samples") or 0),
             "qa_cases": int((dataset_meta.get("dataset") or {}).get("selected_qa_cases") or 0),
-            "turns_ingested": int((dataset_meta.get("dataset") or {}).get("turns_total") or 0),
+            "turns_ingested": int(ingestion_meta.get("ingested_turns") or 0),
             "answer_f1_mean": 0.0,
             "evidence_recall_at_5": 0.0,
             "semantic_mode": semantic_mode_name,
@@ -2406,7 +2415,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "qa_limit": qa_limit,
                 "sample_ids": list(sample_ids or []),
                 "category_filter": list(category_filter or []),
-                "ingestion_mode": str(ingestion_mode or settings.locomo_ingest_mode_default),
+                "ingestion_mode": ingestion_mode_name,
                 "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
                 "answer_mode": str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm")),
                 "generator_model": str(generator_model or ""),
@@ -2416,11 +2425,11 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "dataset": dict((dataset_meta.get("dataset") or {})),
             "retrieval": {
                 "status": "not_run",
-                "reason": "milestone_1_2_metadata_only",
+                "reason": "milestone_3_ingestion_ready",
             },
             "answering": {
                 "status": "not_run",
-                "reason": "milestone_1_2_metadata_only",
+                "reason": "milestone_3_ingestion_ready",
             },
             "scores": {
                 "overall": {
@@ -2431,6 +2440,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     "mrr": 0.0,
                 }
             },
+            "ingestion": dict(ingestion_meta or {}),
             "cases": [
                 {
                     "qa_id": str(row.get("qa_id") or ""),
@@ -2450,6 +2460,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             report=report,
             config=dict(report.get("config") or {}),
             dataset_meta=dict(report.get("dataset") or {}),
+            ingestion_meta=dict(report.get("ingestion") or {}),
         )
         summary["artifact_path"] = artifacts.get("root")
         report["artifacts"] = artifacts

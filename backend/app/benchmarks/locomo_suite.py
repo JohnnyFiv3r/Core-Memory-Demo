@@ -7,11 +7,12 @@ import uuid
 from pathlib import Path
 from typing import Any
 
+from app.benchmarks.locomo_ingest import ingest_locomo_turns
 from app.benchmarks.locomo_loader import LocomoLoaderError, load_locomo_dataset
 from app.core.config import settings
 
 
-def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]]]:
+def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     samples, meta = load_locomo_dataset()
     selected = list(samples)
 
@@ -59,10 +60,31 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
         "suite": suite,
         "source": "locomo_dataset",
         "dataset": dataset_meta,
-    }, selected_cases
+    }, selected_cases, selected
 
 
-def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: dict[str, Any], config: dict[str, Any], dataset_meta: dict[str, Any]) -> dict[str, str]:
+def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], ingestion_mode: str = "turns") -> dict[str, Any]:
+    rows = []
+    total_turns = 0
+    ingested_turns = 0
+    skipped_existing = 0
+    for sample in samples:
+        out = ingest_locomo_turns(root=base_root, sample=sample, mode=ingestion_mode)
+        rows.append(out)
+        total_turns += int(out.get("turns_total") or 0)
+        ingested_turns += int(out.get("ingested_count") or 0)
+        skipped_existing += int(out.get("skipped_existing_count") or 0)
+    return {
+        "mode": ingestion_mode,
+        "samples": len(samples),
+        "turns_total": total_turns,
+        "ingested_turns": ingested_turns,
+        "skipped_existing_count": skipped_existing,
+        "rows": rows,
+    }
+
+
+def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: dict[str, Any], config: dict[str, Any], dataset_meta: dict[str, Any], ingestion_meta: dict[str, Any] | None = None) -> dict[str, str]:
     root = Path(settings.core_memory_demo_artifacts_root) / "locomo-runs" / run_id
     root.mkdir(parents=True, exist_ok=True)
 
@@ -70,6 +92,7 @@ def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: 
     report_path = root / "report.json"
     config_path = root / "config.json"
     dataset_meta_path = root / "dataset_meta.json"
+    ingestion_meta_path = root / "ingestion_meta.json"
     cases_path = root / "cases.jsonl"
     failures_path = root / "failures.jsonl"
 
@@ -77,6 +100,7 @@ def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: 
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
     dataset_meta_path.write_text(json.dumps(dataset_meta, ensure_ascii=False, indent=2), encoding="utf-8")
+    ingestion_meta_path.write_text(json.dumps(dict(ingestion_meta or {}), ensure_ascii=False, indent=2), encoding="utf-8")
 
     cases = list(report.get("cases") or [])
     with cases_path.open("w", encoding="utf-8") as fh:
@@ -93,6 +117,7 @@ def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: 
         "report": str(report_path),
         "config": str(config_path),
         "dataset_meta": str(dataset_meta_path),
+        "ingestion_meta": str(ingestion_meta_path),
         "cases": str(cases_path),
         "failures": str(failures_path),
     }
