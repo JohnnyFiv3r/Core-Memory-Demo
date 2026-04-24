@@ -49,6 +49,8 @@ from core_memory.write_pipeline.continuity_injection import load_continuity_inje
 
 from app.benchmarks.fixture_smoke import load_fixture_smoke_cases
 from app.benchmarks.locomo_loader import LocomoLoaderError
+from app.benchmarks.locomo_runner import run_locomo_retrieval_suite
+from app.benchmarks.locomo_scoring import aggregate_case_scores
 from app.benchmarks.locomo_suite import build_locomo_suite_metadata, ingest_locomo_samples, make_locomo_missing_dataset_response, write_locomo_run_artifacts
 from app.core.config import settings
 
@@ -2385,6 +2387,14 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
 
+        retrieval_report = run_locomo_retrieval_suite(
+            root=str(base_root),
+            qa_cases=selected_cases,
+            retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
+            evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
+        )
+        score_summary = aggregate_case_scores(list(retrieval_report.get("cases") or []))
+
         summary = {
             "run_id": run_id,
             "started_at": started,
@@ -2395,7 +2405,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "qa_cases": int((dataset_meta.get("dataset") or {}).get("selected_qa_cases") or 0),
             "turns_ingested": int(ingestion_meta.get("ingested_turns") or 0),
             "answer_f1_mean": 0.0,
-            "evidence_recall_at_5": 0.0,
+            "evidence_recall_at_5": float((score_summary.get("overall") or {}).get("evidence_recall@5") or 0.0),
             "semantic_mode": semantic_mode_name,
             "answer_mode": str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm")),
             "generator_model": str(generator_model or ""),
@@ -2424,35 +2434,19 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             },
             "dataset": dict((dataset_meta.get("dataset") or {})),
             "retrieval": {
-                "status": "not_run",
-                "reason": "milestone_3_ingestion_ready",
+                "status": "completed",
+                "completed": int(retrieval_report.get("completed") or 0),
+                "failed": int(retrieval_report.get("failed") or 0),
+                "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
+                "evidence_recall_k": list(evidence_recall_k or [1, 3, 5, 8, 10]),
             },
             "answering": {
                 "status": "not_run",
-                "reason": "milestone_3_ingestion_ready",
+                "reason": "milestone_4_retrieval_only",
             },
-            "scores": {
-                "overall": {
-                    "qa_count": int((dataset_meta.get("dataset") or {}).get("selected_qa_cases") or 0),
-                    "answer_f1_mean": 0.0,
-                    "evidence_recall@5": 0.0,
-                    "hit_any": 0.0,
-                    "mrr": 0.0,
-                }
-            },
+            "scores": dict(score_summary or {}),
             "ingestion": dict(ingestion_meta or {}),
-            "cases": [
-                {
-                    "qa_id": str(row.get("qa_id") or ""),
-                    "sample_id": str(row.get("sample_id") or ""),
-                    "category": int(row.get("category") or 0),
-                    "question": str(row.get("question") or ""),
-                    "gold_answer": str(row.get("answer") or ""),
-                    "evidence": list(row.get("evidence") or []),
-                    "status": "pending_milestone_3",
-                }
-                for row in selected_cases[: max(0, int(settings.locomo_case_artifact_limit_inline))]
-            ],
+            "cases": list(retrieval_report.get("cases") or [])[: max(0, int(settings.locomo_case_artifact_limit_inline))],
         }
         artifacts = write_locomo_run_artifacts(
             run_id=run_id,
