@@ -2355,7 +2355,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
         try:
-            dataset_meta, selected_cases, selected_samples = build_locomo_suite_metadata(
+            dataset_meta, selected_cases, selected_samples, gold_context_map = build_locomo_suite_metadata(
                 suite=suite_name,
                 sample_limit=sample_limit,
                 qa_limit=qa_limit,
@@ -2387,11 +2387,15 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
 
+        resolved_answer_mode = str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm"))
         retrieval_report = run_locomo_retrieval_suite(
             root=str(base_root),
             qa_cases=selected_cases,
             retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
             evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
+            answer_mode=resolved_answer_mode,
+            generator_model=generator_model,
+            gold_context_map=gold_context_map,
         )
         score_summary = aggregate_case_scores(list(retrieval_report.get("cases") or []))
 
@@ -2404,10 +2408,10 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "samples": int((dataset_meta.get("dataset") or {}).get("selected_samples") or 0),
             "qa_cases": int((dataset_meta.get("dataset") or {}).get("selected_qa_cases") or 0),
             "turns_ingested": int(ingestion_meta.get("ingested_turns") or 0),
-            "answer_f1_mean": 0.0,
+            "answer_f1_mean": float((score_summary.get("overall") or {}).get("answer_f1_mean") or 0.0),
             "evidence_recall_at_5": float((score_summary.get("overall") or {}).get("evidence_recall@5") or 0.0),
             "semantic_mode": semantic_mode_name,
-            "answer_mode": str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm")),
+            "answer_mode": resolved_answer_mode,
             "generator_model": str(generator_model or ""),
             "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
             "root_mode": root_mode,
@@ -2427,7 +2431,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "category_filter": list(category_filter or []),
                 "ingestion_mode": ingestion_mode_name,
                 "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
-                "answer_mode": str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm")),
+                "answer_mode": resolved_answer_mode,
                 "generator_model": str(generator_model or ""),
                 "evidence_recall_k": list(evidence_recall_k or [1, 3, 5, 8, 10]),
                 "persist_case_artifacts": bool(persist_case_artifacts),
@@ -2441,8 +2445,10 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "evidence_recall_k": list(evidence_recall_k or [1, 3, 5, 8, 10]),
             },
             "answering": {
-                "status": "not_run",
-                "reason": "milestone_4_retrieval_only",
+                "status": "completed" if resolved_answer_mode != "none" else "not_run",
+                "mode": resolved_answer_mode,
+                "generator_model": str(generator_model or ""),
+                "reason": "milestone_5_answer_generation" if resolved_answer_mode != "none" else "milestone_4_retrieval_only",
             },
             "scores": dict(score_summary or {}),
             "ingestion": dict(ingestion_meta or {}),

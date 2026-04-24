@@ -12,7 +12,7 @@ from app.benchmarks.locomo_loader import LocomoLoaderError, load_locomo_dataset
 from app.core.config import settings
 
 
-def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
     samples, meta = load_locomo_dataset()
     selected = list(samples)
 
@@ -56,11 +56,24 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
         }
     )
 
+    gold_context_map: dict[str, dict[str, Any]] = {}
+    for sample in selected:
+        for session in list(sample.get("sessions") or []):
+            for turn in list((session or {}).get("turns") or []):
+                dia_id = str((turn or {}).get("dia_id") or "").strip()
+                if dia_id:
+                    gold_context_map[dia_id] = {
+                        "dia_ids": [dia_id],
+                        "speaker": str((turn or {}).get("speaker") or "").strip(),
+                        "session_date_time": str((turn or {}).get("session_date_time") or "").strip(),
+                        "text": str((turn or {}).get("text") or "").strip(),
+                    }
+
     return {
         "suite": suite,
         "source": "locomo_dataset",
         "dataset": dataset_meta,
-    }, selected_cases, selected
+    }, selected_cases, selected, gold_context_map
 
 
 def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], ingestion_mode: str = "turns") -> dict[str, Any]:

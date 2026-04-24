@@ -2,7 +2,8 @@ from __future__ import annotations
 
 from typing import Any
 
-from app.benchmarks.locomo_scoring import compute_evidence_recall
+from app.benchmarks.locomo_answer import generate_locomo_answer
+from app.benchmarks.locomo_scoring import compute_evidence_recall, score_answer
 
 try:
     from core_memory.integrations.api import inspect_bead
@@ -46,7 +47,7 @@ def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[st
     }
 
 
-def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None) -> dict[str, Any]:
+def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, gold_context_map: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     if memory_tools is None:
         return {
             "qa_id": str(qa.get("qa_id") or ""),
@@ -55,6 +56,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             "question": str(qa.get("question") or ""),
             "gold_answer": str(qa.get("answer") or ""),
             "prediction": "",
+            "answer_f1": 0.0,
             "status": "error",
             "error": "core_memory_unavailable",
             "retrieved": [],
@@ -79,13 +81,30 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             retrieved=retrieved,
             ks=evidence_recall_k or [1, 3, 5, 8, 10],
         )
+        gold_context = []
+        if str(answer_mode or "").strip().lower() == "oracle_context":
+            lookup = dict(gold_context_map or {})
+            gold_context = [dict(lookup.get(did) or {}) for did in list(qa.get("evidence") or []) if dict(lookup.get(did) or {})]
+        answer = generate_locomo_answer(
+            mode=answer_mode,
+            qa=qa,
+            retrieved_context=retrieved,
+            generator_model=generator_model,
+            gold_context=gold_context,
+        )
+        prediction = str(answer.get("answer") or "")
+        answer_f1 = float(score_answer(category=int(qa.get("category") or 0), prediction=prediction, answer=str(qa.get("answer") or "")))
         return {
             "qa_id": str(qa.get("qa_id") or ""),
             "sample_id": sample_id,
             "category": int(qa.get("category") or 0),
             "question": str(qa.get("question") or ""),
             "gold_answer": str(qa.get("answer") or ""),
-            "prediction": "",
+            "prediction": prediction,
+            "used_dia_ids": list(answer.get("used_dia_ids") or []),
+            "confidence": str(answer.get("confidence") or "low"),
+            "unsupported": bool(answer.get("unsupported")),
+            "answer_f1": answer_f1,
             "status": "ok",
             "retrieved": retrieved,
             "evidence_recall": evidence,
@@ -101,6 +120,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             "question": str(qa.get("question") or ""),
             "gold_answer": str(qa.get("answer") or ""),
             "prediction": "",
+            "answer_f1": 0.0,
             "status": "error",
             "error": str(exc),
             "retrieved": [],
@@ -108,7 +128,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         }
 
 
-def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None) -> dict[str, Any]:
+def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, gold_context_map: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     cases = [
         run_locomo_retrieval_case(
             root=root,
@@ -116,6 +136,9 @@ def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], ret
             qa=dict(case or {}),
             retrieval_k=retrieval_k,
             evidence_recall_k=evidence_recall_k,
+            answer_mode=answer_mode,
+            generator_model=generator_model,
+            gold_context_map=gold_context_map,
         )
         for case in qa_cases
     ]
