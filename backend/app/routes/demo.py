@@ -465,9 +465,15 @@ async def story_pack_replay(request: Request):
 @router.post('/benchmark-run')
 async def benchmark_run(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
+    suite = str((body or {}).get('suite') or '').strip().lower()
     subset = str((body or {}).get('subset') or 'local').strip().lower() or 'local'
     if subset not in {'local', 'full'}:
         subset = 'local'
+    if suite not in {'fixture_smoke', 'locomo_qa', 'locomo_retrieval', 'locomo_mini'}:
+        suite = 'fixture_smoke'
+    legacy_mode = not bool((body or {}).get('suite'))
+    if legacy_mode and subset == 'full':
+        suite = 'locomo_qa'
     semantic_mode = str((body or {}).get('semantic_mode') or 'degraded_allowed').strip() or 'degraded_allowed'
     root_mode = str((body or {}).get('root_mode') or 'snapshot').strip().lower() or 'snapshot'
     if root_mode not in {'snapshot', 'clean'}:
@@ -479,17 +485,46 @@ async def benchmark_run(request: Request):
     limit = int(limit_raw) if isinstance(limit_raw, int) and limit_raw > 0 else None
     if isinstance(limit, int) and limit > 0:
         limit = min(limit, max(1, int(settings.benchmark_limit_max_cases)))
+    sample_limit_raw = (body or {}).get('sample_limit')
+    sample_limit = int(sample_limit_raw) if isinstance(sample_limit_raw, int) and sample_limit_raw > 0 else None
+    if isinstance(sample_limit, int) and sample_limit > 0:
+        sample_limit = min(sample_limit, max(1, int(settings.locomo_max_samples)))
+    qa_limit_raw = (body or {}).get('qa_limit')
+    qa_limit = int(qa_limit_raw) if isinstance(qa_limit_raw, int) and qa_limit_raw > 0 else None
+    if isinstance(qa_limit, int) and qa_limit > 0:
+        qa_limit = min(qa_limit, max(1, int(settings.locomo_max_qa_cases)))
+    sample_ids = [str(x).strip() for x in ((body or {}).get('sample_ids') or []) if str(x).strip()]
+    category_filter = [int(x) for x in ((body or {}).get('category_filter') or []) if str(x).strip()]
+    retrieval_k = int((body or {}).get('retrieval_k') or settings.locomo_default_retrieval_k)
+    retrieval_k = max(1, retrieval_k)
+    ingestion_mode = str((body or {}).get('ingestion_mode') or settings.locomo_ingest_mode_default).strip() or settings.locomo_ingest_mode_default
+    answer_mode = str((body or {}).get('answer_mode') or '').strip() or None
+    generator_model = str((body or {}).get('generator_model') or '').strip() or None
+    evidence_recall_k = [int(x) for x in ((body or {}).get('evidence_recall_k') or [1, 3, 5, 8, 10]) if str(x).strip()]
+    persist_case_artifacts = bool((body or {}).get('persist_case_artifacts', True))
 
     try:
         with heavy_operation_slot(request):
             await rate_limit_heavy(request)
             out = run_benchmark(
+                suite=suite,
                 subset=subset,
                 semantic_mode_name=semantic_mode,
                 root_mode=root_mode,
                 preload_from_demo=preload_from_demo,
                 preload_turns_max=preload_turns_max,
                 limit=limit,
+                sample_limit=sample_limit,
+                qa_limit=qa_limit,
+                sample_ids=sample_ids,
+                category_filter=category_filter,
+                retrieval_k=retrieval_k,
+                ingestion_mode=ingestion_mode,
+                answer_mode=answer_mode,
+                generator_model=generator_model,
+                evidence_recall_k=evidence_recall_k,
+                persist_case_artifacts=persist_case_artifacts,
+                legacy_mode=legacy_mode,
             )
         return out
     except HTTPException as exc:

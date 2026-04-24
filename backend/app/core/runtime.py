@@ -47,6 +47,9 @@ from core_memory.runtime.association_pass import run_association_pass
 from core_memory.association.crawler_contract import merge_crawler_updates
 from core_memory.write_pipeline.continuity_injection import load_continuity_injection
 
+from app.benchmarks.fixture_smoke import load_fixture_smoke_cases
+from app.benchmarks.locomo_loader import LocomoLoaderError
+from app.benchmarks.locomo_suite import build_locomo_suite_metadata, make_locomo_missing_dataset_response, write_locomo_run_artifacts
 from app.core.config import settings
 
 
@@ -2283,157 +2286,6 @@ def _load_preload_turns_from_live(*, max_turns: int = 200) -> list[dict[str, str
     return [dict(x or {}) for x in rows[:target]]
 
 
-def _locomo_benchmark_dirs() -> tuple[Path, Path]:
-    env_fx = str(os.getenv("CORE_MEMORY_LOCOMO_FIXTURES_DIR") or "").strip()
-    env_gold = str(os.getenv("CORE_MEMORY_LOCOMO_GOLD_DIR") or "").strip()
-    if env_fx and env_gold:
-        return Path(env_fx), Path(env_gold)
-
-    demo_base = Path(__file__).resolve().parents[2] / "benchmarks" / "locomo_like"
-    demo_fx = demo_base / "fixtures"
-    demo_gold = demo_base / "gold"
-    if demo_fx.exists() and demo_gold.exists():
-        return demo_fx, demo_gold
-
-    workspace_core_memory = Path(__file__).resolve().parents[5] / "Core-Memory" / "benchmarks" / "locomo_like"
-    return workspace_core_memory / "fixtures", workspace_core_memory / "gold"
-
-
-def _read_jsonl_rows(path: Path) -> list[dict[str, Any]]:
-    out: list[dict[str, Any]] = []
-    if not path.exists():
-        return out
-    for line in path.read_text(encoding="utf-8").splitlines():
-        raw = str(line or "").strip()
-        if not raw:
-            continue
-        try:
-            row = json.loads(raw)
-        except Exception:
-            continue
-        if isinstance(row, dict):
-            out.append(row)
-    return out
-
-
-def _legacy_smoke_cases() -> list[dict[str, Any]]:
-    return [
-        {
-            "case_id": "b1",
-            "query": "What database did we choose?",
-            "intent": "remember",
-            "k": 8,
-            "expected_answer_class": "answer_partial",
-            "setup": {},
-            "bucket_labels": ["smoke"],
-        },
-        {
-            "case_id": "b2",
-            "query": "What lesson did we learn about infra choices?",
-            "intent": "remember",
-            "k": 8,
-            "expected_answer_class": "answer_partial",
-            "setup": {},
-            "bucket_labels": ["smoke"],
-        },
-        {
-            "case_id": "b3",
-            "query": "Why did we pick FastAPI?",
-            "intent": "causal",
-            "k": 8,
-            "expected_answer_class": "answer_partial",
-            "setup": {},
-            "bucket_labels": ["smoke"],
-        },
-    ]
-
-
-def _load_locomo_cases(*, subset: str = "local") -> tuple[list[dict[str, Any]], dict[str, Any]]:
-    fixtures_dir, gold_dir = _locomo_benchmark_dirs()
-    if not fixtures_dir.exists() or not gold_dir.exists():
-        rows = _legacy_smoke_cases()
-        return rows, {
-            "source": "legacy_smoke_fallback",
-            "fixtures_dir": str(fixtures_dir),
-            "gold_dir": str(gold_dir),
-            "available_cases": int(len(rows)),
-            "selected_cases": int(len(rows)),
-            "full_subset_available": False,
-            "warning": "fixture_dirs_missing",
-        }
-
-    all_fixture_paths = sorted(fixtures_dir.glob("*.jsonl"))
-    fixture_paths = list(all_fixture_paths)
-    if str(subset or "local").strip().lower() == "local":
-        local_path = fixtures_dir / "local_subset.jsonl"
-        if local_path.exists():
-            fixture_paths = [local_path]
-
-    gold_map: dict[str, dict[str, Any]] = {}
-    for g in sorted(gold_dir.glob("*.json")):
-        try:
-            payload = json.loads(g.read_text(encoding="utf-8"))
-        except Exception:
-            continue
-        rows = payload.get("cases") if isinstance(payload, dict) else payload
-        if not isinstance(rows, list):
-            continue
-        for row in rows:
-            if not isinstance(row, dict):
-                continue
-            gid = str(row.get("id") or "").strip()
-            if gid:
-                gold_map[gid] = row
-
-    out: list[dict[str, Any]] = []
-    for fp in fixture_paths:
-        for row in _read_jsonl_rows(fp):
-            cid = str(row.get("id") or "").strip()
-            if not cid:
-                continue
-            gold_id = str(row.get("gold_id") or cid).strip() or cid
-            g = dict(gold_map.get(gold_id) or {})
-            out.append(
-                {
-                    "case_id": cid,
-                    "query": str(row.get("query") or "").strip(),
-                    "intent": str(row.get("intent") or "remember").strip() or "remember",
-                    "k": max(1, int(row.get("k") or 5)),
-                    "setup": dict(row.get("setup") or {}),
-                    "bucket_labels": [str(x) for x in (row.get("bucket_labels") or []) if str(x)],
-                    "expected_answer_class": str(g.get("expected_answer_class") or "answer_partial").strip() or "answer_partial",
-                    "expected_slot": str(g.get("expected_slot") or "").strip(),
-                    "expected_source_surface": str(g.get("expected_source_surface") or "").strip(),
-                }
-            )
-
-    if not out:
-        rows = _legacy_smoke_cases()
-        return rows, {
-            "source": "legacy_smoke_fallback",
-            "fixtures_dir": str(fixtures_dir),
-            "gold_dir": str(gold_dir),
-            "available_cases": int(len(rows)),
-            "selected_cases": int(len(rows)),
-            "full_subset_available": False,
-            "warning": "fixture_rows_empty",
-        }
-
-    out.sort(key=lambda x: str(x.get("case_id") or ""))
-    local_count = len(_read_jsonl_rows(fixtures_dir / "local_subset.jsonl")) if (fixtures_dir / "local_subset.jsonl").exists() else 0
-    available_cases = sum(len(_read_jsonl_rows(p)) for p in all_fixture_paths)
-    full_subset_available = bool(available_cases > max(local_count, 0))
-
-    return out, {
-        "source": "fixture_pack",
-        "fixtures_dir": str(fixtures_dir),
-        "gold_dir": str(gold_dir),
-        "fixture_files": [p.name for p in all_fixture_paths],
-        "available_cases": int(available_cases),
-        "selected_cases": int(len(out)),
-        "local_subset_cases": int(local_count),
-        "full_subset_available": bool(full_subset_available),
-    }
 
 
 def _materialize_locomo_setup(*, root: str, setup: dict[str, Any], case_id: str) -> None:
@@ -2497,7 +2349,122 @@ def _materialize_locomo_setup(*, root: str, setup: dict[str, Any], case_id: str)
         write_claim_updates_to_bead(root, bead_id, list(row.get("rows") or []))
 
 
-def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local") -> dict[str, Any]:
+def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False) -> dict[str, Any]:
+    suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
+    if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
+        try:
+            dataset_meta, selected_cases = build_locomo_suite_metadata(
+                suite=suite_name,
+                sample_limit=sample_limit,
+                qa_limit=qa_limit,
+                sample_ids=sample_ids,
+                category_filter=category_filter,
+            )
+        except LocomoLoaderError as exc:
+            return make_locomo_missing_dataset_response(
+                suite=suite_name,
+                root_mode=root_mode,
+                semantic_mode_name=semantic_mode_name,
+                error=exc,
+            )
+
+        run_id = f"bench-{uuid.uuid4().hex[:10]}"
+        started = _utc_now_iso()
+        warnings = []
+        if suite_name == "locomo_mini":
+            warnings.append("locomo_mini_preview_only")
+        if legacy_mode:
+            warnings.append("legacy_locomo_like_fixture")
+
+        summary = {
+            "run_id": run_id,
+            "started_at": started,
+            "finished_at": _utc_now_iso(),
+            "duration_ms": 0,
+            "suite": suite_name,
+            "samples": int((dataset_meta.get("dataset") or {}).get("selected_samples") or 0),
+            "qa_cases": int((dataset_meta.get("dataset") or {}).get("selected_qa_cases") or 0),
+            "turns_ingested": int((dataset_meta.get("dataset") or {}).get("turns_total") or 0),
+            "answer_f1_mean": 0.0,
+            "evidence_recall_at_5": 0.0,
+            "semantic_mode": semantic_mode_name,
+            "answer_mode": str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm")),
+            "generator_model": str(generator_model or ""),
+            "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
+            "root_mode": root_mode,
+            "warnings": warnings,
+            "dataset_path": str((dataset_meta.get("dataset") or {}).get("dataset_path") or ""),
+            "subset": str(subset or "local"),
+            "legacy_request": bool(legacy_mode),
+        }
+        report = {
+            "config": {
+                "suite": suite_name,
+                "root_mode": root_mode,
+                "semantic_mode": semantic_mode_name,
+                "sample_limit": sample_limit,
+                "qa_limit": qa_limit,
+                "sample_ids": list(sample_ids or []),
+                "category_filter": list(category_filter or []),
+                "ingestion_mode": str(ingestion_mode or settings.locomo_ingest_mode_default),
+                "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
+                "answer_mode": str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm")),
+                "generator_model": str(generator_model or ""),
+                "evidence_recall_k": list(evidence_recall_k or [1, 3, 5, 8, 10]),
+                "persist_case_artifacts": bool(persist_case_artifacts),
+            },
+            "dataset": dict((dataset_meta.get("dataset") or {})),
+            "retrieval": {
+                "status": "not_run",
+                "reason": "milestone_1_2_metadata_only",
+            },
+            "answering": {
+                "status": "not_run",
+                "reason": "milestone_1_2_metadata_only",
+            },
+            "scores": {
+                "overall": {
+                    "qa_count": int((dataset_meta.get("dataset") or {}).get("selected_qa_cases") or 0),
+                    "answer_f1_mean": 0.0,
+                    "evidence_recall@5": 0.0,
+                    "hit_any": 0.0,
+                    "mrr": 0.0,
+                }
+            },
+            "cases": [
+                {
+                    "qa_id": str(row.get("qa_id") or ""),
+                    "sample_id": str(row.get("sample_id") or ""),
+                    "category": int(row.get("category") or 0),
+                    "question": str(row.get("question") or ""),
+                    "gold_answer": str(row.get("answer") or ""),
+                    "evidence": list(row.get("evidence") or []),
+                    "status": "pending_milestone_3",
+                }
+                for row in selected_cases[: max(0, int(settings.locomo_case_artifact_limit_inline))]
+            ],
+        }
+        artifacts = write_locomo_run_artifacts(
+            run_id=run_id,
+            summary=summary,
+            report=report,
+            config=dict(report.get("config") or {}),
+            dataset_meta=dict(report.get("dataset") or {}),
+        )
+        summary["artifact_path"] = artifacts.get("root")
+        report["artifacts"] = artifacts
+
+        history_row = {
+            "run_id": run_id,
+            "created_at": summary["finished_at"],
+            "summary": dict(summary),
+            "report": dict(report),
+        }
+        _set_last_benchmark_cache(summary=summary, report=report, history_row=history_row)
+        _append_history(history_row)
+        _prune_benchmark_run_dirs()
+        return {"ok": True, "suite": suite_name, "summary": summary, "report": report}
+
     run_id = f"bench-{uuid.uuid4().hex[:10]}"
     started = _utc_now_iso()
     run_root = Path(settings.core_memory_demo_benchmark_root) / run_id
@@ -2524,7 +2491,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 metadata={"source": "demo_preload"},
             )
 
-    rows, fixture_meta = _load_locomo_cases(subset=str(subset or "local"))
+    rows, fixture_meta = load_fixture_smoke_cases(subset=str(subset or "local"))
     if isinstance(limit, int) and limit > 0:
         rows = rows[: limit]
 
@@ -2582,12 +2549,15 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     "warnings": list(result.get("warnings") or []),
                     "backend": str(result.get("backend") or "unknown"),
                     "root": str(case_root),
+                    "status": "completed",
                 }
             )
 
     total = len(per_case)
     fail = max(0, total - passes)
     warnings: list[str] = []
+    if legacy_mode:
+        warnings.append("legacy_locomo_like_fixture")
     if str(subset or "local").strip().lower() == "full" and not bool(fixture_meta.get("full_subset_available")):
         warnings.append("full_subset_not_available_running_best_available_pack")
     warn_field = (fixture_meta or {}).get("warning")
@@ -2608,6 +2578,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         "accuracy": (passes / total) if total else 0.0,
         "semantic_mode": semantic_mode_name,
         "subset": str(subset or "local"),
+        "suite": "fixture_smoke",
         "root_mode": root_mode,
         "isolated_root": str(run_root),
         "isolated_run": True,
@@ -2615,6 +2586,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         "backend_modes": sorted(set(str(x.get("backend") or "unknown") for x in per_case)),
         "warnings": sorted(set([str(x) for x in warnings if str(x).strip()])),
         "fixture_pack": dict(fixture_meta or {}),
+        "legacy_request": bool(legacy_mode),
     }
     report = {
         "totals": {"cases": total, "pass": passes, "fail": fail, "accuracy": summary["accuracy"]},
@@ -2624,7 +2596,9 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "benchmark_backend_modes": summary["backend_modes"],
             "preload_turn_count": summary["preload_turn_count"],
             "root_mode": root_mode,
+            "suite": "fixture_smoke",
         },
+        "dataset": {"suite": "fixture_smoke", **dict(fixture_meta or {})},
         "cases": per_case,
         "per_bucket": {
             "overall": {
@@ -2646,7 +2620,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
     _append_history(history_row)
     _prune_benchmark_run_dirs()
 
-    return {"ok": True, "summary": summary, "report": report}
+    return {"ok": True, "suite": "fixture_smoke", "summary": summary, "report": report}
 
 
 def compare_benchmark_runs(left_run_id: str, right_run_id: str) -> dict[str, Any]:

@@ -44,6 +44,15 @@ class Settings(BaseSettings):
     benchmark_history_max_rows: int = 300
     benchmark_runs_max_keep: int = 80
 
+    locomo_data_file: str = ''
+    locomo_repo_root: str = ''
+    locomo_default_retrieval_k: int = 8
+    locomo_max_qa_cases: int = 2500
+    locomo_max_samples: int = 10
+    locomo_case_artifact_limit_inline: int = 100
+    locomo_answer_timeout_seconds: int = 60
+    locomo_ingest_mode_default: str = 'turns'
+
     async_jobs_tick_enabled: bool = True
     async_jobs_tick_interval_seconds: int = 60
     async_jobs_tick_initial_delay_seconds: int = 10
