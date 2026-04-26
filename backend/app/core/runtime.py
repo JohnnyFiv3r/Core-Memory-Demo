@@ -102,7 +102,7 @@ os.environ.setdefault("CORE_MEMORY_SEMANTIC_BUILD_ON_READ", "0")
 os.environ.setdefault("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE", "degraded_allowed")
 
 STORY_PACK_DIR = Path(__file__).resolve().parents[3] / "demo" / "story-pack"
-LOCOMO_DIR = Path(__file__).resolve().parents[3] / "locomo"
+LOCOMO_DIR = Path(__file__).resolve().parents[4] / "locomo"
 LOCOMO_DATA_PATH = LOCOMO_DIR / "data" / "locomo10.json"
 TURN_HEADER_RE = re.compile(r"^##\s*Turn\s+(\d{3})\s*:\s*(.+?)\s*$", re.MULTILINE)
 SEND_PROMPT_RE = re.compile(r"^\*\*Send:\*\*\s*`([^`]+)`\s*$", re.MULTILINE)
@@ -286,9 +286,10 @@ def _iter_locomo_replay_rows(*, sample_mode: str, sample_id: str | None = None, 
         if not sid:
             raise ValueError("locomo_sample_not_found")
         found = None
+        sid_index = int(sid) if sid.isdigit() else None
         for idx, row in enumerate(rows):
             rid = str(row.get("sample_id") if row.get("sample_id") is not None else idx)
-            if rid == sid:
+            if rid == sid or (sid_index is not None and idx == sid_index):
                 found = (rid, row)
                 break
         if found is None:
