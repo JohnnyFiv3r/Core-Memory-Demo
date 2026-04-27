@@ -123,6 +123,7 @@ def _candidate_locomo_data_paths() -> list[Path]:
     candidates.extend(
         [
             repo_root / "locomo" / "data" / "locomo10.json",
+            repo_root / "data" / "locomo" / "locomo10.json",
             repo_root / "data" / "locomo10.json",
             LOCOMO_DATA_PATH,
         ]
