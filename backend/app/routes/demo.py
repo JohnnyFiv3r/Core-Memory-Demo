@@ -17,6 +17,7 @@ from app.core.state_fallback import safe_state_fallback
 from app.core.runtime import (
     compare_benchmark_runs,
     decide_entity_merge,
+    get_locomo_meta,
     get_story_pack_meta,
     get_last_benchmark_snapshot,
     inspect_bead_hydration_payload,
@@ -26,6 +27,7 @@ from app.core.runtime import (
     inspect_turns_payload,
     list_demo_model_options,
     read_benchmark_history,
+    replay_locomo_corpus,
     replay_story_pack,
     run_benchmark,
     run_chat,
@@ -385,6 +387,64 @@ async def seed(request: Request):
 def story_pack_meta():
     try:
         return get_story_pack_meta()
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+
+
+@router.get('/locomo/meta')
+def locomo_meta():
+    try:
+        return get_locomo_meta()
+    except FileNotFoundError as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=404)
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+
+
+@router.post('/locomo/replay')
+async def locomo_replay(request: Request):
+    body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
+    sample_mode = str((body or {}).get('sample_mode') or 'single').strip() or 'single'
+    sample_id = (body or {}).get('sample_id')
+    replay_mode = str((body or {}).get('replay_mode') or 'transcript_only').strip() or 'transcript_only'
+    max_turns_raw = (body or {}).get('max_turns')
+    start_session_raw = (body or {}).get('start_session')
+    max_sessions_raw = (body or {}).get('max_sessions')
+    wait_for_idle = bool((body or {}).get('wait_for_idle', True))
+    idle_timeout_ms = int((body or {}).get('idle_timeout_ms') or 120000)
+    idle_poll_ms = int((body or {}).get('idle_poll_ms') or 250)
+    auto_flush = bool((body or {}).get('auto_flush', True))
+    flush_threshold_ratio = float((body or {}).get('flush_threshold_ratio') or 0.80)
+    flush_every_turns = int((body or {}).get('flush_every_turns') or 0)
+    max_compaction_per_pass = int((body or {}).get('max_compaction_per_pass') or 2)
+    max_side_effects_per_pass = int((body or {}).get('max_side_effects_per_pass') or 8)
+    reset_session = bool((body or {}).get('reset_session', False))
+
+    max_turns = int(max_turns_raw) if isinstance(max_turns_raw, (int, float)) and int(max_turns_raw) > 0 else None
+    start_session = int(start_session_raw) if isinstance(start_session_raw, (int, float)) and int(start_session_raw) > 0 else None
+    max_sessions = int(max_sessions_raw) if isinstance(max_sessions_raw, (int, float)) and int(max_sessions_raw) > 0 else None
+    try:
+        return await replay_locomo_corpus(
+            sample_mode=sample_mode,
+            sample_id=str(sample_id).strip() if sample_id is not None else None,
+            replay_mode=replay_mode,
+            max_turns=max_turns,
+            start_session=start_session,
+            max_sessions=max_sessions,
+            wait_for_idle=wait_for_idle,
+            idle_timeout_ms=idle_timeout_ms,
+            idle_poll_ms=idle_poll_ms,
+            auto_flush=auto_flush,
+            flush_threshold_ratio=flush_threshold_ratio,
+            flush_every_turns=flush_every_turns,
+            max_compaction_per_pass=max_compaction_per_pass,
+            max_side_effects_per_pass=max_side_effects_per_pass,
+            reset_session=reset_session,
+        )
+    except FileNotFoundError as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=404)
+    except ValueError as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=400)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 

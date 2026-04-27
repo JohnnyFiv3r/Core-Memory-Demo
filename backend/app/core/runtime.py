@@ -110,11 +110,14 @@ os.environ.setdefault("CORE_MEMORY_SEMANTIC_BUILD_ON_READ", "0")
 os.environ.setdefault("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE", "degraded_allowed")
 
 STORY_PACK_DIR = Path(__file__).resolve().parents[3] / "demo" / "story-pack"
+LOCOMO_DIR = Path(__file__).resolve().parents[4] / "locomo"
+LOCOMO_DATA_PATH = LOCOMO_DIR / "data" / "locomo10.json"
 TURN_HEADER_RE = re.compile(r"^##\s*Turn\s+(\d{3})\s*:\s*(.+?)\s*$", re.MULTILINE)
 SEND_PROMPT_RE = re.compile(r"^\*\*Send:\*\*\s*`([^`]+)`\s*$", re.MULTILINE)
 ENTITY_CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9._-]{2,}|[A-Z]{2,}[A-Za-z0-9._-]*)\b")
 TOKEN_ESTIMATE_SEGMENT_RE = re.compile(r"\w+|[^\w\s]", re.UNICODE)
 _TIKTOKEN_ENCODER_CACHE: dict[str, Any] = {}
+_LOC0MO_CACHE: dict[str, Any] | None = None
 
 DEMO_MODEL_PRESETS: tuple[tuple[str, str], ...] = (
     ("anthropic:claude-opus-4-20250514", "Claude Opus 4"),
@@ -234,6 +237,287 @@ def get_story_pack_meta() -> dict[str, Any]:
             }
             for a in list(manifest.get("acts") or [])
         ],
+    }
+
+
+def _load_locomo_dataset(*, data_path: Path | None = None) -> list[dict[str, Any]]:
+    global _LOC0MO_CACHE
+    path = Path(data_path or LOCOMO_DATA_PATH)
+    if _LOC0MO_CACHE is not None and _LOC0MO_CACHE.get("path") == str(path):
+        return list(_LOC0MO_CACHE.get("rows") or [])
+    if not path.exists():
+        raise FileNotFoundError(f"locomo_dataset_not_found: {path}")
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    rows = [x for x in list(payload or []) if isinstance(x, dict)]
+    _LOC0MO_CACHE = {"path": str(path), "rows": rows}
+    return rows
+
+
+def get_locomo_meta() -> dict[str, Any]:
+    rows = _load_locomo_dataset()
+    samples: list[dict[str, Any]] = []
+    for idx, row in enumerate(rows):
+        sample_id = str(row.get("sample_id") if row.get("sample_id") is not None else idx)
+        conversation = dict(row.get("conversation") or {})
+        qa = list(row.get("qa") or [])
+        session_keys = [k for k in conversation.keys() if k.startswith("session_") and not k.endswith("_date_time")]
+        session_indexes = sorted(int(k.split("_")[-1]) for k in session_keys if k.split("_")[-1].isdigit())
+        turn_count = 0
+        for sidx in session_indexes:
+            turn_count += len(list(conversation.get(f"session_{sidx}") or []))
+        samples.append(
+            {
+                "sample_id": sample_id,
+                "sessions": int(len(session_indexes)),
+                "turns": int(turn_count),
+                "qa": int(len(qa)),
+            }
+        )
+    return {
+        "ok": True,
+        "dataset": "locomo10",
+        "sample_count": int(len(samples)),
+        "samples": samples,
+        "data_path": str(LOCOMO_DATA_PATH),
+    }
+
+
+def _iter_locomo_replay_rows(*, sample_mode: str, sample_id: str | None = None, max_turns: int | None = None, start_session: int | None = None, max_sessions: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    rows = _load_locomo_dataset()
+    sample_mode_n = str(sample_mode or "single").strip().lower()
+    if sample_mode_n not in {"single", "all"}:
+        raise ValueError("locomo_invalid_sample_mode")
+
+    selected: list[tuple[str, dict[str, Any]]] = []
+    if sample_mode_n == "single":
+        sid = str(sample_id or "").strip()
+        if not sid:
+            raise ValueError("locomo_sample_not_found")
+        found = None
+        sid_index = int(sid) if sid.isdigit() else None
+        for idx, row in enumerate(rows):
+            rid = str(row.get("sample_id") if row.get("sample_id") is not None else idx)
+            if rid == sid or (sid_index is not None and idx == sid_index):
+                found = (rid, row)
+                break
+        if found is None:
+            raise ValueError("locomo_sample_not_found")
+        selected.append(found)
+    else:
+        for idx, row in enumerate(rows):
+            rid = str(row.get("sample_id") if row.get("sample_id") is not None else idx)
+            selected.append((rid, row))
+
+    out: list[dict[str, Any]] = []
+    sample_ids: list[str] = []
+    first_session = 0
+    last_session = 0
+    turns_available = 0
+    sessions_replayed = 0
+
+    for rid, row in selected:
+        sample_ids.append(rid)
+        conversation = dict(row.get("conversation") or {})
+        session_indexes = sorted(
+            int(k.split("_")[-1]) for k in conversation.keys() if k.startswith("session_") and not k.endswith("_date_time") and k.split("_")[-1].isdigit()
+        )
+        if isinstance(start_session, int) and start_session > 0:
+            session_indexes = [x for x in session_indexes if x >= start_session]
+        if isinstance(max_sessions, int) and max_sessions > 0:
+            session_indexes = session_indexes[:max_sessions]
+        if session_indexes:
+            first_session = session_indexes[0] if first_session == 0 else min(first_session, session_indexes[0])
+            last_session = max(last_session, session_indexes[-1])
+        for sidx in session_indexes:
+            sessions_replayed += 1
+            session_date_time = str(conversation.get(f"session_{sidx}_date_time") or "")
+            turns = list(conversation.get(f"session_{sidx}") or [])
+            turns_available += len(turns)
+            for tidx, turn in enumerate(turns, start=1):
+                if not isinstance(turn, dict):
+                    continue
+                out.append(
+                    {
+                        "sample_id": rid,
+                        "session_index": sidx,
+                        "session_date_time": session_date_time,
+                        "turn_index": tidx,
+                        "speaker": str(turn.get("speaker") or "").strip(),
+                        "dia_id": str(turn.get("dia_id") or "").strip(),
+                        "text": str(turn.get("text") or "").strip(),
+                        "img_url": turn.get("img_url"),
+                        "blip_caption": turn.get("blip_caption"),
+                        "query": turn.get("query"),
+                    }
+                )
+    if isinstance(max_turns, int) and max_turns > 0:
+        out = out[:max_turns]
+    if not out:
+        raise ValueError("locomo_no_turns_selected")
+    meta = {
+        "sample_mode": sample_mode_n,
+        "sample_ids": sample_ids,
+        "session_range": {"first": first_session, "last": last_session},
+        "turns_available": int(turns_available),
+        "sessions_replayed": int(sessions_replayed),
+    }
+    return out, meta
+
+
+def _locomo_core_session_id(sample_id: str) -> str:
+    return f"locomo:{str(sample_id or '').strip() or 'unknown'}"
+
+
+def _replay_locomo_row(row: dict[str, Any]) -> dict[str, Any]:
+    sample_id = str(row.get("sample_id") or "").strip() or "unknown"
+    dia_id = str(row.get("dia_id") or "").strip() or f"row-{uuid.uuid4().hex[:8]}"
+    speaker = str(row.get("speaker") or "").strip()
+    text = str(row.get("text") or "").strip()
+    session_index = int(row.get("session_index") or 0)
+    session_id = _locomo_core_session_id(sample_id)
+    turn_id = f"locomo:{sample_id}:{dia_id}"
+    display = f"{speaker}: {text}" if speaker else text
+    metadata = {
+        "source": "locomo_replay",
+        "adapter_kind": "benchmark_replay",
+        "adapter_runtime": "locomo",
+        "adapter_status": "benchmark",
+        "benchmark_name": "locomo",
+        "replay_mode": "locomo_transcript_row",
+        "locomo_sample_id": sample_id,
+        "locomo_session_index": session_index,
+        "locomo_session_date_time": str(row.get("session_date_time") or ""),
+        "locomo_turn_index": int(row.get("turn_index") or 0),
+        "locomo_dia_id": dia_id,
+        "locomo_speaker": speaker,
+        "locomo_raw_text": text,
+        "locomo_display_text": display,
+        "locomo_has_image": bool(row.get("img_url") or row.get("blip_caption")),
+    }
+    if row.get("img_url") is not None:
+        metadata["locomo_img_url"] = row.get("img_url")
+    if row.get("blip_caption") is not None:
+        metadata["locomo_blip_caption"] = row.get("blip_caption")
+    if row.get("query") is not None:
+        metadata["locomo_image_query"] = row.get("query")
+
+    process_turn_finalized(
+        root=settings.core_memory_root,
+        session_id=session_id,
+        turn_id=turn_id,
+        transaction_id=f"locomo-tx:{sample_id}:{dia_id}",
+        trace_id=f"locomo-tr:{sample_id}:{dia_id}",
+        user_query="[LoCoMo transcript replay]",
+        assistant_final=display,
+        origin="BENCHMARK_REPLAY",
+        metadata=metadata,
+    )
+    return {"ok": True, "session_id": session_id, "turn_id": turn_id, "dia_id": dia_id}
+
+
+async def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, replay_mode: str = "transcript_only", max_turns: int | None = None, start_session: int | None = None, max_sessions: int | None = None, wait_for_idle: bool = False, idle_timeout_ms: int = 120000, idle_poll_ms: int = 250, auto_flush: bool = True, flush_threshold_ratio: float = 0.80, flush_every_turns: int = 0, max_compaction_per_pass: int = 2, max_side_effects_per_pass: int = 8, reset_session: bool = False) -> dict[str, Any]:
+    replay_mode_n = str(replay_mode or "transcript_only").strip().lower()
+    if replay_mode_n != "transcript_only":
+        raise ValueError("locomo_invalid_replay_mode")
+
+    rows, meta = _iter_locomo_replay_rows(
+        sample_mode=sample_mode,
+        sample_id=sample_id,
+        max_turns=max_turns,
+        start_session=start_session,
+        max_sessions=max_sessions,
+    )
+
+    if reset_session and meta.get("sample_ids"):
+        SESSION.session_id = _locomo_core_session_id(str((meta.get("sample_ids") or [""])[0]))
+        SESSION.token_usage = 0
+
+    seeded = 0
+    seeded_since_flush = 0
+    errors: list[dict[str, Any]] = []
+    flush_events: list[dict[str, Any]] = []
+    queue_waits: list[dict[str, Any]] = []
+    session_ids_seen: list[str] = []
+
+    def _should_flush() -> bool:
+        if not auto_flush:
+            return False
+        if int(flush_every_turns) > 0 and seeded_since_flush >= int(flush_every_turns):
+            return True
+        budget = max(1, int(SESSION.context_budget))
+        usage_ratio = float(SESSION.token_usage) / float(budget)
+        return usage_ratio >= max(0.1, float(flush_threshold_ratio))
+
+    for idx, row in enumerate(rows, start=1):
+        try:
+            replayed = _replay_locomo_row(row)
+            seeded += 1
+            seeded_since_flush += 1
+            sid = str(replayed.get("session_id") or "").strip()
+            if sid and sid not in session_ids_seen:
+                session_ids_seen.append(sid)
+            record_turn_tokens("[LoCoMo transcript replay]", str(row.get("text") or ""), model_id=detect_model())
+
+            if wait_for_idle:
+                wait_result = _drain_async_until_idle(
+                    timeout_ms=idle_timeout_ms,
+                    poll_ms=idle_poll_ms,
+                    max_compaction=max_compaction_per_pass,
+                    max_side_effects=max_side_effects_per_pass,
+                )
+                queue_waits.append({"turn": idx, **wait_result})
+                if not bool(wait_result.get("idle")):
+                    errors.append({
+                        "index": idx,
+                        "dia_id": str(row.get("dia_id") or ""),
+                        "error": "locomo_queue_not_idle_timeout",
+                    })
+                    break
+
+            if _should_flush():
+                f = run_flush(new_session_id=sid or None)
+                flush_events.append(dict(f or {}))
+                seeded_since_flush = 0
+        except Exception as exc:
+            errors.append({
+                "index": idx,
+                "dia_id": str(row.get("dia_id") or ""),
+                "error": str(exc or "locomo_replay_row_failed"),
+            })
+
+    final_queue = async_jobs_status(root=settings.core_memory_root)
+    turn_range = {"first": 1 if seeded > 0 else 0, "last": int(seeded)}
+    return {
+        "ok": seeded > 0 and not errors,
+        "seeded": int(seeded),
+        "seeded_turns": int(seeded),
+        "requested_turns": int(len(rows)),
+        "failed_turns": int(len(errors)),
+        "errors": errors[:20],
+        "mode": "locomo_replay",
+        "locomo_mode": replay_mode_n,
+        "sample_mode": str(meta.get("sample_mode") or sample_mode),
+        "sample_ids": list(meta.get("sample_ids") or []),
+        "session_range": dict(meta.get("session_range") or {}),
+        "turn_range": turn_range,
+        "corpus_stats": {
+            "samples_requested": int(len(list(meta.get("sample_ids") or []))),
+            "samples_replayed": int(len(session_ids_seen) if str(meta.get("sample_mode") or "") == "all" else len(list(meta.get("sample_ids") or []))),
+            "sessions_replayed": int(meta.get("sessions_replayed") or 0),
+            "turns_available": int(meta.get("turns_available") or 0),
+            "turns_replayed": int(seeded),
+        },
+        "queue_idle": bool(_queue_idle(final_queue)),
+        "queue": final_queue,
+        "queue_wait_checks": queue_waits[-20:],
+        "auto_flush": bool(auto_flush),
+        "flush_count": len(flush_events),
+        "flushes": flush_events[-20:],
+        "session": {
+            "session_id": str(session_ids_seen[-1] if session_ids_seen else SESSION.session_id),
+            "token_usage": SESSION.token_usage,
+            "context_budget": SESSION.context_budget,
+        },
     }
 
 

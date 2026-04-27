@@ -903,12 +903,27 @@
             <option value="hash" selected>hash</option>
             <option value="openai">openai</option>
           </select>
+          <span class="control-label">source</span>
+          <select id="seed-source" class="control-select" title="Seed source">
+            <option value="story_pack" selected>story_pack</option>
+            <option value="default_demo">default_demo</option>
+            <option value="locomo">locomo</option>
+          </select>
           <span class="control-label">preload</span>
           <input id="bench-preload-max" class="control-input" type="number" min="0" step="50" value="200" style="width:74px" title="Max demo turns to preload">
           <label class="control-inline" title="Preload turns from demo session">
             <input id="bench-preload-enabled" type="checkbox" checked>
             <span class="control-label" style="margin-right:0">from demo</span>
           </label>
+          <span class="control-label">locomo</span>
+          <select id="locomo-sample-mode" class="control-select" title="LoCoMo sample mode">
+            <option value="single" selected>single</option>
+            <option value="all">all</option>
+          </select>
+          <select id="locomo-sample-id" class="control-select" style="min-width:110px" title="LoCoMo sample id">
+            <option value="">loading...</option>
+          </select>
+          <input id="locomo-max-turns" class="control-input" type="number" min="1" step="10" value="200" style="width:74px" title="Max LoCoMo turns">
           <button class="btn" id="btn-seed">Seed</button>
           <button class="btn" id="btn-benchmark">Run LOCOMO Test</button>
         </div>
