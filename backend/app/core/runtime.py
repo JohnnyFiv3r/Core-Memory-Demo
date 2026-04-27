@@ -104,6 +104,38 @@ os.environ.setdefault("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE", "degraded_allowed")
 STORY_PACK_DIR = Path(__file__).resolve().parents[3] / "demo" / "story-pack"
 LOCOMO_DIR = Path(__file__).resolve().parents[4] / "locomo"
 LOCOMO_DATA_PATH = LOCOMO_DIR / "data" / "locomo10.json"
+
+
+def _candidate_locomo_data_paths() -> list[Path]:
+    env_path = str(os.environ.get("LOCOMO_DATA_PATH") or "").strip()
+    repo_root = Path(__file__).resolve().parents[3]
+    candidates: list[Path] = []
+    if env_path:
+        candidates.append(Path(env_path).expanduser())
+    candidates.extend(
+        [
+            repo_root / "locomo" / "data" / "locomo10.json",
+            repo_root / "data" / "locomo10.json",
+            LOCOMO_DATA_PATH,
+        ]
+    )
+    deduped: list[Path] = []
+    seen: set[str] = set()
+    for path in candidates:
+        key = str(path)
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(path)
+    return deduped
+
+
+def _resolve_locomo_data_path() -> Path:
+    candidates = _candidate_locomo_data_paths()
+    for path in candidates:
+        if path.exists():
+            return path
+    raise FileNotFoundError(f"locomo_dataset_not_found: {candidates[0]}")
 TURN_HEADER_RE = re.compile(r"^##\s*Turn\s+(\d{3})\s*:\s*(.+?)\s*$", re.MULTILINE)
 SEND_PROMPT_RE = re.compile(r"^\*\*Send:\*\*\s*`([^`]+)`\s*$", re.MULTILINE)
 ENTITY_CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9._-]{2,}|[A-Z]{2,}[A-Za-z0-9._-]*)\b")
@@ -234,7 +266,7 @@ def get_story_pack_meta() -> dict[str, Any]:
 
 def _load_locomo_dataset(*, data_path: Path | None = None) -> list[dict[str, Any]]:
     global _LOC0MO_CACHE
-    path = Path(data_path or LOCOMO_DATA_PATH)
+    path = Path(data_path) if data_path is not None else _resolve_locomo_data_path()
     if _LOC0MO_CACHE is not None and _LOC0MO_CACHE.get("path") == str(path):
         return list(_LOC0MO_CACHE.get("rows") or [])
     if not path.exists():
@@ -246,7 +278,8 @@ def _load_locomo_dataset(*, data_path: Path | None = None) -> list[dict[str, Any
 
 
 def get_locomo_meta() -> dict[str, Any]:
-    rows = _load_locomo_dataset()
+    data_path = _resolve_locomo_data_path()
+    rows = _load_locomo_dataset(data_path=data_path)
     samples: list[dict[str, Any]] = []
     for idx, row in enumerate(rows):
         sample_id = str(row.get("sample_id") if row.get("sample_id") is not None else idx)
@@ -270,7 +303,7 @@ def get_locomo_meta() -> dict[str, Any]:
         "dataset": "locomo10",
         "sample_count": int(len(samples)),
         "samples": samples,
-        "data_path": str(LOCOMO_DATA_PATH),
+        "data_path": str(data_path),
     }
 
 
