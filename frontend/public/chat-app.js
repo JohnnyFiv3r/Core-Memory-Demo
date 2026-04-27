@@ -852,6 +852,47 @@ function bindSessionPopoverControls() {
   badge.__cmPopoverBound = true;
 }
 
+let locomoMetaCache = null;
+
+function renderLocomoSampleOptions(meta) {
+  const select = document.getElementById('locomo-sample-id');
+  if (!select) return;
+  const samples = Array.isArray(meta && meta.samples) ? meta.samples : [];
+  if (!samples.length) {
+    select.innerHTML = '<option value="">unavailable</option>';
+    select.disabled = true;
+    return;
+  }
+  select.disabled = false;
+  select.innerHTML = samples.map((sample, idx) => {
+    const sampleId = String(sample && sample.sample_id != null ? sample.sample_id : idx);
+    const turns = Number(sample && sample.turns || 0) || 0;
+    const sessions = Number(sample && sample.sessions || 0) || 0;
+    return '<option value="' + escapeHtml(sampleId) + '">' + escapeHtml(sampleId + ' · ' + turns + 't · ' + sessions + 's') + '</option>';
+  }).join('');
+}
+
+async function refreshLocomoMeta() {
+  const select = document.getElementById('locomo-sample-id');
+  if (!select) return null;
+  try {
+    const res = await fetch('/api/locomo/meta');
+    const data = await res.json();
+    if (!res.ok || !data.ok) {
+      throw new Error(firstPayloadError(data) || data.error || ('HTTP ' + res.status));
+    }
+    locomoMetaCache = data;
+    renderLocomoSampleOptions(data);
+    return data;
+  } catch (err) {
+    locomoMetaCache = null;
+    select.innerHTML = '<option value="">unavailable</option>';
+    select.disabled = true;
+    addMsg('system', 'LoCoMo metadata unavailable: ' + err.message);
+    return null;
+  }
+}
+
 function bindUiEventHandlers() {
   if (document.body.__cmUiHandlersBound) return;
 
@@ -3606,14 +3647,19 @@ async function seedMemory() {
   }
 
   try {
+    const seedSource = document.getElementById('seed-source')?.value || 'story_pack';
     const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
     const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
     const preloadMax = Number.isFinite(preloadRaw) ? Math.max(1, Math.floor(preloadRaw)) : 200;
     const continueStory = !!document.getElementById('seed-continue-story')?.checked;
+    const locomoSampleMode = document.getElementById('locomo-sample-mode')?.value || 'single';
+    const locomoSampleId = String(document.getElementById('locomo-sample-id')?.value || '').trim();
+    const locomoMaxTurnsRaw = Number(document.getElementById('locomo-max-turns')?.value || 200);
+    const locomoMaxTurns = Number.isFinite(locomoMaxTurnsRaw) ? Math.max(1, Math.floor(locomoMaxTurnsRaw)) : 200;
     let resetBeforeRun = !!document.getElementById('seed-reset-before-run')?.checked;
     let wipeBeforeRun = !!document.getElementById('seed-wipe-memory')?.checked;
 
-    if (preloadEnabled && continueStory) {
+    if (seedSource === 'story_pack' && preloadEnabled && continueStory) {
       if (resetBeforeRun || wipeBeforeRun) {
         const resetEl = document.getElementById('seed-reset-before-run');
         const wipeEl = document.getElementById('seed-wipe-memory');
@@ -3628,7 +3674,7 @@ async function seedMemory() {
 
     if (resetBeforeRun) {
       const resetOut = await resetSessionForSeed({wipeMemory: wipeBeforeRun});
-      if (wipeBeforeRun) {
+      if (wipeBeforeRun && seedSource === 'story_pack') {
         setStoryCursorTurn(0);
       }
       addMsg(
@@ -3640,7 +3686,49 @@ async function seedMemory() {
 
     let data = null;
 
-    if (preloadEnabled) {
+    if (seedSource === 'locomo') {
+      if (!locomoMetaCache) {
+        await refreshLocomoMeta();
+      }
+      if (locomoSampleMode === 'single' && !locomoSampleId) {
+        throw new Error('locomo_sample_not_found');
+      }
+      const progress = addMsg('system', 'Seeding LoCoMo transcript corpus...');
+      const payload = {
+        sample_mode: locomoSampleMode,
+        sample_id: locomoSampleMode === 'single' ? locomoSampleId : null,
+        replay_mode: 'transcript_only',
+        max_turns: locomoMaxTurns,
+        wait_for_idle: true,
+        idle_timeout_ms: 120000,
+        idle_poll_ms: 250,
+        auto_flush: true,
+        flush_threshold_ratio: AUTO_FLUSH_THRESHOLD_PCT / 100,
+      };
+      const res = await fetch('/api/locomo/replay', {
+        method: 'POST',
+        headers: {'Content-Type': 'application/json'},
+        body: JSON.stringify(payload),
+      });
+      data = await res.json();
+      if (!res.ok || !data.ok) {
+        const err = firstPayloadError(data) || data.error || ('HTTP ' + res.status);
+        throw new Error(String(err));
+      }
+      const seeded = Number(data.seeded || data.seeded_turns || 0);
+      const queueIdle = !!data.queue_idle;
+      const range = data.turn_range || {};
+      const sampleIds = Array.isArray(data.sample_ids) ? data.sample_ids : [];
+      const sampleLabel = sampleIds.length === 1 ? ('sample=' + String(sampleIds[0])) : ('samples=' + String(sampleIds.length || 0));
+      progress.textContent =
+        'Seeded ' + seeded + ' turn(s) via LoCoMo replay' +
+        (sampleLabel ? (' · ' + sampleLabel) : '') +
+        (range.first && range.last ? (' · range=' + String(range.first) + '-' + String(range.last)) : '') +
+        ' · queue_idle=' + String(queueIdle);
+      if (Number(data.failed_turns || 0) > 0) {
+        addMsg('system', 'Warning: LoCoMo replay completed with ' + String(data.failed_turns || 0) + ' failed turn(s).');
+      }
+    } else if (seedSource === 'story_pack' && preloadEnabled) {
       let startTurn = 1;
       if (continueStory) {
         startTurn = Math.max(1, getStoryCursorTurn() + 1);
@@ -3867,6 +3955,7 @@ function startDemoUi() {
   loadSeedResetPrefs();
   bindSessionPopoverControls();
   loadDemoModels();
+  refreshLocomoMeta();
   refreshErrorStreak = 0;
   refreshMemory();
   if (refreshTimerId) clearInterval(refreshTimerId);
