@@ -117,11 +117,14 @@ LOCOMO_DATA_PATH = LOCOMO_DIR / "data" / "locomo10.json"
 def _candidate_locomo_data_paths() -> list[Path]:
     env_path = str(os.environ.get("LOCOMO_DATA_PATH") or "").strip()
     repo_root = Path(__file__).resolve().parents[3]
+    backend_root = repo_root / "backend"
     candidates: list[Path] = []
     if env_path:
         candidates.append(Path(env_path).expanduser())
     candidates.extend(
         [
+            backend_root / "data" / "locomo" / "locomo10.json",
+            backend_root / "data" / "locomo10.json",
             repo_root / "locomo" / "data" / "locomo10.json",
             repo_root / "data" / "locomo" / "locomo10.json",
             repo_root / "data" / "locomo10.json",
