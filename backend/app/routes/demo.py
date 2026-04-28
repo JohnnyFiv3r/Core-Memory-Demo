@@ -391,7 +391,7 @@ def story_pack_meta():
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
-@router.get('/locomo/meta')
+@public_router.get('/locomo/meta')
 def locomo_meta():
     try:
         return get_locomo_meta()
