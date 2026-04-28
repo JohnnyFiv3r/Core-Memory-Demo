@@ -51,7 +51,7 @@ from core_memory.association.crawler_contract import merge_crawler_updates
 from core_memory.write_pipeline.continuity_injection import load_continuity_injection
 
 from app.benchmarks.fixture_smoke import load_fixture_smoke_cases
-from app.benchmarks.locomo_loader import LocomoLoaderError
+from app.benchmarks.locomo_loader import LocomoLoaderError, load_locomo_dataset
 from app.benchmarks.locomo_runner import run_locomo_retrieval_suite
 from app.benchmarks.locomo_scoring import aggregate_case_scores
 from app.benchmarks.locomo_suite import build_locomo_suite_metadata, ingest_locomo_samples, make_locomo_missing_dataset_response, write_locomo_run_artifacts
@@ -315,7 +315,7 @@ def get_story_pack_meta() -> dict[str, Any]:
 
 def _load_locomo_dataset(*, data_path: Path | None = None) -> list[dict[str, Any]]:
     global _LOC0MO_CACHE
-    path = Path(data_path or LOCOMO_DATA_PATH)
+    path = Path(data_path or _resolve_locomo_data_path())
     if _LOC0MO_CACHE is not None and _LOC0MO_CACHE.get("path") == str(path):
         return list(_LOC0MO_CACHE.get("rows") or [])
     if not path.exists():
@@ -327,7 +327,8 @@ def _load_locomo_dataset(*, data_path: Path | None = None) -> list[dict[str, Any
 
 
 def get_locomo_meta() -> dict[str, Any]:
-    rows = _load_locomo_dataset()
+    data_path = _resolve_locomo_data_path()
+    rows = _load_locomo_dataset(data_path=data_path)
     samples: list[dict[str, Any]] = []
     for idx, row in enumerate(rows):
         sample_id = str(row.get("sample_id") if row.get("sample_id") is not None else idx)
@@ -351,7 +352,7 @@ def get_locomo_meta() -> dict[str, Any]:
         "dataset": "locomo10",
         "sample_count": int(len(samples)),
         "samples": samples,
-        "data_path": str(LOCOMO_DATA_PATH),
+        "data_path": str(data_path),
     }
 
 
@@ -2718,12 +2719,14 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
         try:
+            locomo_data_file = _resolve_locomo_data_path()
             dataset_meta, selected_cases, selected_samples, gold_context_map = build_locomo_suite_metadata(
                 suite=suite_name,
                 sample_limit=sample_limit,
                 qa_limit=qa_limit,
                 sample_ids=sample_ids,
                 category_filter=category_filter,
+                data_file=locomo_data_file,
             )
         except LocomoLoaderError as exc:
             return make_locomo_missing_dataset_response(

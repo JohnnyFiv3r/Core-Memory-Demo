@@ -12,8 +12,8 @@ from app.benchmarks.locomo_loader import LocomoLoaderError, load_locomo_dataset
 from app.core.config import settings
 
 
-def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
-    samples, meta = load_locomo_dataset()
+def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, data_file: str | Path | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    samples, meta = load_locomo_dataset(data_file=data_file)
     selected = list(samples)
 
     wanted_ids = [str(x).strip() for x in (sample_ids or []) if str(x).strip()]
