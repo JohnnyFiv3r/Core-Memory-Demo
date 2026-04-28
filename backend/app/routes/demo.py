@@ -391,6 +391,11 @@ def story_pack_meta():
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
+@public_router.get('/locomo/ping')
+def locomo_ping():
+    return {'ok': True, 'route': 'locomo-public', 'meta_route': '/api/locomo/meta'}
+
+
 @public_router.get('/locomo/meta')
 def locomo_meta():
     try:
