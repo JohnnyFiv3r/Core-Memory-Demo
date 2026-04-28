@@ -142,12 +142,49 @@ def _candidate_locomo_data_paths() -> list[Path]:
     return deduped
 
 
-def _resolve_locomo_data_path() -> Path:
+def get_locomo_path_debug() -> dict[str, Any]:
+    repo_root = Path(__file__).resolve().parents[3]
+    backend_root = repo_root / "backend"
     candidates = _candidate_locomo_data_paths()
+    rows: list[dict[str, Any]] = []
+    resolved_path: str | None = None
     for path in candidates:
-        if path.exists():
-            return path
-    raise FileNotFoundError(f"locomo_dataset_not_found: {candidates[0]}")
+        exists = path.exists()
+        is_file = path.is_file() if exists else False
+        rows.append(
+            {
+                "path": str(path),
+                "exists": bool(exists),
+                "is_file": bool(is_file),
+            }
+        )
+        if resolved_path is None and is_file:
+            resolved_path = str(path)
+    return {
+        "cwd": os.getcwd(),
+        "repo_root": str(repo_root),
+        "backend_root": str(backend_root),
+        "module_file": str(Path(__file__).resolve()),
+        "locomo_dir": str(LOCOMO_DIR),
+        "locomo_data_path_constant": str(LOCOMO_DATA_PATH),
+        "env": {
+            "LOCOMO_DATA_PATH": str(os.environ.get("LOCOMO_DATA_PATH") or ""),
+            "RENDER": str(os.environ.get("RENDER") or ""),
+            "RENDER_SERVICE_ID": str(os.environ.get("RENDER_SERVICE_ID") or ""),
+            "RENDER_GIT_COMMIT": str(os.environ.get("RENDER_GIT_COMMIT") or ""),
+        },
+        "candidates": rows,
+        "resolved_path": resolved_path,
+    }
+
+
+def _resolve_locomo_data_path() -> Path:
+    debug = get_locomo_path_debug()
+    resolved_path = str(debug.get("resolved_path") or "").strip()
+    if resolved_path:
+        return Path(resolved_path)
+    checked = ", ".join(str((row or {}).get("path") or "") for row in list(debug.get("candidates") or []))
+    raise FileNotFoundError(f"locomo_dataset_not_found: checked=[{checked}]")
 TURN_HEADER_RE = re.compile(r"^##\s*Turn\s+(\d{3})\s*:\s*(.+?)\s*$", re.MULTILINE)
 SEND_PROMPT_RE = re.compile(r"^\*\*Send:\*\*\s*`([^`]+)`\s*$", re.MULTILINE)
 ENTITY_CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9._-]{2,}|[A-Z]{2,}[A-Za-z0-9._-]*)\b")

@@ -18,6 +18,7 @@ from app.core.runtime import (
     compare_benchmark_runs,
     decide_entity_merge,
     get_locomo_meta,
+    get_locomo_path_debug,
     get_story_pack_meta,
     get_last_benchmark_snapshot,
     inspect_bead_hydration_payload,
@@ -401,9 +402,15 @@ def locomo_meta():
     try:
         return get_locomo_meta()
     except FileNotFoundError as exc:
-        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=404)
+        return JSONResponse({'ok': False, 'error': str(exc), 'debug': get_locomo_path_debug()}, status_code=404)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+
+
+@public_router.get('/locomo/debug')
+def locomo_debug():
+    debug = get_locomo_path_debug()
+    return {'ok': True, 'debug': debug}
 
 
 @router.post('/locomo/replay')
