@@ -54,6 +54,33 @@ class TestLocomoRunnerRetrieval(unittest.TestCase):
         self.assertEqual(1.0, out["evidence_recall"]["mrr"])
         self.assertEqual(["D1:3"], out["retrieved"][0]["dia_ids"])
 
+    def test_retrieval_request_includes_general_facets(self):
+        qa = {
+            "qa_id": "conv-1:q0000",
+            "question": "When did Caroline go to the support group on 7 May 2023?",
+            "answer": "7 May 2023",
+            "category": 2,
+            "evidence": ["D1:3"],
+        }
+
+        fake_execute = {
+            "results": [],
+            "warnings": [],
+            "backend": "lexical",
+        }
+
+        with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib:
+            mt.execute.return_value = fake_execute
+            ib.return_value = {}
+            run_locomo_retrieval_case(root="/tmp/fake", sample_id="conv-1", qa=qa, retrieval_k=8)
+
+        req = mt.execute.call_args.args[0]
+        self.assertEqual("project", ((req.get("facets") or {}).get("scope") or ""))
+        must_terms = list((req.get("facets") or {}).get("must_terms") or [])
+        self.assertIn("conv-1", must_terms)
+        self.assertIn("caroline", [str(x).lower() for x in must_terms])
+        self.assertTrue(any("7 may 2023" == str(x).lower() for x in must_terms))
+
     def test_retrieval_case_reranks_same_sample_and_speaker_cues(self):
         qa = {
             "qa_id": "conv-1:q0002",

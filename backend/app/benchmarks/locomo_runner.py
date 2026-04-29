@@ -47,6 +47,24 @@ def _question_date_hints(question: str) -> set[str]:
     return hints
 
 
+def _build_locomo_facets(*, question: str, sample_id: str) -> dict[str, Any]:
+    must_terms: list[str] = []
+    seen: set[str] = set()
+    for value in [str(sample_id or "").strip(), *sorted(_question_speaker_hints(question)), *sorted(_question_date_hints(question))]:
+        term = str(value or "").strip()
+        if not term:
+            continue
+        key = term.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        must_terms.append(term)
+    return {
+        "scope": "project",
+        "must_terms": must_terms[:6],
+    }
+
+
 def _score_locomo_row(*, question: str, sample_id: str, row: dict[str, Any]) -> float:
     score = float(row.get("score") or 0.0)
     question_terms = _question_terms(question)
@@ -139,21 +157,22 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             "evidence_recall": compute_evidence_recall(gold_evidence=list(qa.get("evidence") or []), retrieved=[], ks=evidence_recall_k or [1, 3, 5, 8, 10]),
         }
 
+    question = str(qa.get("question") or "").strip()
     req = {
-        "query": str(qa.get("question") or "").strip(),
-        "intent": _intent_for_question(str(qa.get("question") or "")),
+        "query": question,
+        "intent": _intent_for_question(question),
         "k": max(1, int(retrieval_k or 8)),
         "constraints": {
-            "sample_id": sample_id,
             "session_id": f"locomo:{sample_id}",
         },
+        "facets": _build_locomo_facets(question=question, sample_id=sample_id),
     }
     try:
         result = memory_tools.execute(req, root=root, explain=False)
         raw_results = list(result.get("results") or [])
         retrieved = [_extract_result_row(root=root, rank=idx, row=dict(row or {})) for idx, row in enumerate(raw_results, start=1)]
         retrieved = _rerank_locomo_results(
-            question=str(qa.get("question") or ""),
+            question=question,
             sample_id=sample_id,
             retrieved=retrieved,
         )
