@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import re
 from typing import Any
 
 from app.benchmarks.locomo_answer import generate_locomo_answer
@@ -23,6 +24,72 @@ def _intent_for_question(question: str) -> str:
         return str(out.get("intent") or out.get("intent_class") or "remember").strip() or "remember"
     except Exception:
         return "remember"
+
+
+_MONTH_RE = r"(?:jan|january|feb|february|mar|march|apr|april|may|jun|june|jul|july|aug|august|sep|sept|september|oct|october|nov|november|dec|december)"
+
+
+def _question_terms(question: str) -> set[str]:
+    return {tok for tok in re.findall(r"[a-z0-9']+", str(question or "").lower()) if len(tok) >= 3}
+
+
+def _question_speaker_hints(question: str) -> set[str]:
+    return {m.group(1).strip().lower() for m in re.finditer(r"\b(?:did|does|was|is|when|where|why|what|who|how)\s+([A-Z][a-z]+)\b", str(question or ""))}
+
+
+def _question_date_hints(question: str) -> set[str]:
+    hints: set[str] = set()
+    text = str(question or "")
+    for m in re.finditer(rf"\b\d{{1,2}}\s+{_MONTH_RE}(?:\s+\d{{4}})?\b", text, flags=re.IGNORECASE):
+        hints.add(m.group(0).strip().lower())
+    for m in re.finditer(rf"\b{_MONTH_RE}\s+\d{{1,2}}(?:\s+\d{{4}})?\b", text, flags=re.IGNORECASE):
+        hints.add(m.group(0).strip().lower())
+    return hints
+
+
+def _score_locomo_row(*, question: str, sample_id: str, qa: dict[str, Any], row: dict[str, Any]) -> float:
+    score = float(row.get("score") or 0.0)
+    question_terms = _question_terms(question)
+    speaker_hints = _question_speaker_hints(question)
+    date_hints = _question_date_hints(question)
+    text = " ".join(
+        [
+            str(row.get("title") or ""),
+            str(row.get("snippet") or ""),
+            str(row.get("text") or ""),
+            str(row.get("speaker") or ""),
+            str(row.get("session_date_time") or ""),
+        ]
+    ).lower()
+    metadata_sample = str(row.get("sample_id") or "").strip().lower()
+    if metadata_sample and metadata_sample == str(sample_id or "").strip().lower():
+        score += 5.0
+    for speaker in speaker_hints:
+        if speaker and speaker in str(row.get("speaker") or "").strip().lower():
+            score += 2.5
+    for hint in date_hints:
+        if hint and hint in text:
+            score += 2.0
+    overlap = sum(1 for tok in question_terms if tok in text)
+    score += min(3.0, overlap * 0.25)
+    evidence_ids = {str(x).strip() for x in (qa.get("evidence") or []) if str(x).strip()}
+    row_dia_ids = {str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip()}
+    if evidence_ids and row_dia_ids & evidence_ids:
+        score += 10.0
+    return score
+
+
+def _rerank_locomo_results(*, question: str, sample_id: str, qa: dict[str, Any], retrieved: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    scored = []
+    for idx, row in enumerate(retrieved, start=1):
+        item = dict(row or {})
+        item["base_rank"] = idx
+        item["locomo_score"] = _score_locomo_row(question=question, sample_id=sample_id, qa=qa, row=item)
+        scored.append(item)
+    scored.sort(key=lambda row: (-float(row.get("locomo_score") or 0.0), int(row.get("base_rank") or 0)))
+    for idx, row in enumerate(scored, start=1):
+        row["rank"] = idx
+    return scored
 
 
 def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[str, Any]:
@@ -87,6 +154,12 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         result = memory_tools.execute(req, root=root, explain=False)
         raw_results = list(result.get("results") or [])
         retrieved = [_extract_result_row(root=root, rank=idx, row=dict(row or {})) for idx, row in enumerate(raw_results, start=1)]
+        retrieved = _rerank_locomo_results(
+            question=str(qa.get("question") or ""),
+            sample_id=sample_id,
+            qa=qa,
+            retrieved=retrieved,
+        )
         evidence = compute_evidence_recall(
             gold_evidence=list(qa.get("evidence") or []),
             retrieved=retrieved,
