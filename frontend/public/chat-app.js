@@ -3578,36 +3578,33 @@ async function refreshMemory() {
       lastBenchmarkSummary = incomingBenchmarkSummary || lastBenchmarkSummary;
       lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
     }
-    const benchmarkState = data.benchmark || {};
-    const incomingStatus = String((incomingBenchmarkSummary || {}).status || '').trim().toLowerCase();
-    const shouldPollBenchmarkLast = Boolean(
-      activeBenchmarkRunId ||
-      currentRunId ||
-      incomingStatus === 'running' ||
-      benchmarkState.has_last_report
-    );
-    if (shouldPollBenchmarkLast) {
-      try {
-        const rb = await fetch('/api/demo/benchmark/last');
-        const jb = await parseApiJsonResponse(rb, 'benchmark-last');
-        if (jb && (jb.ok || jb.summary || jb.report)) {
-          const fetchedRunId = String(((jb.summary || {}).run_id) || '').trim();
-          const fetchedStatus = String(((jb.summary || {}).status) || '').trim().toLowerCase();
+    try {
+      const rb = await fetch('/api/demo/benchmark/last');
+      const jb = await parseApiJsonResponse(rb, 'benchmark-last');
+      if (jb && (jb.ok || jb.summary || jb.report)) {
+        const fetchedSummary = jb.summary || {};
+        const fetchedRunId = String(fetchedSummary.run_id || '').trim();
+        const fetchedStatus = String(fetchedSummary.status || '').trim().toLowerCase();
+        const fetchedHistory = arrayOr(jb.history, lastBenchmarkHistory);
+        if (jb.report) lastBenchmarkReport = jb.report;
+        if (fetchedStatus === 'running') {
+          lastBenchmarkSummary = fetchedSummary;
+          lastBenchmarkHistory = fetchedHistory;
+          if (fetchedRunId) activeBenchmarkRunId = fetchedRunId;
+        } else {
           const pinnedRunId = String((lastBenchmarkSummary || {}).run_id || activeBenchmarkRunId || '').trim();
           const sameRun = !pinnedRunId || !fetchedRunId || fetchedRunId === pinnedRunId;
-          const allowRunningSnapshot = fetchedStatus === 'running';
-          if (sameRun || allowRunningSnapshot) {
-            if (jb.report) lastBenchmarkReport = jb.report;
-            if (jb.summary) {
-              lastBenchmarkSummary = jb.summary;
-              if (fetchedStatus === 'running' && fetchedRunId) activeBenchmarkRunId = fetchedRunId;
-            }
-            lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
+          if (sameRun && fetchedSummary && Object.keys(fetchedSummary).length) {
+            lastBenchmarkSummary = fetchedSummary;
+          }
+          lastBenchmarkHistory = fetchedHistory;
+          if (activeBenchmarkRunId && fetchedRunId && fetchedRunId === activeBenchmarkRunId && fetchedStatus && fetchedStatus !== 'running') {
+            activeBenchmarkRunId = '';
           }
         }
-      } catch (_) {
-        // best effort only
       }
+    } catch (_) {
+      // best effort only
     }
     updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
     renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
