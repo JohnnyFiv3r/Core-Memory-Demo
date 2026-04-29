@@ -120,6 +120,7 @@ class TestLocomoRunnerRetrieval(unittest.TestCase):
         self.assertEqual("bead-right", out["retrieved"][0]["bead_id"])
         self.assertEqual(["D1:3"], out["retrieved"][0]["dia_ids"])
         self.assertGreater(float(out["retrieved"][0].get("locomo_score") or 0.0), float(out["retrieved"][1].get("locomo_score") or 0.0))
+        self.assertGreaterEqual(float(out["retrieved"][0].get("score") or 0.0), 0.0)
 
 
 if __name__ == "__main__":
