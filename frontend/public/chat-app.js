@@ -25,6 +25,7 @@ let firstMessage = true;
 let lastBenchmarkReport = null;
 let lastBenchmarkSummary = null;
 let lastBenchmarkHistory = [];
+let activeBenchmarkRunId = '';
 let selectedClaimSlot = null;
 let claimsAsOf = '';
 let claimsDetailOpen = false;
@@ -3543,16 +3544,25 @@ async function refreshMemory() {
     renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {});
     renderRolling(mem.rolling_window || data.rolling_window || []);
 
-    lastBenchmarkSummary = (data.benchmark || {}).last_summary || lastBenchmarkSummary;
-    lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
-    if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
+    const incomingBenchmarkSummary = (data.benchmark || {}).last_summary || null;
+    const incomingRunId = String((incomingBenchmarkSummary || {}).run_id || '').trim();
+    const currentRunId = String((lastBenchmarkSummary || {}).run_id || activeBenchmarkRunId || '').trim();
+    if (!currentRunId || (incomingRunId && incomingRunId === currentRunId)) {
+      lastBenchmarkSummary = incomingBenchmarkSummary || lastBenchmarkSummary;
+      lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
+    }
+    if ((data.benchmark || {}).has_last_report && (!lastBenchmarkReport || (incomingRunId && incomingRunId === currentRunId))) {
       try {
         const rb = await fetch('/api/demo/benchmark/last');
         const jb = await rb.json();
         if (jb && jb.ok && jb.report) {
-          lastBenchmarkReport = jb.report;
-          if (jb.summary) lastBenchmarkSummary = jb.summary;
-          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
+          const fetchedRunId = String(((jb.summary || {}).run_id) || '').trim();
+          const pinnedRunId = String((lastBenchmarkSummary || {}).run_id || activeBenchmarkRunId || '').trim();
+          if (!pinnedRunId || !fetchedRunId || fetchedRunId === pinnedRunId) {
+            lastBenchmarkReport = jb.report;
+            if (jb.summary) lastBenchmarkSummary = jb.summary;
+            lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
+          }
         }
       } catch (_) {
         // best effort only
@@ -3940,6 +3950,7 @@ async function runBenchmark() {
     }
     lastBenchmarkSummary = data.summary || {};
     lastBenchmarkReport = data.report || null;
+    activeBenchmarkRunId = String((data.summary || {}).run_id || '').trim();
     try {
       const rh = await fetch('/api/demo/benchmark/history?limit=20');
       const jh = await rh.json();
@@ -3949,6 +3960,11 @@ async function runBenchmark() {
     }
     renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
     addMsg('system', formatBenchmarkSummary(data.summary || {}));
+    setTimeout(() => {
+      if (String(activeBenchmarkRunId || '').trim() === String((lastBenchmarkSummary || {}).run_id || '').trim()) {
+        activeBenchmarkRunId = '';
+      }
+    }, 15000);
   } catch (err) {
     addMsg('system', 'Benchmark failed: ' + err.message);
   } finally {
