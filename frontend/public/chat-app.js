@@ -3578,16 +3578,30 @@ async function refreshMemory() {
       lastBenchmarkSummary = incomingBenchmarkSummary || lastBenchmarkSummary;
       lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
     }
-    if ((data.benchmark || {}).has_last_report && (!lastBenchmarkReport || (incomingRunId && incomingRunId === currentRunId))) {
+    const benchmarkState = data.benchmark || {};
+    const incomingStatus = String((incomingBenchmarkSummary || {}).status || '').trim().toLowerCase();
+    const shouldPollBenchmarkLast = Boolean(
+      activeBenchmarkRunId ||
+      currentRunId ||
+      incomingStatus === 'running' ||
+      benchmarkState.has_last_report
+    );
+    if (shouldPollBenchmarkLast) {
       try {
         const rb = await fetch('/api/demo/benchmark/last');
-        const jb = await rb.json();
-        if (jb && jb.ok && jb.report) {
+        const jb = await parseApiJsonResponse(rb, 'benchmark-last');
+        if (jb && (jb.ok || jb.summary || jb.report)) {
           const fetchedRunId = String(((jb.summary || {}).run_id) || '').trim();
+          const fetchedStatus = String(((jb.summary || {}).status) || '').trim().toLowerCase();
           const pinnedRunId = String((lastBenchmarkSummary || {}).run_id || activeBenchmarkRunId || '').trim();
-          if (!pinnedRunId || !fetchedRunId || fetchedRunId === pinnedRunId) {
-            lastBenchmarkReport = jb.report;
-            if (jb.summary) lastBenchmarkSummary = jb.summary;
+          const sameRun = !pinnedRunId || !fetchedRunId || fetchedRunId === pinnedRunId;
+          const allowRunningSnapshot = fetchedStatus === 'running';
+          if (sameRun || allowRunningSnapshot) {
+            if (jb.report) lastBenchmarkReport = jb.report;
+            if (jb.summary) {
+              lastBenchmarkSummary = jb.summary;
+              if (fetchedStatus === 'running' && fetchedRunId) activeBenchmarkRunId = fetchedRunId;
+            }
             lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
           }
         }
