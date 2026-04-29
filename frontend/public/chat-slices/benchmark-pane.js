@@ -36,8 +36,13 @@ function BenchmarkPane(props) {
 
   const suite = String((summary || {}).suite || '')
   const isLocomo = suite && suite !== 'fixture_smoke'
+  const status = String((summary || {}).status || (report || {}).status || '').trim().toLowerCase()
+  const phase = String((summary || {}).phase || (report || {}).phase || '').trim().toLowerCase()
+  const turnsIngested = Number((summary || {}).turns_ingested || (((report || {}).ingestion || {}).ingested_turns || 0) || 0)
+  const qaCases = Number((summary || {}).qa_cases || 0)
+  const progressPct = phase === 'starting' ? 10 : phase === 'ingested' ? 45 : phase === 'semantic_built' ? 70 : phase === 'completed' ? 100 : (status === 'running' ? 20 : 0)
 
-  if (!summary || (!summary.cases && !summary.qa_cases)) {
+  if (!summary || (!summary.cases && !summary.qa_cases && status !== 'running')) {
     return React.createElement(
       React.Fragment,
       null,
@@ -276,6 +281,32 @@ function BenchmarkPane(props) {
   return React.createElement(
     React.Fragment,
     null,
+    status === 'running'
+      ? React.createElement(
+          'div',
+          { className: 'runtime-card' },
+          React.createElement('div', null, React.createElement('strong', null, 'Benchmark in progress')),
+          React.createElement(
+            'div',
+            { style: { marginTop: '4px', color: 'var(--text-dim)' } },
+            'phase=' + String(phase || 'working') +
+              (summary.run_id ? (' · run_id=' + String(summary.run_id)) : '') +
+              (turnsIngested > 0 ? (' · turns=' + String(turnsIngested)) : '') +
+              (qaCases > 0 ? (' · qa=' + String(qaCases)) : '')
+          ),
+          React.createElement(
+            'div',
+            { style: { marginTop: '8px', height: '8px', borderRadius: '999px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' } },
+            React.createElement('div', {
+              style: {
+                width: String(Math.max(6, Math.min(100, progressPct))) + '%',
+                height: '100%',
+                background: 'linear-gradient(90deg, #60a5fa, #34d399)',
+              },
+            })
+          )
+        )
+      : null,
     React.createElement(
       'div',
       { className: 'bench-grid' },
