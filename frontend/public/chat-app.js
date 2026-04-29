@@ -3699,10 +3699,10 @@ async function seedMemory() {
         sample_id: locomoSampleMode === 'single' ? locomoSampleId : null,
         replay_mode: 'transcript_only',
         max_turns: locomoMaxTurns,
-        wait_for_idle: true,
-        idle_timeout_ms: 120000,
+        wait_for_idle: false,
+        idle_timeout_ms: 20000,
         idle_poll_ms: 250,
-        auto_flush: true,
+        auto_flush: false,
         flush_threshold_ratio: AUTO_FLUSH_THRESHOLD_PCT / 100,
       };
       const res = await fetch('/api/locomo/replay', {
