@@ -2582,17 +2582,44 @@ def _set_last_benchmark_cache(*, summary: dict[str, Any], report: dict[str, Any]
     LAST_BENCHMARK_HISTORY[:] = ([dict(history_row or {})] + existing)[:100]
 
 
+def _benchmark_row_is_locomo(row: dict[str, Any]) -> bool:
+    summary = dict((row or {}).get("summary") or {})
+    report = dict((row or {}).get("report") or {})
+    suite = str(summary.get("suite") or ((report.get("config") or {}).get("suite") if isinstance(report.get("config"), dict) else "") or "").strip().lower()
+    if suite in {"locomo_mini", "locomo_retrieval", "locomo_qa"}:
+        return True
+    dataset = dict(report.get("dataset") or {})
+    source = str(dataset.get("source") or "").strip().lower()
+    return source == "locomo_dataset"
+
+
 def get_last_benchmark_snapshot(*, history_limit: int = 20) -> dict[str, Any]:
     rows = read_benchmark_history(limit=max(1, int(history_limit)))
     latest = dict(rows[0] or {}) if rows else {}
+    locomo_latest = next((dict(r or {}) for r in rows if _benchmark_row_is_locomo(dict(r or {}))), {})
 
     summary = dict(LAST_BENCHMARK_SUMMARY or {})
     report = dict(LAST_BENCHMARK_REPORT or {})
 
     if not summary:
-        summary = dict(latest.get("summary") or {})
+        preferred = locomo_latest or latest
+        summary = dict(preferred.get("summary") or {})
     if not report:
-        report = dict(latest.get("report") or {})
+        preferred = locomo_latest or latest
+        report = dict(preferred.get("report") or {})
+
+    preferred_run_id = str((summary or {}).get("run_id") or "").strip()
+    if preferred_run_id:
+        rows = sorted(
+            rows,
+            key=lambda r: 0 if str(((r.get("summary") or {}).get("run_id") or r.get("run_id") or "")).strip() == preferred_run_id else 1,
+        )
+    elif locomo_latest:
+        locomo_run_id = str(((locomo_latest.get("summary") or {}).get("run_id") or locomo_latest.get("run_id") or "")).strip()
+        rows = sorted(
+            rows,
+            key=lambda r: 0 if str(((r.get("summary") or {}).get("run_id") or r.get("run_id") or "")).strip() == locomo_run_id else 1,
+        )
 
     return {
         "ok": bool(report),
