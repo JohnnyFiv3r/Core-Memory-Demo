@@ -28,6 +28,13 @@ class TestLocomoIngest(unittest.TestCase):
         self.assertEqual(["D1:3"], bead["source_turn_ids"])
         self.assertEqual("locomo:conv-1", bead["session_id"])
         self.assertEqual("D1:3", bead["metadata"]["dia_id"])
+        self.assertIn("sample_id=conv-1", bead["retrieval_facts"])
+        self.assertIn("session_index=1", bead["retrieval_facts"])
+        self.assertIn("turn_index=3", bead["retrieval_facts"])
+        self.assertIn("speaker=Alice", bead["retrieval_facts"])
+        self.assertIn("session_date_time=1 Jan 2024", bead["retrieval_facts"])
+        self.assertTrue(any("Alice: Hello there" in fact for fact in bead["retrieval_facts"]))
+        self.assertTrue(str(bead["detail"]).startswith("Session date: 1 Jan 2024"))
 
     def test_ingest_is_idempotent_within_root(self):
         sample = {
@@ -75,6 +82,8 @@ class TestLocomoIngest(unittest.TestCase):
             beads = list((idx.get("beads") or {}).values())
             self.assertEqual(1, len(beads))
             self.assertEqual(["D1:1"], beads[0].get("source_turn_ids") or [])
+            self.assertIn("sample_id=conv-1", beads[0].get("retrieval_facts") or [])
+            self.assertTrue(any("Alice: Hello there" in fact for fact in (beads[0].get("retrieval_facts") or [])))
 
 
 if __name__ == "__main__":
