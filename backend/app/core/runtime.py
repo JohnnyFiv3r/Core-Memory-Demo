@@ -2582,6 +2582,23 @@ def _set_last_benchmark_cache(*, summary: dict[str, Any], report: dict[str, Any]
     LAST_BENCHMARK_HISTORY[:] = ([dict(history_row or {})] + existing)[:100]
 
 
+def _update_benchmark_live_state(*, run_id: str, summary_patch: dict[str, Any] | None = None, report_patch: dict[str, Any] | None = None) -> None:
+    summary = dict(LAST_BENCHMARK_SUMMARY or {})
+    report = dict(LAST_BENCHMARK_REPORT or {})
+    if str(summary.get("run_id") or "").strip() != str(run_id or "").strip():
+        summary = {"run_id": str(run_id or "").strip()}
+        report = {"live": True, "run_id": str(run_id or "").strip()}
+    if isinstance(summary_patch, dict):
+        summary.update(dict(summary_patch or {}))
+    if isinstance(report_patch, dict):
+        report.update(dict(report_patch or {}))
+    _set_last_benchmark_cache(
+        summary=summary,
+        report=report,
+        history_row={"run_id": str(run_id or "").strip(), "created_at": str(summary.get("started_at") or summary.get("finished_at") or _utc_now_iso()), "summary": summary, "report": report},
+    )
+
+
 def _benchmark_row_is_locomo(row: dict[str, Any]) -> bool:
     summary = dict((row or {}).get("summary") or {})
     report = dict((row or {}).get("report") or {})
@@ -2775,6 +2792,25 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         run_id = f"bench-{uuid.uuid4().hex[:10]}"
         started = _utc_now_iso()
         warnings = []
+        _update_benchmark_live_state(
+            run_id=run_id,
+            summary_patch={
+                "run_id": run_id,
+                "started_at": started,
+                "suite": suite_name,
+                "semantic_mode": semantic_mode_name,
+                "root_mode": root_mode,
+                "status": "running",
+                "phase": "starting",
+            },
+            report_patch={
+                "live": True,
+                "run_id": run_id,
+                "status": "running",
+                "phase": "starting",
+                "config": {"suite": suite_name, "root_mode": root_mode, "semantic_mode": semantic_mode_name},
+            },
+        )
         if suite_name == "locomo_mini":
             warnings.append("locomo_mini_preview_only")
         if legacy_mode:
@@ -2788,12 +2824,22 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             _copy_tree(Path(settings.core_memory_root), base_root)
         ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
+        _update_benchmark_live_state(
+            run_id=run_id,
+            summary_patch={"status": "running", "phase": "ingested", "turns_ingested": int(ingestion_meta.get("ingested_turns") or 0)},
+            report_patch={"status": "running", "phase": "ingested", "ingestion": dict(ingestion_meta or {})},
+        )
 
         resolved_answer_mode = str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm"))
         benchmark_embeddings_provider = _resolve_benchmark_embeddings_provider(embeddings_provider)
         benchmark_semantic_build: dict[str, Any] | None = None
         with semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
             benchmark_semantic_build = build_semantic_index(Path(base_root))
+            _update_benchmark_live_state(
+                run_id=run_id,
+                summary_patch={"status": "running", "phase": "semantic_built"},
+                report_patch={"status": "running", "phase": "semantic_built", "semantic_build": dict(benchmark_semantic_build or {})},
+            )
             retrieval_report = run_locomo_retrieval_suite(
                 root=str(base_root),
                 qa_cases=selected_cases,
@@ -2899,6 +2945,11 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "cases": cases_inline,
             "benchmark_table": benchmark_table,
         }
+        _update_benchmark_live_state(
+            run_id=run_id,
+            summary_patch={"status": "completed", **dict(summary or {})},
+            report_patch={"status": "completed", **dict(report or {})},
+        )
         artifacts = write_locomo_run_artifacts(
             run_id=run_id,
             summary=summary,
