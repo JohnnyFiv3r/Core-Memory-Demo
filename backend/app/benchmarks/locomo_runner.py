@@ -47,7 +47,7 @@ def _question_date_hints(question: str) -> set[str]:
     return hints
 
 
-def _score_locomo_row(*, question: str, sample_id: str, qa: dict[str, Any], row: dict[str, Any]) -> float:
+def _score_locomo_row(*, question: str, sample_id: str, row: dict[str, Any]) -> float:
     score = float(row.get("score") or 0.0)
     question_terms = _question_terms(question)
     speaker_hints = _question_speaker_hints(question)
@@ -63,28 +63,26 @@ def _score_locomo_row(*, question: str, sample_id: str, qa: dict[str, Any], row:
     ).lower()
     metadata_sample = str(row.get("sample_id") or "").strip().lower()
     if metadata_sample and metadata_sample == str(sample_id or "").strip().lower():
-        score += 5.0
+        score += 3.0
     for speaker in speaker_hints:
         if speaker and speaker in str(row.get("speaker") or "").strip().lower():
-            score += 2.5
+            score += 2.0
     for hint in date_hints:
         if hint and hint in text:
-            score += 2.0
+            score += 1.5
     overlap = sum(1 for tok in question_terms if tok in text)
-    score += min(3.0, overlap * 0.25)
-    evidence_ids = {str(x).strip() for x in (qa.get("evidence") or []) if str(x).strip()}
-    row_dia_ids = {str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip()}
-    if evidence_ids and row_dia_ids & evidence_ids:
-        score += 10.0
+    score += min(2.0, overlap * 0.2)
+    if str(row.get("source_surface") or "").strip().lower() in {"session_bead", "bead"}:
+        score += 0.25
     return score
 
 
-def _rerank_locomo_results(*, question: str, sample_id: str, qa: dict[str, Any], retrieved: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _rerank_locomo_results(*, question: str, sample_id: str, retrieved: list[dict[str, Any]]) -> list[dict[str, Any]]:
     scored = []
     for idx, row in enumerate(retrieved, start=1):
         item = dict(row or {})
         item["base_rank"] = idx
-        item["locomo_score"] = _score_locomo_row(question=question, sample_id=sample_id, qa=qa, row=item)
+        item["locomo_score"] = _score_locomo_row(question=question, sample_id=sample_id, row=item)
         scored.append(item)
     scored.sort(key=lambda row: (-float(row.get("locomo_score") or 0.0), int(row.get("base_rank") or 0)))
     for idx, row in enumerate(scored, start=1):
@@ -157,7 +155,6 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         retrieved = _rerank_locomo_results(
             question=str(qa.get("question") or ""),
             sample_id=sample_id,
-            qa=qa,
             retrieved=retrieved,
         )
         evidence = compute_evidence_recall(
