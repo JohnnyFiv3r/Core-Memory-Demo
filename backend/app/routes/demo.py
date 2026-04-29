@@ -616,11 +616,17 @@ async def benchmark_run(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
     suite = str((body or {}).get('suite') or '').strip().lower()
     subset = str((body or {}).get('subset') or 'local').strip().lower() or 'local'
+    source = str((body or {}).get('source') or '').strip().lower()
     if subset not in {'local', 'full'}:
         subset = 'local'
-    if suite not in {'fixture_smoke', 'locomo_qa', 'locomo_retrieval', 'locomo_mini'}:
-        suite = 'fixture_smoke'
     legacy_mode = not bool((body or {}).get('suite'))
+    valid_suites = {'fixture_smoke', 'locomo_qa', 'locomo_retrieval', 'locomo_mini'}
+    if source == 'locomo':
+        if suite not in {'locomo_qa', 'locomo_retrieval', 'locomo_mini'}:
+            suite = 'locomo_mini'
+        legacy_mode = False
+    elif suite not in valid_suites:
+        suite = 'fixture_smoke'
     if legacy_mode and subset == 'full':
         suite = 'locomo_qa'
     semantic_mode = str((body or {}).get('semantic_mode') or 'degraded_allowed').strip() or 'degraded_allowed'
