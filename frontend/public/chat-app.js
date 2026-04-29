@@ -26,6 +26,8 @@ let lastBenchmarkReport = null;
 let lastBenchmarkSummary = null;
 let lastBenchmarkHistory = [];
 let activeBenchmarkRunId = '';
+let benchmarkProgressMsgEl = null;
+let benchmarkProgressText = '';
 let selectedClaimSlot = null;
 let claimsAsOf = '';
 let claimsDetailOpen = false;
@@ -1060,6 +1062,31 @@ function addMsg(role, text, turnId) {
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
   return div;
+}
+
+function updateBenchmarkProgressMessage(summary, report) {
+  const s = summary || {};
+  const r = report || {};
+  const status = String(s.status || r.status || '').trim().toLowerCase();
+  const phase = String(s.phase || r.phase || '').trim().toLowerCase();
+  const runId = String(s.run_id || r.run_id || '').trim();
+  const turns = Number(s.turns_ingested || ((r.ingestion || {}).ingested_turns || 0) || 0);
+  if (status === 'running') {
+    const text = 'Benchmark in progress' + (runId ? (' (' + runId + ')') : '') + ' · phase=' + (phase || 'working') + (turns > 0 ? (' · turns=' + turns) : '');
+    if (!benchmarkProgressMsgEl) {
+      benchmarkProgressMsgEl = addMsg('system', text);
+    } else if (benchmarkProgressText !== text) {
+      benchmarkProgressMsgEl.textContent = text;
+    }
+    benchmarkProgressText = text;
+    return;
+  }
+  if (benchmarkProgressMsgEl) {
+    if (status === 'completed') benchmarkProgressMsgEl.textContent = 'Benchmark completed' + (runId ? (' (' + runId + ')') : '');
+    else if (status === 'failed' || status === 'error') benchmarkProgressMsgEl.textContent = 'Benchmark failed' + (runId ? (' (' + runId + ')') : '');
+    benchmarkProgressMsgEl = null;
+    benchmarkProgressText = '';
+  }
 }
 
 async function parseApiJsonResponse(res, label) {
@@ -3568,6 +3595,7 @@ async function refreshMemory() {
         // best effort only
       }
     }
+    updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
     renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
 
     document.getElementById('stat-beads').textContent = Number(statsCompat.total_beads || (mem.beads || []).length || 0);
@@ -3951,6 +3979,7 @@ async function runBenchmark() {
     lastBenchmarkSummary = data.summary || {};
     lastBenchmarkReport = data.report || null;
     activeBenchmarkRunId = String((data.summary || {}).run_id || '').trim();
+    updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
     try {
       const rh = await fetch('/api/demo/benchmark/history?limit=20');
       const jh = await rh.json();
@@ -3966,7 +3995,13 @@ async function runBenchmark() {
       }
     }, 15000);
   } catch (err) {
-    addMsg('system', 'Benchmark failed: ' + err.message);
+    if (benchmarkProgressMsgEl) {
+      benchmarkProgressMsgEl.textContent = 'Benchmark failed: ' + err.message;
+      benchmarkProgressMsgEl = null;
+      benchmarkProgressText = '';
+    } else {
+      addMsg('system', 'Benchmark failed: ' + err.message);
+    }
   } finally {
     btn.disabled = false;
     btn.textContent = prev;
