@@ -475,17 +475,25 @@ def _replay_locomo_row(row: dict[str, Any]) -> dict[str, Any]:
     if row.get("query") is not None:
         metadata["locomo_image_query"] = row.get("query")
 
-    process_turn_finalized(
-        root=settings.core_memory_root,
-        session_id=session_id,
-        turn_id=turn_id,
-        transaction_id=f"locomo-tx:{sample_id}:{dia_id}",
-        trace_id=f"locomo-tr:{sample_id}:{dia_id}",
-        user_query="[LoCoMo transcript replay]",
-        assistant_final=display,
-        origin="BENCHMARK_REPLAY",
-        metadata=metadata,
-    )
+    prev_gate_mode = os.environ.get("CORE_MEMORY_AGENT_AUTHORED_MODE")
+    try:
+        os.environ["CORE_MEMORY_AGENT_AUTHORED_MODE"] = "off"
+        process_turn_finalized(
+            root=settings.core_memory_root,
+            session_id=session_id,
+            turn_id=turn_id,
+            transaction_id=f"locomo-tx:{sample_id}:{dia_id}",
+            trace_id=f"locomo-tr:{sample_id}:{dia_id}",
+            user_query="[LoCoMo transcript replay]",
+            assistant_final=display,
+            origin="BENCHMARK_REPLAY",
+            metadata=metadata,
+        )
+    finally:
+        if prev_gate_mode is None:
+            os.environ.pop("CORE_MEMORY_AGENT_AUTHORED_MODE", None)
+        else:
+            os.environ["CORE_MEMORY_AGENT_AUTHORED_MODE"] = prev_gate_mode
     return {"ok": True, "session_id": session_id, "turn_id": turn_id, "dia_id": dia_id}
 
 
