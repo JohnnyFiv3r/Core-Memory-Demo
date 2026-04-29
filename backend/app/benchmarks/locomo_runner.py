@@ -47,10 +47,39 @@ def _question_date_hints(question: str) -> set[str]:
     return hints
 
 
+def _question_session_hints(question: str) -> set[int]:
+    hints: set[int] = set()
+    text = str(question or "")
+    for m in re.finditer(r"\bsession\s+(\d{1,2})\b", text, flags=re.IGNORECASE):
+        try:
+            hints.add(int(m.group(1)))
+        except Exception:
+            continue
+    return hints
+
+
+def _question_sequence_hints(question: str) -> set[str]:
+    text = str(question or "").lower()
+    hints: set[str] = set()
+    for marker in ["first", "last", "earlier", "later", "before", "after", "recent", "latest"]:
+        if marker in text:
+            hints.add(marker)
+    return hints
+
+
 def _build_locomo_facets(*, question: str, sample_id: str) -> dict[str, Any]:
     must_terms: list[str] = []
     seen: set[str] = set()
-    for value in [str(sample_id or "").strip(), *sorted(_question_speaker_hints(question)), *sorted(_question_date_hints(question))]:
+    session_hints = _question_session_hints(question)
+    sequence_hints = _question_sequence_hints(question)
+    values = [
+        str(sample_id or "").strip(),
+        *sorted(_question_speaker_hints(question)),
+        *sorted(_question_date_hints(question)),
+        *[f"session_index={idx}" for idx in sorted(session_hints)],
+        *sorted(sequence_hints),
+    ]
+    for value in values:
         term = str(value or "").strip()
         if not term:
             continue
@@ -61,7 +90,7 @@ def _build_locomo_facets(*, question: str, sample_id: str) -> dict[str, Any]:
         must_terms.append(term)
     return {
         "scope": "project",
-        "must_terms": must_terms[:6],
+        "must_terms": must_terms[:8],
     }
 
 
@@ -70,6 +99,8 @@ def _score_locomo_row(*, question: str, sample_id: str, row: dict[str, Any]) -> 
     question_terms = _question_terms(question)
     speaker_hints = _question_speaker_hints(question)
     date_hints = _question_date_hints(question)
+    session_hints = _question_session_hints(question)
+    sequence_hints = _question_sequence_hints(question)
     text = " ".join(
         [
             str(row.get("title") or ""),
@@ -88,6 +119,16 @@ def _score_locomo_row(*, question: str, sample_id: str, row: dict[str, Any]) -> 
     for hint in date_hints:
         if hint and hint in text:
             score += 1.5
+    if session_hints and int(row.get("session_index") or 0) in session_hints:
+        score += 1.5
+    if sequence_hints:
+        sidx = int(row.get("session_index") or 0)
+        if "first" in sequence_hints and sidx == 1:
+            score += 1.0
+        if any(x in sequence_hints for x in {"recent", "latest", "last", "later", "after"}) and sidx > 0:
+            score += min(1.0, sidx * 0.1)
+        if any(x in sequence_hints for x in {"earlier", "before"}) and sidx > 0:
+            score += max(0.0, 1.0 - min(1.0, sidx * 0.1))
     overlap = sum(1 for tok in question_terms if tok in text)
     score += min(2.0, overlap * 0.2)
     if str(row.get("source_surface") or "").strip().lower() in {"session_bead", "bead"}:
