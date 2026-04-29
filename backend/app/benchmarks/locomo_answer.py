@@ -8,8 +8,26 @@ from typing import Any
 from app.core.agent_runtime import run_agent_for_root
 
 
+def _support_strength(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
+    rows = [dict(r or {}) for r in (retrieved_context or [])]
+    if not rows:
+        return {"supported": False, "reason": "no_retrieval"}
+    top = rows[0]
+    top_text = str(top.get("text") or top.get("snippet") or "").strip()
+    top_score = float(top.get("locomo_score") or top.get("score") or 0.0)
+    used_dia_ids = [str(x).strip() for x in (top.get("dia_ids") or []) if str(x).strip()]
+    if not top_text:
+        return {"supported": False, "reason": "empty_top_text"}
+    if not used_dia_ids:
+        return {"supported": False, "reason": "missing_dia_ids"}
+    if top_score <= 0.0:
+        return {"supported": False, "reason": "non_positive_score"}
+    return {"supported": True, "reason": "top_hit_grounded"}
+
+
 def _extractive_answer(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
-    if not retrieved_context:
+    support = _support_strength(retrieved_context)
+    if not bool(support.get("supported")):
         return {
             "answer": "No information available",
             "used_dia_ids": [],
@@ -95,19 +113,51 @@ def _reconcile_used_dia_ids(*, used_dia_ids: list[str], retrieved_context: list[
     return []
 
 
-async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_id: str) -> dict[str, Any]:
+def _format_retrieved_context(retrieved_context: list[dict[str, Any]], *, limit: int = 5) -> str:
+    lines: list[str] = []
+    for idx, row in enumerate(list(retrieved_context or [])[: max(1, int(limit))], start=1):
+        item = dict(row or {})
+        dia_ids = ", ".join(str(x).strip() for x in (item.get("dia_ids") or []) if str(x).strip()) or "unknown"
+        speaker = str(item.get("speaker") or "").strip()
+        session_date_time = str(item.get("session_date_time") or "").strip()
+        text = str(item.get("text") or item.get("snippet") or "").strip()
+        score = float(item.get("locomo_score") or item.get("score") or 0.0)
+        lines.append(
+            f"[{idx}] dia_ids={dia_ids} speaker={speaker} session_date_time={session_date_time} score={score:.3f}\n{text}"
+        )
+    return "\n\n".join(lines).strip()
+
+
+async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_id: str, retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
+    support = _support_strength(retrieved_context)
+    if not bool(support.get("supported")):
+        return {
+            "answer": "No information available",
+            "used_dia_ids": [],
+            "confidence": "low",
+            "unsupported": True,
+        }
+    context_block = _format_retrieved_context(retrieved_context)
+    bounded_prompt = (
+        "Answer the question using only the retrieved evidence below. "
+        "Do not use outside memory beyond these retrieved rows. "
+        "If the evidence is insufficient or ambiguous, answer exactly 'No information available'.\n\n"
+        f"Question: {question}\n\n"
+        f"Retrieved evidence:\n{context_block}\n\n"
+        "Return strict JSON with keys: answer, used_dia_ids, confidence, unsupported. "
+        "Only cite dia_ids that appear in the retrieved evidence."
+    )
     out = await run_agent_for_root(
         root=root,
         session_id=f"locomo:{sample_id}",
-        message=question,
+        message=bounded_prompt,
         model_id=model_id,
         instruction_prefix=(
-            "You are answering a benchmark evaluation question through the normal demo agent path. "
-            "Use memory tools normally, stay grounded in stored memory, and answer concisely. "
-            "When possible, return strict JSON with keys: answer, used_dia_ids, confidence, unsupported. "
-            "If you cannot support an answer from memory, answer exactly 'No information available'."
+            "You are doing evidence-bounded answer synthesis. "
+            "Only answer from the supplied retrieved evidence block. "
+            "If support is weak or missing, abstain with 'No information available'."
         ),
-        metadata={"benchmark_answering": True, "sample_id": sample_id},
+        metadata={"benchmark_answering": True, "sample_id": sample_id, "bounded_evidence": True},
     )
     raw = str(out.get("assistant") or "").strip()
     return _normalize_answer_payload(raw)
@@ -136,7 +186,15 @@ def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str
         sample_id_value = str(sample_id or qa.get("sample_id") or "").strip()
         if not sample_id_value:
             raise RuntimeError("missing_sample_id")
-        out = asyncio.run(_llm_answer_async(root=root_path, sample_id=sample_id_value, question=str(qa.get("question") or ""), model_id=model_id))
+        out = asyncio.run(
+            _llm_answer_async(
+                root=root_path,
+                sample_id=sample_id_value,
+                question=str(qa.get("question") or ""),
+                model_id=model_id,
+                retrieved_context=retrieved_context,
+            )
+        )
         out["used_dia_ids"] = _reconcile_used_dia_ids(
             used_dia_ids=list(out.get("used_dia_ids") or []),
             retrieved_context=retrieved_context,
