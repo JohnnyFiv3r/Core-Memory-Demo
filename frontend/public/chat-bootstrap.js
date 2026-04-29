@@ -8,7 +8,7 @@
   const isHostedDemo = window.location.hostname === 'demo.usecorememory.com';
   const q = isHostedDemo ? '' : qRaw;
   const defaultApiBase = isHostedDemo ? '' : '';
-  const hostedDirectBase = isHostedDemo ? 'https://core-memory-demo.onrender.com' : '';
+  const hostedDirectBase = '';
   const apiBase = (q || (isHostedDemo ? defaultApiBase : s) || '').replace(/\/+$/, '');
   const apiOrigin = (() => {
     try { return apiBase ? new URL(apiBase, window.location.origin).origin : ''; } catch { return ''; }
@@ -138,10 +138,6 @@
               return nativeFetch(input, retryInit);
             })
             .catch(() => resp);
-        }
-        if (resp.status >= 500) {
-          const alt = tryHostedDirect();
-          if (alt) return alt;
         }
         return resp;
       })
