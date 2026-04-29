@@ -9,10 +9,12 @@ from app.benchmarks.locomo_scoring import compute_evidence_recall, score_answer
 try:
     from core_memory.integrations.api import inspect_bead
     from core_memory.retrieval.normalize import classify_intent
+    from core_memory.retrieval.pipeline.canonical import trace_request
     from core_memory.retrieval.tools import memory as memory_tools
 except Exception:  # pragma: no cover
     inspect_bead = None  # type: ignore
     classify_intent = None  # type: ignore
+    trace_request = None  # type: ignore
     memory_tools = None  # type: ignore
 
 
@@ -182,6 +184,53 @@ def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[st
     }
 
 
+def _expand_via_causal_trace(*, root: str, question: str, sample_id: str, anchors: list[dict[str, Any]], retrieval_k: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    if trace_request is None:
+        return list(anchors or []), {"used": False, "reason": "trace_unavailable", "chains": [], "grounding": {}}
+    anchor_ids = [str((row or {}).get("bead_id") or "").strip() for row in list(anchors or []) if str((row or {}).get("bead_id") or "").strip()]
+    if not anchor_ids:
+        return list(anchors or []), {"used": False, "reason": "no_anchor_ids", "chains": [], "grounding": {}}
+    trace = trace_request(
+        root=root,
+        query=question,
+        k=max(3, min(int(retrieval_k or 8), len(anchor_ids))),
+        constraints={"session_id": f"locomo:{sample_id}", "require_structural": False},
+        anchor_ids=anchor_ids[: max(3, int(retrieval_k or 8))],
+    )
+    merged: dict[str, dict[str, Any]] = {}
+    for idx, row in enumerate(list(anchors or []), start=1):
+        item = dict(row or {})
+        bead_id = str(item.get("bead_id") or "").strip() or f"anchor:{idx}"
+        item.setdefault("anchor_source", "search")
+        merged[bead_id] = item
+    trace_results = list(trace.get("results") or [])
+    for row in trace_results:
+        item = _extract_result_row(root=root, rank=0, row=dict(row or {}))
+        bead_id = str(item.get("bead_id") or "").strip()
+        if not bead_id:
+            continue
+        existing = dict(merged.get(bead_id) or {})
+        if existing:
+            item["locomo_score"] = max(float(existing.get("locomo_score") or 0.0), float(item.get("locomo_score") or item.get("score") or 0.0))
+            item["anchor_source"] = "search+trace"
+            if not item.get("dia_ids"):
+                item["dia_ids"] = list(existing.get("dia_ids") or [])
+            if not item.get("text"):
+                item["text"] = str(existing.get("text") or "")
+        else:
+            item["anchor_source"] = "trace"
+        merged[bead_id] = item
+    expanded = list(merged.values())
+    expanded = _rerank_locomo_results(question=question, sample_id=sample_id, retrieved=expanded)
+    return expanded, {
+        "used": True,
+        "anchor_ids": anchor_ids,
+        "chains": list(trace.get("chains") or []),
+        "grounding": dict(trace.get("grounding") or {}),
+        "warnings": list(trace.get("warnings") or []),
+    }
+
+
 def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, gold_context_map: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
     if memory_tools is None:
         return {
@@ -216,6 +265,13 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             question=question,
             sample_id=sample_id,
             retrieved=retrieved,
+        )
+        retrieved, trace_meta = _expand_via_causal_trace(
+            root=root,
+            question=question,
+            sample_id=sample_id,
+            anchors=retrieved[: max(3, int(retrieval_k or 8))],
+            retrieval_k=retrieval_k,
         )
         evidence = compute_evidence_recall(
             gold_evidence=list(qa.get("evidence") or []),
@@ -254,6 +310,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             "warnings": list(result.get("warnings") or []),
             "backend": str(result.get("backend") or "unknown"),
             "raw_result_count": len(raw_results),
+            "trace": trace_meta,
         }
     except Exception as exc:
         return {

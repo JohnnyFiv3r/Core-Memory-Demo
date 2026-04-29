@@ -44,9 +44,10 @@ class TestLocomoRunnerRetrieval(unittest.TestCase):
             },
         }
 
-        with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib:
+        with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib, patch("app.benchmarks.locomo_runner.trace_request") as tr:
             mt.execute.return_value = fake_execute
             ib.return_value = fake_bead
+            tr.return_value = {"results": [], "chains": [], "grounding": {}, "warnings": []}
             out = run_locomo_retrieval_case(root="/tmp/fake", sample_id="conv-1", qa=qa, retrieval_k=8)
 
         self.assertEqual("ok", out["status"])
@@ -69,9 +70,10 @@ class TestLocomoRunnerRetrieval(unittest.TestCase):
             "backend": "lexical",
         }
 
-        with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib:
+        with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib, patch("app.benchmarks.locomo_runner.trace_request") as tr:
             mt.execute.return_value = fake_execute
             ib.return_value = {}
+            tr.return_value = {"results": [], "chains": [], "grounding": {}, "warnings": []}
             run_locomo_retrieval_case(root="/tmp/fake", sample_id="conv-1", qa=qa, retrieval_k=8)
 
         req = mt.execute.call_args.args[0]
@@ -96,9 +98,10 @@ class TestLocomoRunnerRetrieval(unittest.TestCase):
             "backend": "lexical",
         }
 
-        with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib:
+        with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib, patch("app.benchmarks.locomo_runner.trace_request") as tr:
             mt.execute.return_value = fake_execute
             ib.return_value = {}
+            tr.return_value = {"results": [], "chains": [], "grounding": {}, "warnings": []}
             run_locomo_retrieval_case(root="/tmp/fake", sample_id="conv-1", qa=qa, retrieval_k=8)
 
         req = mt.execute.call_args.args[0]
@@ -163,9 +166,10 @@ class TestLocomoRunnerRetrieval(unittest.TestCase):
                 },
             }
 
-        with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib:
+        with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib, patch("app.benchmarks.locomo_runner.trace_request") as tr:
             mt.execute.return_value = fake_execute
             ib.side_effect = fake_inspect_bead
+            tr.return_value = {"results": [], "chains": [], "grounding": {}, "warnings": []}
             out = run_locomo_retrieval_case(root="/tmp/fake", sample_id="conv-1", qa=qa, retrieval_k=8)
 
         self.assertEqual("ok", out["status"])
@@ -173,6 +177,85 @@ class TestLocomoRunnerRetrieval(unittest.TestCase):
         self.assertEqual(["D1:3"], out["retrieved"][0]["dia_ids"])
         self.assertGreater(float(out["retrieved"][0].get("locomo_score") or 0.0), float(out["retrieved"][1].get("locomo_score") or 0.0))
         self.assertGreaterEqual(float(out["retrieved"][0].get("score") or 0.0), 0.0)
+
+    def test_retrieval_case_expands_with_causal_trace(self):
+        qa = {
+            "qa_id": "conv-1:q0004",
+            "question": "Why did Caroline leave the support group?",
+            "answer": "",
+            "category": 2,
+            "evidence": ["D1:3", "D1:4"],
+        }
+
+        fake_execute = {
+            "results": [
+                {
+                    "bead_id": "bead-anchor",
+                    "title": "Anchor",
+                    "snippet": "Caroline mentioned the support group",
+                    "score": 0.9,
+                    "source_surface": "session_bead",
+                }
+            ],
+            "warnings": [],
+            "backend": "lexical",
+        }
+
+        def fake_inspect_bead(*, root, bead_id):
+            if bead_id == "bead-trace":
+                return {
+                    "id": "bead-trace",
+                    "detail": "Caroline left because the group reminded her of a painful event",
+                    "source_turn_ids": ["D1:4"],
+                    "metadata": {
+                        "sample_id": "conv-1",
+                        "session_index": 1,
+                        "speaker": "Caroline",
+                        "session_date_time": "7 May 2023",
+                        "dia_id": "D1:4",
+                    },
+                }
+            return {
+                "id": "bead-anchor",
+                "detail": "Caroline mentioned the support group",
+                "source_turn_ids": ["D1:3"],
+                "metadata": {
+                    "sample_id": "conv-1",
+                    "session_index": 1,
+                    "speaker": "Caroline",
+                    "session_date_time": "7 May 2023",
+                    "dia_id": "D1:3",
+                },
+            }
+
+        fake_trace = {
+            "results": [
+                {
+                    "bead_id": "bead-trace",
+                    "title": "Cause bead",
+                    "snippet": "The group reminded her of a painful event",
+                    "score": 0.85,
+                    "source_surface": "session_bead",
+                }
+            ],
+            "chains": [{"path": [{"bead_id": "bead-anchor"}, {"bead_id": "bead-trace"}], "score": 0.8}],
+            "grounding": {"achieved": True, "level": "partial"},
+            "warnings": [],
+        }
+
+        with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib, patch("app.benchmarks.locomo_runner.trace_request") as tr:
+            mt.execute.return_value = fake_execute
+            ib.side_effect = fake_inspect_bead
+            tr.return_value = fake_trace
+            out = run_locomo_retrieval_case(root="/tmp/fake", sample_id="conv-1", qa=qa, retrieval_k=5)
+
+        self.assertEqual("ok", out["status"])
+        self.assertTrue(out["trace"]["used"])
+        self.assertEqual(["bead-anchor"], out["trace"]["anchor_ids"])
+        bead_ids = [str(r.get("bead_id") or "") for r in out["retrieved"]]
+        self.assertIn("bead-anchor", bead_ids)
+        self.assertIn("bead-trace", bead_ids)
+        self.assertTrue(out["trace"]["chains"])
 
 
 if __name__ == "__main__":
