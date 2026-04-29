@@ -2595,18 +2595,19 @@ def _benchmark_row_is_locomo(row: dict[str, Any]) -> bool:
 
 def get_last_benchmark_snapshot(*, history_limit: int = 20) -> dict[str, Any]:
     rows = read_benchmark_history(limit=max(1, int(history_limit)))
-    latest = dict(rows[0] or {}) if rows else {}
     locomo_latest = next((dict(r or {}) for r in rows if _benchmark_row_is_locomo(dict(r or {}))), {})
 
     summary = dict(LAST_BENCHMARK_SUMMARY or {})
     report = dict(LAST_BENCHMARK_REPORT or {})
 
-    if not summary:
-        preferred = locomo_latest or latest
-        summary = dict(preferred.get("summary") or {})
-    if not report:
-        preferred = locomo_latest or latest
-        report = dict(preferred.get("report") or {})
+    has_live_cache = bool(summary) and bool(report)
+    if not has_live_cache:
+        if locomo_latest:
+            summary = dict(locomo_latest.get("summary") or {})
+            report = dict(locomo_latest.get("report") or {})
+        else:
+            summary = {}
+            report = {}
 
     preferred_run_id = str((summary or {}).get("run_id") or "").strip()
     if preferred_run_id:
