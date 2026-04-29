@@ -3905,6 +3905,7 @@ async function runBenchmark() {
   const useLocomo = seedSource === 'locomo';
   const payload = {
     suite: subset,
+    source: seedSource,
     semantic_mode: semanticMode,
     vector_backend: 'local-faiss',
     myelination,
