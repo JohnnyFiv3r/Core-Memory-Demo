@@ -3893,9 +3893,31 @@ async function runBenchmark() {
   const myelination = document.getElementById('bench-myelination')?.value || 'off';
   const rootMode = document.getElementById('bench-root-mode')?.value || 'snapshot';
   const embeddingsProvider = document.getElementById('bench-embeddings-provider')?.value || 'hash';
+  const seedSource = document.getElementById('seed-source')?.value || 'story_pack';
   const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
   const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
   const preloadMax = Number.isFinite(preloadRaw) ? Math.max(0, Math.floor(preloadRaw)) : 200;
+  const locomoSampleMode = document.getElementById('locomo-sample-mode')?.value || 'single';
+  const locomoSampleId = String(document.getElementById('locomo-sample-id')?.value || '').trim();
+  const locomoMaxTurnsRaw = Number(document.getElementById('locomo-max-turns')?.value || 200);
+  const locomoMaxTurns = Number.isFinite(locomoMaxTurnsRaw) ? Math.max(1, Math.floor(locomoMaxTurnsRaw)) : 200;
+
+  const useLocomo = seedSource === 'locomo';
+  const payload = {
+    suite: subset,
+    semantic_mode: semanticMode,
+    vector_backend: 'local-faiss',
+    myelination,
+    root_mode: rootMode,
+    embeddings_provider: embeddingsProvider,
+    preload_from_demo: useLocomo ? false : preloadEnabled,
+    preload_turns_max: useLocomo ? 0 : preloadMax,
+  };
+  if (useLocomo) {
+    payload.sample_limit = locomoSampleMode === 'all' ? 10 : 1;
+    payload.qa_limit = subset === 'locomo_mini' ? 3 : locomoMaxTurns;
+    payload.sample_ids = locomoSampleMode === 'single' && locomoSampleId ? [locomoSampleId] : [];
+  }
 
   const prev = btn.textContent;
   btn.disabled = true;
@@ -3903,22 +3925,13 @@ async function runBenchmark() {
   addMsg(
     'system',
     'Running LOCOMO benchmark (' + subset + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
-      ', preload=' + (preloadEnabled ? preloadMax : 0) + ')...'
+      ', source=' + seedSource + ', preload=' + (useLocomo ? 0 : (preloadEnabled ? preloadMax : 0)) + ')...'
   );
   try {
     const res = await fetch('/api/benchmark-run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        suite: subset,
-        semantic_mode: semanticMode,
-        vector_backend: 'local-faiss',
-        myelination,
-        root_mode: rootMode,
-        embeddings_provider: embeddingsProvider,
-        preload_from_demo: preloadEnabled,
-        preload_turns_max: preloadMax,
-      }),
+      body: JSON.stringify(payload),
     });
     const data = await res.json();
     if (!res.ok || !data.ok) {
