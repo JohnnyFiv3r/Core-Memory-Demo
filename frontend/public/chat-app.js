@@ -4081,6 +4081,21 @@ async function runBenchmark() {
   btn.dataset.prevLabel = prev;
   btn.disabled = true;
   btn.textContent = 'Starting...';
+  const optimisticRunId = 'pending-' + Date.now().toString(36);
+  lastBenchmarkSummary = {
+    run_id: optimisticRunId,
+    suite: subset,
+    semantic_mode: semanticMode,
+    root_mode: rootMode,
+    status: 'running',
+    phase: 'starting',
+    samples: 0,
+    qa_cases: 0,
+    turns_ingested: 0,
+  };
+  lastBenchmarkReport = {live: true, run_id: optimisticRunId, status: 'running', phase: 'starting', config: {suite: subset, root_mode: rootMode, semantic_mode: semanticMode}};
+  renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+  updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
   addMsg(
     'system',
     'Starting LOCOMO benchmark (' + subset + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
