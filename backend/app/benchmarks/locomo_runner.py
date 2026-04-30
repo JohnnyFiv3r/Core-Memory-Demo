@@ -141,9 +141,11 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         }
 
 
-def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, gold_context_map: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
-    cases = [
-        run_locomo_retrieval_case(
+def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, gold_context_map: dict[str, dict[str, Any]] | None = None, progress: Any | None = None) -> dict[str, Any]:
+    cases = []
+    total = len(list(qa_cases or []))
+    for idx, case in enumerate(list(qa_cases or []), start=1):
+        result = run_locomo_retrieval_case(
             root=root,
             sample_id=str(case.get("sample_id") or ""),
             qa=dict(case or {}),
@@ -153,10 +155,15 @@ def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], ret
             generator_model=generator_model,
             gold_context_map=gold_context_map,
         )
-        for case in qa_cases
-    ]
+        cases.append(result)
+        if callable(progress):
+            try:
+                progress(idx, total, dict(case or {}), dict(result or {}))
+            except Exception:
+                pass
     return {
         "cases": cases,
         "completed": sum(1 for c in cases if c.get("status") == "ok"),
         "failed": sum(1 for c in cases if c.get("status") == "error"),
+        "total": total,
     }

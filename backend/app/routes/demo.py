@@ -254,8 +254,26 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
     ACTIVE_BENCHMARK_JOB_ID = job_id
     row['status'] = 'running'
     _benchmark_event(row, 'starting', 'Benchmark started')
+
+    def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
+        current = BENCHMARK_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        current['status'] = 'running'
+        current['updated_ms'] = _now_ms()
+        _benchmark_event(
+            current,
+            'retrieving',
+            f'QA {int(completed)}/{int(total)}',
+            qa_completed=int(completed),
+            qa_total=int(total),
+            sample_id=str((case or {}).get('sample_id') or ''),
+            qa_id=str((case or {}).get('qa_id') or ''),
+            case_status=str((result or {}).get('status') or ''),
+        )
+
     try:
-        out = await asyncio.to_thread(run_benchmark, **kwargs)
+        out = await asyncio.to_thread(run_benchmark, progress=progress, **kwargs)
         current = BENCHMARK_JOBS.get(job_id)
         if not isinstance(current, dict):
             return
@@ -569,6 +587,8 @@ def demo_control_state():
             'summary': dict(snapshot.get('summary') or {}),
             'report': dict(snapshot.get('report') or {}),
             'history': list(snapshot.get('history') or []),
+            'qa_completed': int(((benchmark_job or {}).get('events') or [{}])[-1].get('qa_completed') or 0) if benchmark_job else 0,
+            'qa_total': int(((benchmark_job or {}).get('events') or [{}])[-1].get('qa_total') or 0) if benchmark_job else 0,
         },
     }
 

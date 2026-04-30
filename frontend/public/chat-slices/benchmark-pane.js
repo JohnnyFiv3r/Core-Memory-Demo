@@ -41,6 +41,8 @@ function BenchmarkPane(props) {
   const runId = String((summary || {}).run_id || (report || {}).run_id || '').trim()
   const turnsIngested = Number((summary || {}).turns_ingested || (((report || {}).ingestion || {}).ingested_turns || 0) || 0)
   const qaCases = Number((summary || {}).qa_cases || 0)
+  const qaCompleted = Number((summary || {}).qa_completed || 0)
+  const activeSampleId = String((summary || {}).sample_id || '').trim()
   const isActiveRun = !!(runId && status !== 'completed' && status !== 'failed')
   const phaseProgressMap = {
     waiting_for_slot: 4,
@@ -310,7 +312,8 @@ function BenchmarkPane(props) {
             'phase=' + String(phase || 'working') +
               (summary.run_id ? (' · run_id=' + String(summary.run_id)) : '') +
               (turnsIngested > 0 ? (' · turns=' + String(turnsIngested)) : '') +
-              (qaCases > 0 ? (' · qa=' + String(qaCases)) : '')
+              (qaCases > 0 ? (' · qa=' + String(qaCompleted) + '/' + String(qaCases)) : '') +
+              (activeSampleId ? (' · sample=' + activeSampleId) : '')
           ),
           React.createElement(
             'div',
