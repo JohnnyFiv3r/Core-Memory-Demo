@@ -25,9 +25,6 @@ let firstMessage = true;
 let lastBenchmarkReport = null;
 let lastBenchmarkSummary = null;
 let lastBenchmarkHistory = [];
-let activeBenchmarkRunId = '';
-let benchmarkProgressMsgEl = null;
-let benchmarkProgressText = '';
 let selectedClaimSlot = null;
 let claimsAsOf = '';
 let claimsDetailOpen = false;
@@ -1062,31 +1059,6 @@ function addMsg(role, text, turnId) {
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
   return div;
-}
-
-function updateBenchmarkProgressMessage(summary, report) {
-  const s = summary || {};
-  const r = report || {};
-  const status = String(s.status || r.status || '').trim().toLowerCase();
-  const phase = String(s.phase || r.phase || '').trim().toLowerCase();
-  const runId = String(s.run_id || r.run_id || '').trim();
-  const turns = Number(s.turns_ingested || ((r.ingestion || {}).ingested_turns || 0) || 0);
-  if (status === 'running') {
-    const text = 'Benchmark in progress' + (runId ? (' (' + runId + ')') : '') + ' · phase=' + (phase || 'working') + (turns > 0 ? (' · turns=' + turns) : '');
-    if (!benchmarkProgressMsgEl) {
-      benchmarkProgressMsgEl = addMsg('system', text);
-    } else if (benchmarkProgressText !== text) {
-      benchmarkProgressMsgEl.textContent = text;
-    }
-    benchmarkProgressText = text;
-    return;
-  }
-  if (benchmarkProgressMsgEl) {
-    if (status === 'completed') benchmarkProgressMsgEl.textContent = 'Benchmark completed' + (runId ? (' (' + runId + ')') : '');
-    else if (status === 'failed' || status === 'error') benchmarkProgressMsgEl.textContent = 'Benchmark failed' + (runId ? (' (' + runId + ')') : '');
-    benchmarkProgressMsgEl = null;
-    benchmarkProgressText = '';
-  }
 }
 
 async function parseApiJsonResponse(res, label) {
@@ -3571,42 +3543,21 @@ async function refreshMemory() {
     renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {});
     renderRolling(mem.rolling_window || data.rolling_window || []);
 
-    const incomingBenchmarkSummary = (data.benchmark || {}).last_summary || null;
-    const incomingRunId = String((incomingBenchmarkSummary || {}).run_id || '').trim();
-    const currentRunId = String((lastBenchmarkSummary || {}).run_id || activeBenchmarkRunId || '').trim();
-    if (!currentRunId || (incomingRunId && incomingRunId === currentRunId)) {
-      lastBenchmarkSummary = incomingBenchmarkSummary || lastBenchmarkSummary;
-      lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
-    }
-    try {
-      const rb = await fetch('/api/demo/benchmark/last');
-      const jb = await parseApiJsonResponse(rb, 'benchmark-last');
-      if (jb && (jb.ok || jb.summary || jb.report)) {
-        const fetchedSummary = jb.summary || {};
-        const fetchedRunId = String(fetchedSummary.run_id || '').trim();
-        const fetchedStatus = String(fetchedSummary.status || '').trim().toLowerCase();
-        const fetchedHistory = arrayOr(jb.history, lastBenchmarkHistory);
-        if (jb.report) lastBenchmarkReport = jb.report;
-        if (fetchedStatus === 'running') {
-          lastBenchmarkSummary = fetchedSummary;
-          lastBenchmarkHistory = fetchedHistory;
-          if (fetchedRunId) activeBenchmarkRunId = fetchedRunId;
-        } else {
-          const pinnedRunId = String((lastBenchmarkSummary || {}).run_id || activeBenchmarkRunId || '').trim();
-          const sameRun = !pinnedRunId || !fetchedRunId || fetchedRunId === pinnedRunId;
-          if (sameRun && fetchedSummary && Object.keys(fetchedSummary).length) {
-            lastBenchmarkSummary = fetchedSummary;
-          }
-          lastBenchmarkHistory = fetchedHistory;
-          if (activeBenchmarkRunId && fetchedRunId && fetchedRunId === activeBenchmarkRunId && fetchedStatus && fetchedStatus !== 'running') {
-            activeBenchmarkRunId = '';
-          }
+    lastBenchmarkSummary = (data.benchmark || {}).last_summary || lastBenchmarkSummary;
+    lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
+    if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
+      try {
+        const rb = await fetch('/api/demo/benchmark/last');
+        const jb = await rb.json();
+        if (jb && jb.ok && jb.report) {
+          lastBenchmarkReport = jb.report;
+          if (jb.summary) lastBenchmarkSummary = jb.summary;
+          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
         }
+      } catch (_) {
+        // best effort only
       }
-    } catch (_) {
-      // best effort only
     }
-    updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
     renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
 
     document.getElementById('stat-beads').textContent = Number(statsCompat.total_beads || (mem.beads || []).length || 0);
@@ -3748,10 +3699,10 @@ async function seedMemory() {
         sample_id: locomoSampleMode === 'single' ? locomoSampleId : null,
         replay_mode: 'transcript_only',
         max_turns: locomoMaxTurns,
-        wait_for_idle: false,
-        idle_timeout_ms: 20000,
+        wait_for_idle: true,
+        idle_timeout_ms: 120000,
         idle_poll_ms: 250,
-        auto_flush: false,
+        auto_flush: true,
         flush_threshold_ratio: AUTO_FLUSH_THRESHOLD_PCT / 100,
       };
       const res = await fetch('/api/locomo/replay', {
@@ -3942,77 +3893,86 @@ async function runBenchmark() {
   const myelination = document.getElementById('bench-myelination')?.value || 'off';
   const rootMode = document.getElementById('bench-root-mode')?.value || 'snapshot';
   const embeddingsProvider = document.getElementById('bench-embeddings-provider')?.value || 'hash';
-  const seedSource = document.getElementById('seed-source')?.value || 'story_pack';
   const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
   const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
   const preloadMax = Number.isFinite(preloadRaw) ? Math.max(0, Math.floor(preloadRaw)) : 200;
-  const locomoSampleMode = document.getElementById('locomo-sample-mode')?.value || 'single';
-  const locomoSampleId = String(document.getElementById('locomo-sample-id')?.value || '').trim();
-  const locomoMaxTurnsRaw = Number(document.getElementById('locomo-max-turns')?.value || 200);
-  const locomoMaxTurns = Number.isFinite(locomoMaxTurnsRaw) ? Math.max(1, Math.floor(locomoMaxTurnsRaw)) : 200;
-
-  const useLocomo = seedSource === 'locomo';
-  const payload = {
-    suite: subset,
-    source: seedSource,
-    semantic_mode: semanticMode,
-    vector_backend: 'local-faiss',
-    myelination,
-    root_mode: rootMode,
-    embeddings_provider: embeddingsProvider,
-    preload_from_demo: useLocomo ? false : preloadEnabled,
-    preload_turns_max: useLocomo ? 0 : preloadMax,
-  };
-  if (useLocomo) {
-    payload.sample_limit = locomoSampleMode === 'all' ? 10 : 1;
-    payload.qa_limit = subset === 'locomo_mini' ? 3 : locomoMaxTurns;
-    payload.sample_ids = locomoSampleMode === 'single' && locomoSampleId ? [locomoSampleId] : [];
-  }
 
   const prev = btn.textContent;
   btn.disabled = true;
-  btn.textContent = 'Running...';
+  btn.textContent = 'Starting...';
   addMsg(
     'system',
-    'Running LOCOMO benchmark (' + subset + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
-      ', source=' + seedSource + ', preload=' + (useLocomo ? 0 : (preloadEnabled ? preloadMax : 0)) + ')...'
+    'Starting LOCOMO benchmark (' + subset + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
+      ', preload=' + (preloadEnabled ? preloadMax : 0) + ')...'
   );
   try {
     const res = await fetch('/api/benchmark-run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify(payload),
+      body: JSON.stringify({
+        suite: subset,
+        semantic_mode: semanticMode,
+        vector_backend: 'local-faiss',
+        myelination,
+        root_mode: rootMode,
+        embeddings_provider: embeddingsProvider,
+        preload_from_demo: preloadEnabled,
+        preload_turns_max: preloadMax,
+      }),
     });
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
+    const data = await parseApiJsonResponse(res, 'benchmark-run');
+    if (!res.ok || !data.ok || !data.job_id) {
       throw new Error(data.error || ('HTTP ' + res.status));
     }
-    lastBenchmarkSummary = data.summary || {};
-    lastBenchmarkReport = data.report || null;
-    activeBenchmarkRunId = String((data.summary || {}).run_id || '').trim();
-    updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
-    try {
-      const rh = await fetch('/api/demo/benchmark/history?limit=20');
-      const jh = await rh.json();
-      if (jh && jh.ok) lastBenchmarkHistory = arrayOr(jh.history, lastBenchmarkHistory);
-    } catch (_) {
-      // best effort only
-    }
-    renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
-    addMsg('system', formatBenchmarkSummary(data.summary || {}));
-    setTimeout(() => {
-      if (String(activeBenchmarkRunId || '').trim() === String((lastBenchmarkSummary || {}).run_id || '').trim()) {
-        activeBenchmarkRunId = '';
+    const jobId = String(data.job_id || '').trim();
+    let cursor = 0;
+    let done = false;
+    while (!done) {
+      const jr = await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobId) + '?cursor=' + encodeURIComponent(String(cursor)));
+      const job = await parseApiJsonResponse(jr, 'benchmark-job');
+      const events = Array.isArray(job.events) ? job.events : [];
+      if (events.length) cursor = Number(job.cursor_next || cursor || 0);
+      for (const evt of events) {
+        if (String(evt.stage || '') === 'failed') {
+          addMsg('system', 'Benchmark failed: ' + String(evt.error || evt.message || 'benchmark_failed'));
+        }
       }
-    }, 15000);
-  } catch (err) {
-    if (benchmarkProgressMsgEl) {
-      benchmarkProgressMsgEl.textContent = 'Benchmark failed: ' + err.message;
-      benchmarkProgressMsgEl = null;
-      benchmarkProgressText = '';
-    } else {
-      addMsg('system', 'Benchmark failed: ' + err.message);
+      try {
+        const rb = await fetch('/api/demo/benchmark/last');
+        const jb = await parseApiJsonResponse(rb, 'benchmark-last');
+        if (jb && jb.summary) {
+          lastBenchmarkSummary = jb.summary || lastBenchmarkSummary;
+          lastBenchmarkReport = jb.report || lastBenchmarkReport;
+          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
+          updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
+          renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+        }
+      } catch (_) {
+        // best effort only
+      }
+      done = !!job.done;
+      if (!done) {
+        btn.textContent = 'Running...';
+        await new Promise(resolve => setTimeout(resolve, Math.max(500, Number(job.poll_after_ms || 1200))));
+      } else if (job.result && job.result.ok) {
+        const result = job.result || {};
+        lastBenchmarkSummary = result.summary || lastBenchmarkSummary;
+        lastBenchmarkReport = result.report || lastBenchmarkReport;
+        try {
+          const rh = await fetch('/api/demo/benchmark/history?limit=20');
+          const jh = await parseApiJsonResponse(rh, 'benchmark-history');
+          if (jh && jh.ok) lastBenchmarkHistory = arrayOr(jh.history, lastBenchmarkHistory);
+        } catch (_) {
+          // best effort only
+        }
+        renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+        addMsg('system', formatBenchmarkSummary(lastBenchmarkSummary || {}));
+      } else if (job.error) {
+        throw new Error(job.error || 'benchmark_failed');
+      }
     }
+  } catch (err) {
+    addMsg('system', 'Benchmark failed: ' + err.message);
   } finally {
     btn.disabled = false;
     btn.textContent = prev;
