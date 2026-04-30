@@ -3767,9 +3767,27 @@ function closeModal() {
   document.getElementById('modal').classList.remove('open');
 }
 
-function updateBenchmarkButtonGate() {
+function syncBenchmarkButton(summary) {
   const btn = document.getElementById('btn-benchmark');
   if (!btn) return;
+  const s = summary || {};
+  const status = String(s.status || '').trim().toLowerCase();
+  const phase = String(s.phase || '').trim().toLowerCase();
+  const qaTotal = Number(s.qa_cases || 0);
+  const qaDone = Number(s.qa_completed || 0);
+  if (status === 'running' || status === 'queued' || status === 'waiting_for_slot') {
+    btn.disabled = true;
+    if (qaTotal > 0) {
+      btn.textContent = 'QA ' + qaDone + '/' + qaTotal;
+    } else if (phase === 'waiting_for_slot' || phase === 'queued') {
+      btn.textContent = 'Queued...';
+    } else if (phase) {
+      btn.textContent = phase.replace(/_/g, ' ') + '...';
+    } else {
+      btn.textContent = 'Running...';
+    }
+    return;
+  }
   const blocked = !!(seedStatusState && seedStatusState.active);
   btn.disabled = blocked;
   btn.title = blocked ? ('Waiting for seeding to finish' + (seedStatusState.kind ? (' (' + seedStatusState.kind + ')') : '')) : '';
@@ -3778,7 +3796,13 @@ function updateBenchmarkButtonGate() {
     btn.textContent = 'Waiting for Seed...';
   } else if (btn.textContent === 'Waiting for Seed...') {
     btn.textContent = btn.dataset.prevLabel || 'Run LOCOMO Test';
+  } else if (btn.textContent !== 'Run LOCOMO Test') {
+    btn.textContent = 'Run LOCOMO Test';
   }
+}
+
+function updateBenchmarkButtonGate() {
+  syncBenchmarkButton(lastBenchmarkSummary || {});
 }
 
 async function refreshSeedStatus() {
@@ -3798,6 +3822,7 @@ async function refreshSeedStatus() {
       if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
       if (bench.history) lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
       updateBenchmarkButtonGate();
+      syncBenchmarkButton(lastBenchmarkSummary || {});
       return;
     }
   } catch (_) {
