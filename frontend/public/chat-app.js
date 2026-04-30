@@ -3977,23 +3977,79 @@ async function runBenchmark() {
         preload_turns_max: preloadMax,
       }),
     });
-    const data = await res.json();
-    if (!res.ok || !data.ok) {
+    const data = await parseApiJsonResponse(res, 'benchmark-run');
+    if (!res.ok || !data.ok || !data.job_id) {
       throw new Error(data.error || ('HTTP ' + res.status));
     }
-    lastBenchmarkSummary = data.summary || {};
-    lastBenchmarkReport = data.report || null;
-    try {
-      const rh = await fetch('/api/demo/benchmark/history?limit=20');
-      const jh = await rh.json();
-      if (jh && jh.ok) lastBenchmarkHistory = arrayOr(jh.history, lastBenchmarkHistory);
-    } catch (_) {
-      // best effort only
+    const jobId = String(data.job_id || '').trim();
+    let cursor = 0;
+    let done = false;
+    while (!done) {
+      const jr = await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobId) + '?cursor=' + encodeURIComponent(String(cursor)));
+      const job = await parseApiJsonResponse(jr, 'benchmark-job');
+      const events = Array.isArray(job.events) ? job.events : [];
+      if (events.length) cursor = Number(job.cursor_next || cursor || 0);
+      for (const evt of events) {
+        const stage = String(evt.stage || '').trim().toLowerCase();
+        if (Number(evt.qa_total || 0) > 0) {
+          lastBenchmarkSummary = {
+            ...(lastBenchmarkSummary || {}),
+            status: 'running',
+            phase: stage || 'retrieving',
+            qa_cases: Number(evt.qa_total || (lastBenchmarkSummary || {}).qa_cases || 0),
+            qa_completed: Number(evt.qa_completed || 0),
+            sample_id: String(evt.sample_id || ''),
+          };
+          updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
+          renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+        }
+        if (stage === 'failed') {
+          addMsg('system', 'Benchmark failed: ' + String(evt.error || evt.message || 'benchmark_failed'));
+        } else if (stage === 'abandoned') {
+          lastBenchmarkSummary = {};
+          lastBenchmarkReport = null;
+          renderBenchmark({}, null, {history: lastBenchmarkHistory});
+          updateBenchmarkProgressMessage({}, null);
+          addMsg('system', 'Benchmark attempt was abandoned in favor of a newer run.');
+        }
+      }
+      try {
+        const rb = await fetch('/api/demo/benchmark/last');
+        const jb = await parseApiJsonResponse(rb, 'benchmark-last');
+        if (jb && jb.summary) {
+          lastBenchmarkSummary = jb.summary || lastBenchmarkSummary;
+          lastBenchmarkReport = jb.report || lastBenchmarkReport;
+          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
+          updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
+          renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+        }
+      } catch (_) {
+        // best effort only
+      }
+      done = !!job.done;
+      if (!done) {
+        btn.textContent = 'Running...';
+        await new Promise(resolve => setTimeout(resolve, Math.max(500, Number(job.poll_after_ms || 1200))));
+      } else if (job.result && job.result.ok) {
+        const result = job.result || {};
+        lastBenchmarkSummary = result.summary || lastBenchmarkSummary;
+        lastBenchmarkReport = result.report || lastBenchmarkReport;
+        try {
+          const rh = await fetch('/api/demo/benchmark/history?limit=20');
+          const jh = await parseApiJsonResponse(rh, 'benchmark-history');
+          if (jh && jh.ok) lastBenchmarkHistory = arrayOr(jh.history, lastBenchmarkHistory);
+        } catch (_) {
+          // best effort only
+        }
+        renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+        addMsg('system', formatBenchmarkSummary(lastBenchmarkSummary || {}));
+      } else if (job.error) {
+        throw new Error(job.error || 'benchmark_failed');
+      }
     }
-    renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
-    addMsg('system', formatBenchmarkSummary(data.summary || {}));
   } catch (err) {
-    addMsg('system', 'Benchmark failed: ' + err.message);
+    const msg = String((err && err.message) || err || 'benchmark_failed');
+    addMsg('system', 'Benchmark failed: ' + msg);
   } finally {
     btn.disabled = false;
     btn.textContent = prev;
