@@ -3356,12 +3356,18 @@ function renderBenchmarkFallback(summary, report, benchmarkMeta) {
     keyLines.backendModes +
     keyLines.warnings +
     cmpLine +
-    '<div style="margin-top:6px"><button class="btn" id="btn-bench-raw">Open raw JSON</button></div>';
+    '<div style="margin-top:6px"><a class="btn" id="btn-bench-raw" download>Download raw JSON</a></div>';
   const rawBtn = meta.querySelector('#btn-bench-raw');
   if (rawBtn) {
-    rawBtn.addEventListener('click', () => {
-      openJsonModal('LOCOMO Benchmark Report (raw JSON)', report || {});
-    });
+    const downloadUrl = String(((report || {}).artifact_download_url) || ((summary || {}).artifact_download_url) || '');
+    if (downloadUrl) {
+      rawBtn.setAttribute('href', downloadUrl);
+    } else {
+      rawBtn.removeAttribute('href');
+      rawBtn.addEventListener('click', () => {
+        openJsonModal('LOCOMO Benchmark Report (raw JSON)', report || {});
+      });
+    }
   }
 
   const r = report || null;

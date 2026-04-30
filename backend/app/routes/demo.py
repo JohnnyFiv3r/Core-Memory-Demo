@@ -5,8 +5,10 @@ import time
 import uuid
 from typing import Any
 
+from pathlib import Path
+
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import FileResponse, JSONResponse
 
 from app.benchmarks.locomo_loader import LocomoLoaderError
 from app.benchmarks.locomo_suite import build_locomo_suite_metadata
@@ -828,6 +830,23 @@ def benchmark_last():
         'history': history,
         'latest_compare': latest_compare,
     }
+
+
+@router.get('/demo/benchmark/artifact/{run_id}/{filename}')
+def benchmark_artifact_download(run_id: str, filename: str):
+    allowed = {'report.json', 'summary.json', 'config.json', 'dataset_meta.json', 'ingestion_meta.json', 'cases.jsonl', 'failures.jsonl'}
+    name = str(filename or '').strip()
+    if name not in allowed:
+        raise HTTPException(status_code=404, detail='artifact_not_found')
+    safe_run_id = ''.join(ch for ch in str(run_id or '') if ch.isalnum() or ch in {'-', '_'})
+    if not safe_run_id:
+        raise HTTPException(status_code=404, detail='artifact_not_found')
+    root = Path(settings.core_memory_demo_artifacts_root) / 'locomo-runs' / safe_run_id
+    path = root / name
+    if not path.exists() or not path.is_file():
+        raise HTTPException(status_code=404, detail='artifact_not_found')
+    media_type = 'application/json' if name.endswith('.json') else 'application/x-ndjson'
+    return FileResponse(path=str(path), filename=f'{safe_run_id}-{name}', media_type=media_type)
 
 
 @router.get('/demo/benchmark/history')
