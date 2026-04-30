@@ -2880,6 +2880,11 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 summary_patch={"status": "running", "phase": "semantic_built"},
                 report_patch={"status": "running", "phase": "semantic_built", "semantic_build": dict(benchmark_semantic_build or {})},
             )
+            _update_benchmark_live_state(
+                run_id=run_id,
+                summary_patch={"status": "running", "phase": "retrieving"},
+                report_patch={"status": "running", "phase": "retrieving"},
+            )
             retrieval_report = run_locomo_retrieval_suite(
                 root=str(base_root),
                 qa_cases=selected_cases,
@@ -2889,6 +2894,11 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 generator_model=generator_model,
                 gold_context_map=gold_context_map,
             )
+        _update_benchmark_live_state(
+            run_id=run_id,
+            summary_patch={"status": "running", "phase": "scoring"},
+            report_patch={"status": "running", "phase": "scoring", "retrieval": {"completed": int(retrieval_report.get("completed") or 0), "failed": int(retrieval_report.get("failed") or 0)}},
+        )
         score_summary = aggregate_case_scores(list(retrieval_report.get("cases") or []))
 
         finished_at = _utc_now_iso()
@@ -2987,8 +2997,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         }
         _update_benchmark_live_state(
             run_id=run_id,
-            summary_patch={"status": "completed", **dict(summary or {})},
-            report_patch={"status": "completed", **dict(report or {})},
+            summary_patch={"status": "running", "phase": "writing_artifacts", **dict(summary or {})},
+            report_patch={"status": "running", "phase": "writing_artifacts", **dict(report or {})},
         )
         artifacts = write_locomo_run_artifacts(
             run_id=run_id,
@@ -3007,6 +3017,11 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "summary": dict(summary),
             "report": dict(report),
         }
+        _update_benchmark_live_state(
+            run_id=run_id,
+            summary_patch={"status": "completed", **dict(summary or {})},
+            report_patch={"status": "completed", **dict(report or {})},
+        )
         _set_last_benchmark_cache(summary=summary, report=report, history_row=history_row)
         _append_history(history_row)
         _prune_benchmark_run_dirs()

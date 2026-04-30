@@ -37,6 +37,7 @@ from app.core.runtime import (
     seed_demo_history,
     set_demo_model_override,
     suggest_entity_merges,
+    _update_benchmark_live_state,
 )
 
 public_router = APIRouter(prefix='/api', tags=['demo-public'])
@@ -187,6 +188,18 @@ async def _run_benchmark_job(job_id: str, request: Request, kwargs: dict[str, An
         current['done'] = True
         current['error'] = str(exc or 'benchmark_failed')
         current['updated_ms'] = _now_ms()
+        try:
+            snap = get_last_benchmark_snapshot(history_limit=20)
+            summary = dict(snap.get('summary') or {})
+            run_id = str(summary.get('run_id') or '').strip()
+            if run_id and str(summary.get('status') or '').strip().lower() == 'running':
+                _update_benchmark_live_state(
+                    run_id=run_id,
+                    summary_patch={'status': 'failed', 'phase': 'failed', 'error': str(exc or 'benchmark_failed')},
+                    report_patch={'status': 'failed', 'phase': 'failed', 'error': str(exc or 'benchmark_failed')},
+                )
+        except Exception:
+            pass
         _chat_event(current, 'failed', 'Benchmark failed', error=str(exc or 'benchmark_failed'))
 
 
