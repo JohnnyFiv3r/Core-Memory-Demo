@@ -28,6 +28,7 @@ let lastBenchmarkHistory = [];
 let selectedClaimSlot = null;
 let claimsAsOf = '';
 let claimsDetailOpen = false;
+let seedStatusState = {active: false, kind: '', status: 'idle', message: ''};
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
@@ -3636,6 +3637,62 @@ function openJsonModal(title, payload) {
 
 function closeModal() {
   document.getElementById('modal').classList.remove('open');
+}
+
+function updateBenchmarkButtonGate() {
+  const btn = document.getElementById('btn-benchmark');
+  if (!btn) return;
+  const blocked = !!(seedStatusState && seedStatusState.active);
+  btn.disabled = blocked;
+  btn.title = blocked ? ('Waiting for seeding to finish' + (seedStatusState.kind ? (' (' + seedStatusState.kind + ')') : '')) : '';
+  if (blocked) {
+    btn.dataset.prevLabel = btn.dataset.prevLabel || btn.textContent || 'Run LOCOMO Test';
+    btn.textContent = 'Waiting for Seed...';
+  } else if (btn.textContent === 'Waiting for Seed...') {
+    btn.textContent = btn.dataset.prevLabel || 'Run LOCOMO Test';
+  }
+}
+
+async function refreshSeedStatus() {
+  try {
+    const controlRes = await fetch('/api/demo/control-state');
+    if (controlRes.ok) {
+      const control = await parseApiJsonResponse(controlRes, 'control-state');
+      const seed = control.seed || {};
+      seedStatusState = {
+        active: !!seed.active,
+        kind: String(seed.kind || ''),
+        status: String(seed.status || 'idle'),
+        message: String(seed.message || ''),
+      };
+      const bench = control.benchmark || {};
+      if (bench.summary) lastBenchmarkSummary = bench.summary || lastBenchmarkSummary;
+      if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
+      if (bench.history) lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
+      updateBenchmarkButtonGate();
+      return;
+    }
+  } catch (_) {
+    // fallback below
+  }
+  try {
+    const res = await fetch('/api/demo/seed-status');
+    if (res.status === 404) {
+      seedStatusState = {active: false, kind: '', status: 'idle', message: ''};
+      updateBenchmarkButtonGate();
+      return;
+    }
+    const data = await parseApiJsonResponse(res, 'seed-status');
+    seedStatusState = {
+      active: !!data.active,
+      kind: String(data.kind || ''),
+      status: String(data.status || 'idle'),
+      message: String(data.message || ''),
+    };
+  } catch (_) {
+    // keep last known status
+  }
+  updateBenchmarkButtonGate();
 }
 
 async function seedMemory() {

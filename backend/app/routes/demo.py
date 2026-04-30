@@ -484,6 +484,26 @@ def locomo_debug():
     return {'ok': True, 'debug': debug}
 
 
+@router.get('/demo/control-state')
+def demo_control_state():
+    _prune_benchmark_jobs()
+    active_job = BENCHMARK_JOBS.get(str(ACTIVE_BENCHMARK_JOB_ID or '').strip()) if ACTIVE_BENCHMARK_JOB_ID else None
+    benchmark_job = _benchmark_job_payload(active_job, cursor=0) if isinstance(active_job, dict) else None
+    snapshot = get_last_benchmark_snapshot(history_limit=5)
+    return {
+        'ok': True,
+        'seed': dict(SEED_STATUS),
+        'benchmark': {
+            'active_job_id': str(ACTIVE_BENCHMARK_JOB_ID or ''),
+            'active': bool(isinstance(active_job, dict) and not bool(active_job.get('done'))),
+            'job': benchmark_job,
+            'summary': dict(snapshot.get('summary') or {}),
+            'report': dict(snapshot.get('report') or {}),
+            'history': list(snapshot.get('history') or []),
+        },
+    }
+
+
 @router.post('/locomo/replay')
 async def locomo_replay(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
