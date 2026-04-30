@@ -3619,6 +3619,36 @@ async function refreshMemory() {
       // keep inspect-only fallback
     }
 
+    renderBeads(mem.beads || data.beads || []);
+    renderAssociations(mem.associations || data.associations || []);
+    renderClaims(claims.slots || data.claim_state || [], claims);
+    renderEntities(entities);
+    renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {});
+    renderRolling(mem.rolling_window || data.rolling_window || []);
+
+    lastBenchmarkSummary = (data.benchmark || {}).last_summary || lastBenchmarkSummary;
+    lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
+    if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
+      try {
+        const rb = await fetch('/api/demo/benchmark/last');
+        const jb = await rb.json();
+        if (jb && jb.ok && jb.report) {
+          lastBenchmarkReport = jb.report;
+          if (jb.summary) lastBenchmarkSummary = jb.summary;
+          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
+        }
+      } catch (_) {
+        // best effort only
+      }
+    }
+    renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
+    syncBenchmarkButton(lastBenchmarkSummary || {});
+
+    document.getElementById('stat-beads').textContent = Number(statsCompat.total_beads || (mem.beads || []).length || 0);
+    document.getElementById('stat-assoc').textContent = Number(statsCompat.total_associations || (mem.associations || []).length || 0);
+    document.getElementById('stat-claims').textContent = Number(statsCompat.claim_slot_count || (claims.slots || []).length || 0);
+    document.getElementById('stat-entities').textContent = Number(statsCompat.entity_count || (entities.rows || []).length || 0);
+    document.getElementById('stat-rolling').textContent = Number(statsCompat.rolling_window_size || (mem.rolling_window || []).length || 0);
     const usage = Number(sess.token_usage ?? statsCompat.token_usage ?? 0);
     const budget = Number(sess.context_budget ?? statsCompat.context_budget ?? 128000);
     const rollingWindowTokens = Number(
@@ -4004,6 +4034,31 @@ async function flushSession() {
   }
 }
 
+function syncBenchmarkButton(summary) {
+  const btn = document.getElementById('btn-benchmark');
+  if (!btn) return;
+  const s = summary || {};
+  const status = String(s.status || '').trim().toLowerCase();
+  const phase = String(s.phase || '').trim().toLowerCase();
+  const qaTotal = Number(s.qa_cases || 0);
+  const qaDone = Number(s.qa_completed || 0);
+  if (status === 'running' || status === 'queued' || status === 'waiting_for_slot') {
+    btn.disabled = true;
+    if (qaTotal > 0) {
+      btn.textContent = 'QA ' + qaDone + '/' + qaTotal;
+    } else if (phase === 'waiting_for_slot' || phase === 'queued') {
+      btn.textContent = 'Queued...';
+    } else if (phase) {
+      btn.textContent = phase.replace(/_/g, ' ') + '...';
+    } else {
+      btn.textContent = 'Running...';
+    }
+    return;
+  }
+  btn.disabled = false;
+  if (btn.textContent !== 'Run LOCOMO Test') btn.textContent = 'Run LOCOMO Test';
+}
+
 function formatBenchmarkSummary(s) {
   if (!s) return 'Benchmark completed.';
   const warns = benchmarkWarnCount(s.warnings);
@@ -4161,13 +4216,14 @@ async function runBenchmark() {
           lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
           updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
           renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+          syncBenchmarkButton(lastBenchmarkSummary || {});
         }
       } catch (_) {
         // best effort only
       }
       done = !!job.done;
       if (!done) {
-        btn.textContent = 'Running...';
+        syncBenchmarkButton(lastBenchmarkSummary || {});
         await new Promise(resolve => setTimeout(resolve, Math.max(500, Number(job.poll_after_ms || 1200))));
       } else if (job.result && job.result.ok) {
         const result = job.result || {};
@@ -4181,6 +4237,7 @@ async function runBenchmark() {
           // best effort only
         }
         renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+        syncBenchmarkButton(lastBenchmarkSummary || {});
         addMsg('system', formatBenchmarkSummary(lastBenchmarkSummary || {}));
       } else if (job.error) {
         throw new Error(job.error || 'benchmark_failed');
@@ -4199,8 +4256,7 @@ async function runBenchmark() {
       addMsg('system', 'Benchmark failed: ' + msg);
     }
   } finally {
-    btn.disabled = false;
-    btn.textContent = prev;
+    syncBenchmarkButton(lastBenchmarkSummary || {});
   }
 }
 
