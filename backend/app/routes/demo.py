@@ -50,6 +50,13 @@ BENCHMARK_JOB_POLL_MS = 1200
 BENCHMARK_JOB_MAX_EVENTS = 128
 BENCHMARK_JOBS: dict[str, dict[str, Any]] = {}
 ACTIVE_BENCHMARK_JOB_ID: str | None = None
+SEED_STATUS: dict[str, Any] = {
+    'active': False,
+    'kind': '',
+    'status': 'idle',
+    'updated_ms': 0,
+    'message': '',
+}
 
 
 def _now_ms() -> int:
@@ -275,6 +282,14 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
     finally:
         if ACTIVE_BENCHMARK_JOB_ID == job_id:
             ACTIVE_BENCHMARK_JOB_ID = None
+
+
+def _set_seed_status(*, active: bool, kind: str = '', status: str = '', message: str = '') -> None:
+    SEED_STATUS['active'] = bool(active)
+    SEED_STATUS['kind'] = str(kind or '')
+    SEED_STATUS['status'] = str(status or ('running' if active else 'idle'))
+    SEED_STATUS['updated_ms'] = _now_ms()
+    SEED_STATUS['message'] = str(message or '')
 
 
 def _http_exc_response(exc: HTTPException) -> JSONResponse:
@@ -533,6 +548,11 @@ def locomo_meta():
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
+@router.get('/demo/seed-status')
+def demo_seed_status():
+    return {'ok': True, **dict(SEED_STATUS)}
+
+
 @router.post('/locomo/replay')
 async def locomo_replay(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
@@ -556,7 +576,8 @@ async def locomo_replay(request: Request):
     start_session = int(start_session_raw) if isinstance(start_session_raw, (int, float)) and int(start_session_raw) > 0 else None
     max_sessions = int(max_sessions_raw) if isinstance(max_sessions_raw, (int, float)) and int(max_sessions_raw) > 0 else None
     try:
-        return await replay_locomo_corpus(
+        _set_seed_status(active=True, kind='locomo', status='running', message='LoCoMo replay in progress')
+        out = await replay_locomo_corpus(
             sample_mode=sample_mode,
             sample_id=str(sample_id).strip() if sample_id is not None else None,
             replay_mode=replay_mode,
@@ -573,11 +594,16 @@ async def locomo_replay(request: Request):
             max_side_effects_per_pass=max_side_effects_per_pass,
             reset_session=reset_session,
         )
+        _set_seed_status(active=False, kind='locomo', status='completed' if bool((out or {}).get('ok')) else 'failed', message=str((out or {}).get('error') or 'LoCoMo replay complete'))
+        return out
     except FileNotFoundError as exc:
+        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=404)
     except ValueError as exc:
+        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=400)
     except Exception as exc:
+        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
@@ -628,6 +654,7 @@ async def story_pack_replay(request: Request):
         benchmark_limit = min(benchmark_limit, max(1, int(settings.benchmark_limit_max_cases)))
 
     try:
+        _set_seed_status(active=True, kind='story_pack', status='running', message='Story-pack replay in progress')
         with heavy_operation_slot(request):
             await rate_limit_heavy(request)
             out = await replay_story_pack(
@@ -648,11 +675,14 @@ async def story_pack_replay(request: Request):
                 benchmark_semantic_mode=benchmark_semantic_mode,
                 benchmark_limit=benchmark_limit,
             )
+        _set_seed_status(active=False, kind='story_pack', status='completed' if bool(out.get('ok')) else 'failed', message=str(out.get('error') or 'Story-pack replay complete'))
         code = 200 if bool(out.get('ok')) else 400
         return JSONResponse(out, status_code=code)
     except HTTPException as exc:
+        _set_seed_status(active=False, kind='story_pack', status='failed', message=str(exc.detail))
         return _http_exc_response(exc)
     except Exception as exc:
+        _set_seed_status(active=False, kind='story_pack', status='failed', message=str(exc))
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 

@@ -30,6 +30,7 @@ let lastBenchmarkHistory = [];
 let selectedClaimSlot = null;
 let claimsAsOf = '';
 let claimsDetailOpen = false;
+let seedStatusState = {active: false, kind: '', status: 'idle', message: ''};
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
@@ -3554,6 +3555,7 @@ function safeRenderSection(label, fn) {
 async function refreshMemory() {
   if (authEnabled && !authReady) return;
   if (!modelOptionsHydrated) loadDemoModels();
+  refreshSeedStatus();
   try {
     const activeBenchmarkStatus = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
     const benchmarkRunning = initialStateHydrated && activeBenchmarkStatus === 'running';
@@ -3729,6 +3731,36 @@ function closeModal() {
   document.getElementById('modal').classList.remove('open');
 }
 
+function updateBenchmarkButtonGate() {
+  const btn = document.getElementById('btn-benchmark');
+  if (!btn) return;
+  const blocked = !!(seedStatusState && seedStatusState.active);
+  btn.disabled = blocked;
+  btn.title = blocked ? ('Waiting for seeding to finish' + (seedStatusState.kind ? (' (' + seedStatusState.kind + ')') : '')) : '';
+  if (blocked) {
+    btn.dataset.prevLabel = btn.dataset.prevLabel || btn.textContent || 'Run LOCOMO Test';
+    btn.textContent = 'Waiting for Seed...';
+  } else if (btn.textContent === 'Waiting for Seed...') {
+    btn.textContent = btn.dataset.prevLabel || 'Run LOCOMO Test';
+  }
+}
+
+async function refreshSeedStatus() {
+  try {
+    const res = await fetch('/api/demo/seed-status');
+    const data = await parseApiJsonResponse(res, 'seed-status');
+    seedStatusState = {
+      active: !!data.active,
+      kind: String(data.kind || ''),
+      status: String(data.status || 'idle'),
+      message: String(data.message || ''),
+    };
+  } catch (_) {
+    // keep last known status
+  }
+  updateBenchmarkButtonGate();
+}
+
 async function seedMemory() {
   const seedBtn = document.getElementById('btn-seed');
   const prevSeedLabel = seedBtn ? seedBtn.textContent : '';
@@ -3736,6 +3768,8 @@ async function seedMemory() {
     seedBtn.disabled = true;
     seedBtn.textContent = 'Seeding...';
   }
+  seedStatusState = {active: true, kind: 'seed', status: 'running', message: 'Seeding in progress'};
+  updateBenchmarkButtonGate();
 
   try {
     const seedSource = document.getElementById('seed-source')?.value || 'story_pack';
@@ -3919,6 +3953,7 @@ async function seedMemory() {
     if (String(err && err.message || '') === 'Hard reset canceled') return;
     alert('Seed failed: ' + err.message);
   } finally {
+    await refreshSeedStatus();
     if (seedBtn) {
       seedBtn.disabled = false;
       seedBtn.textContent = prevSeedLabel || 'Seed';
@@ -4000,6 +4035,11 @@ async function benchmarkHasLiveRun() {
 async function runBenchmark() {
   const btn = document.getElementById('btn-benchmark');
   if (!btn) return;
+  if (seedStatusState && seedStatusState.active) {
+    addMsg('system', 'Benchmark blocked: wait until seeding is confirmed complete' + (seedStatusState.kind ? (' (' + seedStatusState.kind + ')') : '') + '.');
+    updateBenchmarkButtonGate();
+    return;
+  }
   const subset = document.getElementById('bench-subset')?.value || 'locomo_mini';
   const semanticMode = document.getElementById('bench-semantic')?.value || 'required';
   const myelination = document.getElementById('bench-myelination')?.value || 'off';
@@ -4010,6 +4050,7 @@ async function runBenchmark() {
   const preloadMax = Number.isFinite(preloadRaw) ? Math.max(0, Math.floor(preloadRaw)) : 200;
 
   const prev = btn.textContent;
+  btn.dataset.prevLabel = prev;
   btn.disabled = true;
   btn.textContent = 'Starting...';
   addMsg(
@@ -4116,6 +4157,7 @@ function startDemoUi() {
   bindSessionPopoverControls();
   loadDemoModels();
   refreshLocomoMeta();
+  refreshSeedStatus();
   refreshErrorStreak = 0;
   refreshBackoffMs = 2500;
   refreshPauseNoticeShown = false;
