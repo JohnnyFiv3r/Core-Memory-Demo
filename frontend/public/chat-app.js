@@ -4130,6 +4130,18 @@ async function runBenchmark() {
       if (events.length) cursor = Number(job.cursor_next || cursor || 0);
       for (const evt of events) {
         const stage = String(evt.stage || '').trim().toLowerCase();
+        if (Number(evt.qa_total || 0) > 0) {
+          lastBenchmarkSummary = {
+            ...(lastBenchmarkSummary || {}),
+            status: 'running',
+            phase: stage || 'retrieving',
+            qa_cases: Number(evt.qa_total || (lastBenchmarkSummary || {}).qa_cases || 0),
+            qa_completed: Number(evt.qa_completed || 0),
+            sample_id: String(evt.sample_id || ''),
+          };
+          updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
+          renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+        }
         if (stage === 'failed') {
           addMsg('system', 'Benchmark failed: ' + String(evt.error || evt.message || 'benchmark_failed'));
         } else if (stage === 'abandoned') {
