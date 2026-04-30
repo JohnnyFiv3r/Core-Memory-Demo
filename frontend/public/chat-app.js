@@ -22,6 +22,8 @@ function showEmptyChat() {
 showEmptyChat();
 
 let firstMessage = true;
+let chatHydratedFromTurns = false;
+let lastKnownSessionId = '';
 let lastBenchmarkReport = null;
 let lastBenchmarkSummary = null;
 let lastBenchmarkHistory = [];
@@ -1038,6 +1040,34 @@ function syncClaimsStateToUrl() {
     if (claimsAsOf) u.searchParams.set('cm_as_of', claimsAsOf);
     else u.searchParams.delete('cm_as_of');
     window.history.replaceState({}, '', u.toString());
+  } catch (_) {
+    // best effort only
+  }
+}
+
+function renderChatTurns(items) {
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) return;
+  messagesEl.textContent = '';
+  firstMessage = false;
+  for (const row of rows) {
+    const uq = String((row && (row.user_query || row.query)) || '').trim();
+    const af = String((row && (row.assistant_final || row.response || row.assistant)) || '').trim();
+    const tid = String((row && row.turn_id) || '').trim();
+    if (uq) addMsg('user', uq);
+    if (af) addMsg('assistant', af, tid);
+  }
+  chatHydratedFromTurns = true;
+}
+
+async function hydrateChatFromTurns(sessionId) {
+  if (chatHydratedFromTurns) return;
+  try {
+    const url = '/api/demo/turns?limit=30' + (sessionId ? ('&session_id=' + encodeURIComponent(sessionId)) : '');
+    const res = await fetch(url);
+    const data = await parseApiJsonResponse(res, 'turns');
+    const items = Array.isArray(data.items) ? data.items : Array.isArray(data.turns) ? data.turns : [];
+    if (items.length) renderChatTurns(items.slice().reverse());
   } catch (_) {
     // best effort only
   }
@@ -3541,7 +3571,8 @@ async function refreshMemory() {
         renderRuntime(runtimeLocal || {}, lastTurnLocal || {});
         const budget = Number(sess.context_budget ?? 128000);
         const usage = Number(sess.token_usage ?? 0);
-        document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || '---') + ' ▾';
+        if (sess.session_id) lastKnownSessionId = String(sess.session_id || '').trim();
+        document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || lastKnownSessionId || '---') + ' ▾';
         document.getElementById('stat-tokens').textContent = Math.round(Math.max(0, usage));
         document.getElementById('stat-budget').textContent = budget;
       } catch (_) {
@@ -3619,7 +3650,8 @@ async function refreshMemory() {
     const windowPct = budget > 0 ? ((totalUsedTokens / budget) * 100) : 0;
     document.getElementById('stat-tokens').textContent = Math.round(totalUsedTokens);
     document.getElementById('stat-budget').textContent = budget;
-    document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || statsCompat.session_id || '---') + ' ▾';
+    if (sess.session_id || statsCompat.session_id) lastKnownSessionId = String(sess.session_id || statsCompat.session_id || '').trim();
+    document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || statsCompat.session_id || lastKnownSessionId || '---') + ' ▾';
     if (modelSelectEl) {
       const selectedOverride = String(sess.model_override || '').trim();
       if (modelSelectEl.value !== selectedOverride) {
@@ -3631,6 +3663,9 @@ async function refreshMemory() {
     fill.style.width = windowPct.toFixed(1) + '%';
     fill.className = 'budget-fill' + (windowPct >= AUTO_FLUSH_THRESHOLD_PCT ? ' critical' : windowPct >= 50 ? ' warn' : '');
     document.getElementById('budget-text').textContent = windowPct.toFixed(1) + '% used';
+    if (lastKnownSessionId && !chatHydratedFromTurns) {
+      hydrateChatFromTurns(lastKnownSessionId);
+    }
     initialStateHydrated = true;
     refreshErrorStreak = 0;
   } catch (err) {
