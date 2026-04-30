@@ -2770,27 +2770,8 @@ def _resolve_benchmark_embeddings_provider(explicit_provider: str | None = None)
 def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
-        try:
-            locomo_data_file = _resolve_locomo_data_path()
-            dataset_meta, selected_cases, selected_samples, gold_context_map = build_locomo_suite_metadata(
-                suite=suite_name,
-                sample_limit=sample_limit,
-                qa_limit=qa_limit,
-                sample_ids=sample_ids,
-                category_filter=category_filter,
-                data_file=locomo_data_file,
-            )
-        except LocomoLoaderError as exc:
-            return make_locomo_missing_dataset_response(
-                suite=suite_name,
-                root_mode=root_mode,
-                semantic_mode_name=semantic_mode_name,
-                error=exc,
-            )
-
         run_id = f"bench-{uuid.uuid4().hex[:10]}"
         started = _utc_now_iso()
-        warnings = []
         _update_benchmark_live_state(
             run_id=run_id,
             summary_patch={
@@ -2800,14 +2781,64 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "semantic_mode": semantic_mode_name,
                 "root_mode": root_mode,
                 "status": "running",
-                "phase": "starting",
+                "phase": "resolving_dataset",
             },
             report_patch={
                 "live": True,
                 "run_id": run_id,
                 "status": "running",
-                "phase": "starting",
+                "phase": "resolving_dataset",
                 "config": {"suite": suite_name, "root_mode": root_mode, "semantic_mode": semantic_mode_name},
+            },
+        )
+        try:
+            locomo_data_file = _resolve_locomo_data_path()
+            _update_benchmark_live_state(
+                run_id=run_id,
+                summary_patch={"status": "running", "phase": "building_suite"},
+                report_patch={"status": "running", "phase": "building_suite", "dataset": {"dataset_path": str(locomo_data_file)}},
+            )
+            dataset_meta, selected_cases, selected_samples, gold_context_map = build_locomo_suite_metadata(
+                suite=suite_name,
+                sample_limit=sample_limit,
+                qa_limit=qa_limit,
+                sample_ids=sample_ids,
+                category_filter=category_filter,
+                data_file=locomo_data_file,
+            )
+        except LocomoLoaderError as exc:
+            _update_benchmark_live_state(
+                run_id=run_id,
+                summary_patch={"status": "failed", "phase": "failed", "error": str(exc)},
+                report_patch={"status": "failed", "phase": "failed", "error": str(exc)},
+            )
+            return make_locomo_missing_dataset_response(
+                suite=suite_name,
+                root_mode=root_mode,
+                semantic_mode_name=semantic_mode_name,
+                error=exc,
+            )
+        except Exception as exc:
+            _update_benchmark_live_state(
+                run_id=run_id,
+                summary_patch={"status": "failed", "phase": "failed", "error": str(exc)},
+                report_patch={"status": "failed", "phase": "failed", "error": str(exc)},
+            )
+            raise
+
+        warnings = []
+        _update_benchmark_live_state(
+            run_id=run_id,
+            summary_patch={
+                "status": "running",
+                "phase": "starting",
+                "samples": int((dataset_meta.get("dataset") or {}).get("selected_samples") or 0),
+                "qa_cases": int((dataset_meta.get("dataset") or {}).get("selected_qa_cases") or 0),
+            },
+            report_patch={
+                "status": "running",
+                "phase": "starting",
+                "dataset": dict(dataset_meta.get("dataset") or {}),
             },
         )
         if suite_name == "locomo_mini":
@@ -2815,6 +2846,11 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         if legacy_mode:
             warnings.append("legacy_locomo_like_fixture")
 
+        _update_benchmark_live_state(
+            run_id=run_id,
+            summary_patch={"status": "running", "phase": "preparing_root"},
+            report_patch={"status": "running", "phase": "preparing_root"},
+        )
         run_root = Path(settings.core_memory_demo_benchmark_root) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         base_root = run_root / "base"
@@ -2822,6 +2858,11 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         if str(root_mode or "snapshot") == "snapshot":
             _copy_tree(Path(settings.core_memory_root), base_root)
         ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
+        _update_benchmark_live_state(
+            run_id=run_id,
+            summary_patch={"status": "running", "phase": "ingesting"},
+            report_patch={"status": "running", "phase": "ingesting"},
+        )
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
         _update_benchmark_live_state(
             run_id=run_id,
