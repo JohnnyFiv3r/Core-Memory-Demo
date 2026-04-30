@@ -38,11 +38,29 @@ function BenchmarkPane(props) {
   const isLocomo = suite && suite !== 'fixture_smoke'
   const status = String((summary || {}).status || (report || {}).status || '').trim().toLowerCase()
   const phase = String((summary || {}).phase || (report || {}).phase || '').trim().toLowerCase()
+  const runId = String((summary || {}).run_id || (report || {}).run_id || '').trim()
   const turnsIngested = Number((summary || {}).turns_ingested || (((report || {}).ingestion || {}).ingested_turns || 0) || 0)
   const qaCases = Number((summary || {}).qa_cases || 0)
-  const progressPct = phase === 'starting' ? 10 : phase === 'ingested' ? 45 : phase === 'semantic_built' ? 70 : phase === 'completed' ? 100 : (status === 'running' ? 20 : 0)
+  const isActiveRun = !!(runId && status !== 'completed' && status !== 'failed')
+  const phaseProgressMap = {
+    waiting_for_slot: 4,
+    queued: 6,
+    resolving_dataset: 10,
+    building_suite: 16,
+    starting: 22,
+    preparing_root: 30,
+    ingesting: 44,
+    ingested: 50,
+    semantic_built: 70,
+    retrieving: 82,
+    scoring: 92,
+    writing_artifacts: 97,
+    completed: 100,
+    failed: 100,
+  }
+  const progressPct = Number(phaseProgressMap[phase] || (isActiveRun ? 18 : 0))
 
-  if (!summary || (!summary.cases && !summary.qa_cases && status !== 'running')) {
+  if (!summary || (!summary.cases && !summary.qa_cases && !isActiveRun)) {
     return React.createElement(
       React.Fragment,
       null,
@@ -281,7 +299,7 @@ function BenchmarkPane(props) {
   return React.createElement(
     React.Fragment,
     null,
-    status === 'running'
+    isActiveRun
       ? React.createElement(
           'div',
           { className: 'runtime-card' },
