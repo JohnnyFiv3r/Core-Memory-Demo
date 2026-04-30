@@ -46,6 +46,9 @@ CHAT_JOB_TTL_SECONDS = 15 * 60
 CHAT_JOB_POLL_MS = 450
 CHAT_JOB_MAX_EVENTS = 48
 CHAT_JOBS: dict[str, dict[str, Any]] = {}
+BENCHMARK_JOB_TTL_SECONDS = 60 * 60
+BENCHMARK_JOB_POLL_MS = 1200
+BENCHMARK_JOBS: dict[str, dict[str, Any]] = {}
 
 
 def _now_ms() -> int:
@@ -90,7 +93,7 @@ def _chat_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> 
     row['updated_ms'] = _now_ms()
 
 
-def _chat_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
+def _job_payload(row: dict[str, Any], *, cursor: int = 0, poll_after_ms: int = CHAT_JOB_POLL_MS) -> dict[str, Any]:
     events = [e for e in list(row.get('events') or []) if int((e or {}).get('seq') or 0) > int(cursor)]
     next_cursor = int(cursor)
     if events:
@@ -102,7 +105,7 @@ def _chat_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]
         'status': str(row.get('status') or 'running'),
         'stage': str(row.get('stage') or ''),
         'done': bool(row.get('done')),
-        'poll_after_ms': CHAT_JOB_POLL_MS,
+        'poll_after_ms': int(poll_after_ms),
         'events': events,
         'cursor_next': next_cursor,
         'started_ms': int(row.get('started_ms') or 0),
@@ -114,6 +117,10 @@ def _chat_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]
     if bool(row.get('done')) and isinstance(row.get('result'), dict):
         out['result'] = dict(row.get('result') or {})
     return out
+
+
+def _chat_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
+    return _job_payload(row, cursor=cursor, poll_after_ms=CHAT_JOB_POLL_MS)
 
 
 async def _run_chat_job(job_id: str, message: str) -> None:
@@ -149,6 +156,38 @@ async def _run_chat_job(job_id: str, message: str) -> None:
         current['error'] = str(exc or 'chat_failed')
         current['updated_ms'] = _now_ms()
         _chat_event(current, 'failed', 'Chat failed', error=str(exc or 'chat_failed'))
+
+
+async def _run_benchmark_job(job_id: str, request: Request, kwargs: dict[str, Any]) -> None:
+    row = BENCHMARK_JOBS.get(job_id)
+    if not isinstance(row, dict):
+        return
+    row['status'] = 'running'
+    row['updated_ms'] = _now_ms()
+    _chat_event(row, 'queued', 'Benchmark accepted, waiting for execution slot')
+    try:
+        with heavy_operation_slot(request):
+            await rate_limit_heavy(request)
+            _chat_event(row, 'starting', 'Benchmark started')
+            out = await asyncio.to_thread(run_benchmark, **kwargs)
+        current = BENCHMARK_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        current['status'] = 'completed' if bool((out or {}).get('ok')) else 'failed'
+        current['done'] = True
+        current['result'] = dict(out or {})
+        current['updated_ms'] = _now_ms()
+        summary = dict((out or {}).get('summary') or {})
+        _chat_event(current, 'done', 'Benchmark finished', run_id=str(summary.get('run_id') or ''), status=current['status'])
+    except Exception as exc:
+        current = BENCHMARK_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        current['status'] = 'failed'
+        current['done'] = True
+        current['error'] = str(exc or 'benchmark_failed')
+        current['updated_ms'] = _now_ms()
+        _chat_event(current, 'failed', 'Benchmark failed', error=str(exc or 'benchmark_failed'))
 
 
 def _http_exc_response(exc: HTTPException) -> JSONResponse:
@@ -659,35 +698,50 @@ async def benchmark_run(request: Request):
     evidence_recall_k = [int(x) for x in ((body or {}).get('evidence_recall_k') or [1, 3, 5, 8, 10]) if str(x).strip()]
     persist_case_artifacts = bool((body or {}).get('persist_case_artifacts', True))
 
-    try:
-        with heavy_operation_slot(request):
-            await rate_limit_heavy(request)
-            out = run_benchmark(
-                suite=suite,
-                subset=subset,
-                semantic_mode_name=semantic_mode,
-                root_mode=root_mode,
-                preload_from_demo=preload_from_demo,
-                preload_turns_max=preload_turns_max,
-                limit=limit,
-                sample_limit=sample_limit,
-                qa_limit=qa_limit,
-                sample_ids=sample_ids,
-                category_filter=category_filter,
-                retrieval_k=retrieval_k,
-                ingestion_mode=ingestion_mode,
-                answer_mode=answer_mode,
-                generator_model=generator_model,
-                evidence_recall_k=evidence_recall_k,
-                persist_case_artifacts=persist_case_artifacts,
-                legacy_mode=legacy_mode,
-                embeddings_provider=embeddings_provider,
-            )
-        return out
-    except HTTPException as exc:
-        return _http_exc_response(exc)
-    except Exception as exc:
-        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+    job_id = f'benchjob-{uuid.uuid4().hex[:10]}'
+    row = {
+        'job_id': job_id,
+        'status': 'queued',
+        'stage': 'queued',
+        'done': False,
+        'started_ms': _now_ms(),
+        'updated_ms': _now_ms(),
+        'events': [],
+        'seq': 0,
+    }
+    BENCHMARK_JOBS[job_id] = row
+    _chat_event(row, 'queued', 'Benchmark request accepted')
+    kwargs = {
+        'suite': suite,
+        'subset': subset,
+        'semantic_mode_name': semantic_mode,
+        'root_mode': root_mode,
+        'preload_from_demo': preload_from_demo,
+        'preload_turns_max': preload_turns_max,
+        'limit': limit,
+        'sample_limit': sample_limit,
+        'qa_limit': qa_limit,
+        'sample_ids': sample_ids,
+        'category_filter': category_filter,
+        'retrieval_k': retrieval_k,
+        'ingestion_mode': ingestion_mode,
+        'answer_mode': answer_mode,
+        'generator_model': generator_model,
+        'evidence_recall_k': evidence_recall_k,
+        'persist_case_artifacts': persist_case_artifacts,
+        'legacy_mode': legacy_mode,
+        'embeddings_provider': embeddings_provider,
+    }
+    asyncio.create_task(_run_benchmark_job(job_id, request, kwargs))
+    return {'ok': True, 'job_id': job_id, 'status': 'queued', 'poll_after_ms': BENCHMARK_JOB_POLL_MS}
+
+
+@router.get('/demo/benchmark/job/{job_id}')
+def benchmark_job_status(job_id: str, cursor: int = 0):
+    row = BENCHMARK_JOBS.get(str(job_id or '').strip())
+    if not isinstance(row, dict):
+        return JSONResponse({'ok': False, 'error': 'benchmark_job_not_found'}, status_code=404)
+    return _job_payload(row, cursor=max(0, int(cursor)), poll_after_ms=BENCHMARK_JOB_POLL_MS)
 
 
 @router.get('/demo/benchmark/last')
