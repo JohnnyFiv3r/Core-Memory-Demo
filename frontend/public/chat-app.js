@@ -3513,6 +3513,44 @@ async function refreshMemory() {
   if (authEnabled && !authReady) return;
   if (!modelOptionsHydrated) loadDemoModels();
   try {
+    const activeBenchmarkStatus = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
+    const benchmarkRunning = activeBenchmarkStatus === 'running';
+
+    if (benchmarkRunning) {
+      try {
+        const rb = await fetch('/api/demo/benchmark/last');
+        const jb = await parseApiJsonResponse(rb, 'benchmark-last');
+        if (jb && jb.summary) {
+          lastBenchmarkSummary = jb.summary || lastBenchmarkSummary;
+          lastBenchmarkReport = jb.report || lastBenchmarkReport;
+          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
+          updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
+          renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
+        }
+      } catch (_) {
+        // best effort only
+      }
+
+      try {
+        const rr = await fetch('/api/demo/runtime');
+        const jr = await parseApiJsonResponse(rr, 'runtime');
+        const runtimeLocal = jr.runtime || {};
+        const lastTurnLocal = jr.last_turn || {};
+        const sess = jr.session || {};
+        renderRuntime(runtimeLocal || {}, lastTurnLocal || {});
+        const budget = Number(sess.context_budget ?? 128000);
+        const usage = Number(sess.token_usage ?? 0);
+        document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || '---') + ' ▾';
+        document.getElementById('stat-tokens').textContent = Math.round(Math.max(0, usage));
+        document.getElementById('stat-budget').textContent = budget;
+      } catch (_) {
+        // best effort only
+      }
+
+      refreshErrorStreak = 0;
+      return;
+    }
+
     const stateUrl = claimsAsOf
       ? ('/v1/memory/inspect/state?as_of=' + encodeURIComponent(claimsAsOf))
       : '/v1/memory/inspect/state';
@@ -3548,7 +3586,7 @@ async function refreshMemory() {
     if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
       try {
         const rb = await fetch('/api/demo/benchmark/last');
-        const jb = await rb.json();
+        const jb = await parseApiJsonResponse(rb, 'benchmark-last');
         if (jb && jb.ok && jb.report) {
           lastBenchmarkReport = jb.report;
           if (jb.summary) lastBenchmarkSummary = jb.summary;
@@ -3558,6 +3596,7 @@ async function refreshMemory() {
         // best effort only
       }
     }
+    updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
     renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
 
     document.getElementById('stat-beads').textContent = Number(statsCompat.total_beads || (mem.beads || []).length || 0);
