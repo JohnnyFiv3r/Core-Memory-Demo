@@ -397,9 +397,11 @@ function BenchmarkPane(props) {
         'div',
         { style: { marginTop: '6px' } },
         React.createElement(
-          'button',
-          { className: 'btn', onClick: () => openPayload('LOCOMO Benchmark Report (raw JSON)', report || {}) },
-          'Open raw JSON'
+          ((report || {}).artifact_download_url || (summary || {}).artifact_download_url) ? 'a' : 'button',
+          ((report || {}).artifact_download_url || (summary || {}).artifact_download_url)
+            ? { className: 'btn', href: ((report || {}).artifact_download_url || (summary || {}).artifact_download_url), download: true }
+            : { className: 'btn', onClick: () => openPayload('LOCOMO Benchmark Report (raw JSON)', report || {}) },
+          ((report || {}).artifact_download_url || (summary || {}).artifact_download_url) ? 'Download raw JSON' : 'Open raw JSON'
         )
       )
     ),
