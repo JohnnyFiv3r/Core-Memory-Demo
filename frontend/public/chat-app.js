@@ -3747,7 +3747,33 @@ function updateBenchmarkButtonGate() {
 
 async function refreshSeedStatus() {
   try {
+    const controlRes = await fetch('/api/demo/control-state');
+    if (controlRes.ok) {
+      const control = await parseApiJsonResponse(controlRes, 'control-state');
+      const seed = control.seed || {};
+      seedStatusState = {
+        active: !!seed.active,
+        kind: String(seed.kind || ''),
+        status: String(seed.status || 'idle'),
+        message: String(seed.message || ''),
+      };
+      const bench = control.benchmark || {};
+      if (bench.summary) lastBenchmarkSummary = bench.summary || lastBenchmarkSummary;
+      if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
+      if (bench.history) lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
+      updateBenchmarkButtonGate();
+      return;
+    }
+  } catch (_) {
+    // fallback below
+  }
+  try {
     const res = await fetch('/api/demo/seed-status');
+    if (res.status === 404) {
+      seedStatusState = {active: false, kind: '', status: 'idle', message: ''};
+      updateBenchmarkButtonGate();
+      return;
+    }
     const data = await parseApiJsonResponse(res, 'seed-status');
     seedStatusState = {
       active: !!data.active,
