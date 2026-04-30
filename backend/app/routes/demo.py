@@ -163,33 +163,45 @@ async def _run_benchmark_job(job_id: str, request: Request, kwargs: dict[str, An
     row = BENCHMARK_JOBS.get(job_id)
     if not isinstance(row, dict):
         return
-    row['status'] = 'queued'
-    row['stage'] = 'waiting_for_slot'
-    row['updated_ms'] = _now_ms()
-    _chat_event(row, 'waiting_for_slot', 'Benchmark accepted, waiting for heavy-operation slot')
+
+    row['status'] = 'waiting_for_slot'
+    _benchmark_event(row, 'queued', 'Benchmark request accepted')
+
+    while ACTIVE_BENCHMARK_JOB_ID and ACTIVE_BENCHMARK_JOB_ID != job_id:
+        current = BENCHMARK_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        if bool(current.get('abandoned')):
+            current['status'] = 'abandoned'
+            current['done'] = True
+            current['updated_ms'] = _now_ms()
+            _benchmark_event(current, 'abandoned', 'Benchmark abandoned before start')
+            return
+        await asyncio.sleep(0.25)
+
+    ACTIVE_BENCHMARK_JOB_ID = job_id
+    row['status'] = 'running'
+    _benchmark_event(row, 'starting', 'Benchmark started')
+
+    def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
+        current = BENCHMARK_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        current['status'] = 'running'
+        current['updated_ms'] = _now_ms()
+        _benchmark_event(
+            current,
+            'retrieving',
+            f'QA {int(completed)}/{int(total)}',
+            qa_completed=int(completed),
+            qa_total=int(total),
+            sample_id=str((case or {}).get('sample_id') or ''),
+            qa_id=str((case or {}).get('qa_id') or ''),
+            case_status=str((result or {}).get('status') or ''),
+        )
+
     try:
-        await rate_limit_heavy(request)
-        out: dict[str, Any] | None = None
-        while out is None:
-            try:
-                with heavy_operation_slot(request):
-                    current = BENCHMARK_JOBS.get(job_id)
-                    if isinstance(current, dict):
-                        current['status'] = 'running'
-                        current['stage'] = 'starting'
-                        current['updated_ms'] = _now_ms()
-                    _chat_event(row, 'starting', 'Benchmark started')
-                    out = await asyncio.to_thread(run_benchmark, **kwargs)
-            except HTTPException as exc:
-                if int(exc.status_code) == 429 and str(exc.detail or '') == 'heavy_operation_in_progress':
-                    current = BENCHMARK_JOBS.get(job_id)
-                    if isinstance(current, dict):
-                        current['status'] = 'queued'
-                        current['stage'] = 'waiting_for_slot'
-                        current['updated_ms'] = _now_ms()
-                    await asyncio.sleep(2.0)
-                    continue
-                raise
+        out = await asyncio.to_thread(run_benchmark, progress=progress, **kwargs)
         current = BENCHMARK_JOBS.get(job_id)
         if not isinstance(current, dict):
             return
@@ -500,6 +512,8 @@ def demo_control_state():
             'summary': dict(snapshot.get('summary') or {}),
             'report': dict(snapshot.get('report') or {}),
             'history': list(snapshot.get('history') or []),
+            'qa_completed': int(((benchmark_job or {}).get('events') or [{}])[-1].get('qa_completed') or 0) if benchmark_job else 0,
+            'qa_total': int(((benchmark_job or {}).get('events') or [{}])[-1].get('qa_total') or 0) if benchmark_job else 0,
         },
     }
 
