@@ -3542,6 +3542,15 @@ function renderBenchmark(summary, report, benchmarkMeta) {
   );
 }
 
+function safeRenderSection(label, fn) {
+  try {
+    return fn();
+  } catch (err) {
+    console.error('render section failed:', label, err);
+    return null;
+  }
+}
+
 async function refreshMemory() {
   if (authEnabled && !authReady) return;
   if (!modelOptionsHydrated) loadDemoModels();
@@ -3608,12 +3617,44 @@ async function refreshMemory() {
       // keep inspect-only fallback
     }
 
-    renderBeads(mem.beads || data.beads || []);
-    renderAssociations(mem.associations || data.associations || []);
-    renderClaims(claims.slots || data.claim_state || [], claims);
-    renderEntities(entities);
-    renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {});
-    renderRolling(mem.rolling_window || data.rolling_window || []);
+    const usage = Number(sess.token_usage ?? statsCompat.token_usage ?? 0);
+    const budget = Number(sess.context_budget ?? statsCompat.context_budget ?? 128000);
+    const rollingWindowTokens = Number(
+      sess.rolling_window_token_estimate ??
+      statsCompat.rolling_window_token_estimate ??
+      0
+    );
+    const totalUsedTokens = Math.min(
+      Math.max(0, budget),
+      Math.max(0, usage) + Math.max(0, rollingWindowTokens)
+    );
+    const windowPct = budget > 0 ? ((totalUsedTokens / budget) * 100) : 0;
+    document.getElementById('stat-beads').textContent = Number(statsCompat.total_beads || (mem.beads || []).length || 0);
+    document.getElementById('stat-assoc').textContent = Number(statsCompat.total_associations || (mem.associations || []).length || 0);
+    document.getElementById('stat-claims').textContent = Number(statsCompat.claim_slot_count || (claims.slots || []).length || 0);
+    document.getElementById('stat-entities').textContent = Number(statsCompat.entity_count || (entities.rows || []).length || 0);
+    document.getElementById('stat-rolling').textContent = Number(statsCompat.rolling_window_size || (mem.rolling_window || []).length || 0);
+    document.getElementById('stat-tokens').textContent = Math.round(totalUsedTokens);
+    document.getElementById('stat-budget').textContent = budget;
+    document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || statsCompat.session_id || '---') + ' ▾';
+    if (modelSelectEl) {
+      const selectedOverride = String(sess.model_override || '').trim();
+      if (modelSelectEl.value !== selectedOverride) {
+        modelSelectEl.value = selectedOverride;
+      }
+    }
+
+    const fill = document.getElementById('budget-fill');
+    fill.style.width = windowPct.toFixed(1) + '%';
+    fill.className = 'budget-fill' + (windowPct >= AUTO_FLUSH_THRESHOLD_PCT ? ' critical' : windowPct >= 50 ? ' warn' : '');
+    document.getElementById('budget-text').textContent = windowPct.toFixed(1) + '% used';
+
+    safeRenderSection('beads', () => renderBeads(mem.beads || data.beads || []));
+    safeRenderSection('associations', () => renderAssociations(mem.associations || data.associations || []));
+    safeRenderSection('claims', () => renderClaims(claims.slots || data.claim_state || [], claims));
+    safeRenderSection('entities', () => renderEntities(entities));
+    safeRenderSection('runtime', () => renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {}));
+    safeRenderSection('rolling', () => renderRolling(mem.rolling_window || data.rolling_window || []));
 
     lastBenchmarkSummary = (data.benchmark || {}).last_summary || lastBenchmarkSummary;
     lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
@@ -3630,44 +3671,12 @@ async function refreshMemory() {
         // best effort only
       }
     }
-    updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
-    renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
-
-    document.getElementById('stat-beads').textContent = Number(statsCompat.total_beads || (mem.beads || []).length || 0);
-    document.getElementById('stat-assoc').textContent = Number(statsCompat.total_associations || (mem.associations || []).length || 0);
-    document.getElementById('stat-claims').textContent = Number(statsCompat.claim_slot_count || (claims.slots || []).length || 0);
-    document.getElementById('stat-entities').textContent = Number(statsCompat.entity_count || (entities.rows || []).length || 0);
-    document.getElementById('stat-rolling').textContent = Number(statsCompat.rolling_window_size || (mem.rolling_window || []).length || 0);
-    const usage = Number(sess.token_usage ?? statsCompat.token_usage ?? 0);
-    const budget = Number(sess.context_budget ?? statsCompat.context_budget ?? 128000);
-    const rollingWindowTokens = Number(
-      sess.rolling_window_token_estimate ??
-      statsCompat.rolling_window_token_estimate ??
-      0
-    );
-    const totalUsedTokens = Math.min(
-      Math.max(0, budget),
-      Math.max(0, usage) + Math.max(0, rollingWindowTokens)
-    );
-    const windowPct = budget > 0 ? ((totalUsedTokens / budget) * 100) : 0;
-    document.getElementById('stat-tokens').textContent = Math.round(totalUsedTokens);
-    document.getElementById('stat-budget').textContent = budget;
     if (sess.session_id || statsCompat.session_id) lastKnownSessionId = String(sess.session_id || statsCompat.session_id || '').trim();
-    document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || statsCompat.session_id || lastKnownSessionId || '---') + ' ▾';
-    if (modelSelectEl) {
-      const selectedOverride = String(sess.model_override || '').trim();
-      if (modelSelectEl.value !== selectedOverride) {
-        modelSelectEl.value = selectedOverride;
-      }
-    }
-
-    const fill = document.getElementById('budget-fill');
-    fill.style.width = windowPct.toFixed(1) + '%';
-    fill.className = 'budget-fill' + (windowPct >= AUTO_FLUSH_THRESHOLD_PCT ? ' critical' : windowPct >= 50 ? ' warn' : '');
-    document.getElementById('budget-text').textContent = windowPct.toFixed(1) + '% used';
     if (lastKnownSessionId && !chatHydratedFromTurns) {
       hydrateChatFromTurns(lastKnownSessionId);
     }
+    safeRenderSection('benchmark-progress', () => updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null));
+    safeRenderSection('benchmark-pane', () => renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory}));
     initialStateHydrated = true;
     refreshErrorStreak = 0;
     refreshBackoffMs = 2500;
