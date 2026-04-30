@@ -188,6 +188,7 @@ let authClient = null;
 let authRequestedScope = 'openid profile email';
 let refreshTimerId = null;
 let refreshErrorStreak = 0;
+let initialStateHydrated = false;
 let authRedirecting = false;
 const AUTH_LOOP_GUARD_KEY = 'CM_AUTH_LOOP_GUARD';
 const CHAT_API_MODE_KEY = 'CM_CHAT_API_MODE';
@@ -3514,7 +3515,7 @@ async function refreshMemory() {
   if (!modelOptionsHydrated) loadDemoModels();
   try {
     const activeBenchmarkStatus = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
-    const benchmarkRunning = activeBenchmarkStatus === 'running';
+    const benchmarkRunning = initialStateHydrated && activeBenchmarkStatus === 'running';
 
     if (benchmarkRunning) {
       try {
@@ -3630,6 +3631,7 @@ async function refreshMemory() {
     fill.style.width = windowPct.toFixed(1) + '%';
     fill.className = 'budget-fill' + (windowPct >= AUTO_FLUSH_THRESHOLD_PCT ? ' critical' : windowPct >= 50 ? ' warn' : '');
     document.getElementById('budget-text').textContent = windowPct.toFixed(1) + '% used';
+    initialStateHydrated = true;
     refreshErrorStreak = 0;
   } catch (err) {
     refreshErrorStreak += 1;
