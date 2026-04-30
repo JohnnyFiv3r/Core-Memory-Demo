@@ -3748,6 +3748,11 @@ function updateBenchmarkButtonGate() {
 async function refreshSeedStatus() {
   try {
     const res = await fetch('/api/demo/seed-status');
+    if (res.status === 404) {
+      seedStatusState = {active: false, kind: '', status: 'idle', message: ''};
+      updateBenchmarkButtonGate();
+      return;
+    }
     const data = await parseApiJsonResponse(res, 'seed-status');
     seedStatusState = {
       active: !!data.active,
