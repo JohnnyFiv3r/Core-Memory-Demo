@@ -163,14 +163,33 @@ async def _run_benchmark_job(job_id: str, request: Request, kwargs: dict[str, An
     row = BENCHMARK_JOBS.get(job_id)
     if not isinstance(row, dict):
         return
-    row['status'] = 'running'
+    row['status'] = 'queued'
+    row['stage'] = 'waiting_for_slot'
     row['updated_ms'] = _now_ms()
-    _chat_event(row, 'queued', 'Benchmark accepted, waiting for execution slot')
+    _chat_event(row, 'waiting_for_slot', 'Benchmark accepted, waiting for heavy-operation slot')
     try:
-        with heavy_operation_slot(request):
-            await rate_limit_heavy(request)
-            _chat_event(row, 'starting', 'Benchmark started')
-            out = await asyncio.to_thread(run_benchmark, **kwargs)
+        await rate_limit_heavy(request)
+        out: dict[str, Any] | None = None
+        while out is None:
+            try:
+                with heavy_operation_slot(request):
+                    current = BENCHMARK_JOBS.get(job_id)
+                    if isinstance(current, dict):
+                        current['status'] = 'running'
+                        current['stage'] = 'starting'
+                        current['updated_ms'] = _now_ms()
+                    _chat_event(row, 'starting', 'Benchmark started')
+                    out = await asyncio.to_thread(run_benchmark, **kwargs)
+            except HTTPException as exc:
+                if int(exc.status_code) == 429 and str(exc.detail or '') == 'heavy_operation_in_progress':
+                    current = BENCHMARK_JOBS.get(job_id)
+                    if isinstance(current, dict):
+                        current['status'] = 'queued'
+                        current['stage'] = 'waiting_for_slot'
+                        current['updated_ms'] = _now_ms()
+                    await asyncio.sleep(2.0)
+                    continue
+                raise
         current = BENCHMARK_JOBS.get(job_id)
         if not isinstance(current, dict):
             return
