@@ -3948,6 +3948,8 @@ async function seedMemory() {
       }
     }
 
+    seedStatusState = {active: false, kind: seedSource, status: 'completed', message: 'Seed complete'};
+    updateBenchmarkButtonGate();
     refreshMemory();
   } catch (err) {
     if (String(err && err.message || '') === 'Hard reset canceled') return;
