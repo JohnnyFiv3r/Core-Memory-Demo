@@ -3976,6 +3976,27 @@ function formatBenchmarkSummary(s) {
   );
 }
 
+async function benchmarkHasLiveRun() {
+  try {
+    const rb = await fetch('/api/demo/benchmark/last');
+    const jb = await parseApiJsonResponse(rb, 'benchmark-last');
+    const summary = (jb && jb.summary) || null;
+    if (!summary) return false;
+    const status = String(summary.status || '').trim().toLowerCase();
+    const runId = String(summary.run_id || '').trim();
+    if (jb && jb.summary) {
+      lastBenchmarkSummary = jb.summary || lastBenchmarkSummary;
+      lastBenchmarkReport = jb.report || lastBenchmarkReport;
+      lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
+      updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
+      renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+    }
+    return !!(runId && (status === 'running' || status === 'queued' || status === 'waiting_for_slot'));
+  } catch (_) {
+    return false;
+  }
+}
+
 async function runBenchmark() {
   const btn = document.getElementById('btn-benchmark');
   if (!btn) return;
@@ -4063,7 +4084,13 @@ async function runBenchmark() {
       }
     }
   } catch (err) {
-    addMsg('system', 'Benchmark failed: ' + err.message);
+    const msg = String((err && err.message) || err || 'benchmark_failed');
+    const liveRun = await benchmarkHasLiveRun();
+    if (liveRun && /failed to fetch/i.test(msg)) {
+      addMsg('system', 'Benchmark started, but live polling briefly lost connection. Recovering from backend state...');
+    } else {
+      addMsg('system', 'Benchmark failed: ' + msg);
+    }
   } finally {
     btn.disabled = false;
     btn.textContent = prev;
