@@ -2775,6 +2775,18 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "recall@1": float((c.get("evidence_recall") or {}).get("recall@1") or 0.0),
                 "recall@3": float((c.get("evidence_recall") or {}).get("recall@3") or 0.0),
                 "recall@5": float((c.get("evidence_recall") or {}).get("recall@5") or 0.0),
+                "retrieved_count": len(list(c.get("retrieved") or [])),
+                "retrieved_preview": [
+                    {
+                        "rank": int(r.get("rank") or 0),
+                        "dia_id": str(r.get("dia_id") or ""),
+                        "score": float(r.get("score") or 0.0),
+                        "anchor_type": str(r.get("anchor_type") or ""),
+                        "anchor_reason": str(r.get("anchor_reason") or ""),
+                    }
+                    for r in list(c.get("retrieved") or [])[:5]
+                ],
+                "top_retrieved_dia_ids": [str((r or {}).get("dia_id") or "") for r in list(c.get("retrieved") or [])[:5] if str((r or {}).get("dia_id") or "")],
                 "warnings": list(c.get("warnings") or []),
                 "status": str(c.get("status") or ""),
             }
@@ -2834,7 +2846,9 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             ingestion_meta=dict(report.get("ingestion") or {}),
         )
         summary["artifact_path"] = artifacts.get("root")
+        summary["artifact_download_url"] = f"/api/demo/benchmark/artifact/{run_id}/report.json"
         report["artifacts"] = artifacts
+        report["artifact_download_url"] = f"/api/demo/benchmark/artifact/{run_id}/report.json"
 
         history_row = {
             "run_id": run_id,
