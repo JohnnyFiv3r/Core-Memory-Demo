@@ -4176,9 +4176,13 @@ async function runBenchmark() {
     }
   } catch (err) {
     const msg = String((err && err.message) || err || 'benchmark_failed');
-    const liveRun = await benchmarkHasLiveRun();
-    if (liveRun && /failed to fetch/i.test(msg)) {
-      addMsg('system', 'Benchmark started, but live polling briefly lost connection. Recovering from backend state...');
+    if (/failed to fetch/i.test(msg)) {
+      const liveRun = await benchmarkHasLiveRun();
+      if (liveRun) {
+        addMsg('system', 'Benchmark started, but live polling briefly lost connection. Recovering from backend state...');
+      } else {
+        addMsg('system', 'Benchmark transport hiccup. Checking backend state...');
+      }
     } else {
       addMsg('system', 'Benchmark failed: ' + msg);
     }
