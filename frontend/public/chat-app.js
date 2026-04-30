@@ -4088,8 +4088,15 @@ async function runBenchmark() {
       const events = Array.isArray(job.events) ? job.events : [];
       if (events.length) cursor = Number(job.cursor_next || cursor || 0);
       for (const evt of events) {
-        if (String(evt.stage || '') === 'failed') {
+        const stage = String(evt.stage || '').trim().toLowerCase();
+        if (stage === 'failed') {
           addMsg('system', 'Benchmark failed: ' + String(evt.error || evt.message || 'benchmark_failed'));
+        } else if (stage === 'abandoned') {
+          lastBenchmarkSummary = {};
+          lastBenchmarkReport = null;
+          renderBenchmark({}, null, {history: lastBenchmarkHistory});
+          updateBenchmarkProgressMessage({}, null);
+          addMsg('system', 'Benchmark attempt was abandoned in favor of a newer run.');
         }
       }
       try {
