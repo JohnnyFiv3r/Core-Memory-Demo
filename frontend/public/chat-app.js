@@ -190,6 +190,8 @@ let authClient = null;
 let authRequestedScope = 'openid profile email';
 let refreshTimerId = null;
 let refreshErrorStreak = 0;
+let refreshBackoffMs = 2500;
+let refreshPauseNoticeShown = false;
 let initialStateHydrated = false;
 let authRedirecting = false;
 const AUTH_LOOP_GUARD_KEY = 'CM_AUTH_LOOP_GUARD';
@@ -3668,12 +3670,16 @@ async function refreshMemory() {
     }
     initialStateHydrated = true;
     refreshErrorStreak = 0;
+    refreshBackoffMs = 2500;
+    refreshPauseNoticeShown = false;
+    restartRefreshTimer(refreshBackoffMs);
   } catch (err) {
     refreshErrorStreak += 1;
-    if (refreshErrorStreak >= 3 && refreshTimerId) {
-      clearInterval(refreshTimerId);
-      refreshTimerId = null;
-      addMsg('system', 'Data refresh paused due to repeated backend/proxy errors. Use Refresh or reload after backend recovers.');
+    refreshBackoffMs = Math.min(30000, Math.max(2500, refreshBackoffMs * 2));
+    restartRefreshTimer(refreshBackoffMs);
+    if (refreshErrorStreak >= 3 && !refreshPauseNoticeShown) {
+      refreshPauseNoticeShown = true;
+      addMsg('system', 'Data refresh is degraded due to repeated backend/proxy errors. Retrying automatically with backoff.');
     }
     console.error('refreshMemory failed:', err);
   }
@@ -4061,6 +4067,12 @@ function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(t => t.classList.toggle('active', t.id === 'tab-' + name));
 }
 
+function restartRefreshTimer(ms) {
+  const nextMs = Math.max(1000, Number(ms || 2500));
+  if (refreshTimerId) clearInterval(refreshTimerId);
+  refreshTimerId = setInterval(refreshMemory, nextMs);
+}
+
 function startDemoUi() {
   bindUiEventHandlers();
   loadClaimsStateFromUrl();
@@ -4069,9 +4081,10 @@ function startDemoUi() {
   loadDemoModels();
   refreshLocomoMeta();
   refreshErrorStreak = 0;
+  refreshBackoffMs = 2500;
+  refreshPauseNoticeShown = false;
   refreshMemory();
-  if (refreshTimerId) clearInterval(refreshTimerId);
-  refreshTimerId = setInterval(refreshMemory, 2500);
+  restartRefreshTimer(2500);
 }
 
 async function bootstrapDemo() {
