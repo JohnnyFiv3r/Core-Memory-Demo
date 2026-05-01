@@ -3938,6 +3938,12 @@ async function flushSession() {
   }
 }
 
+function updateBenchmarkProgressMessage(summary, report) {
+  const btn = document.getElementById('btn-benchmark');
+  if (!btn) return;
+  syncBenchmarkButton(summary || {});
+}
+
 function formatBenchmarkSummary(s) {
   if (!s) return 'Benchmark completed.';
   const warns = benchmarkWarnCount(s.warnings);
