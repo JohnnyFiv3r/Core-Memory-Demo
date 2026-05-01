@@ -3526,6 +3526,14 @@ function ensureBenchmarkPaneRenderer() {
   );
 }
 
+function benchmarkSummaryHasLiveJob(summary, report) {
+  const s = summary || {};
+  const r = report || {};
+  const status = String(s.status || r.status || '').trim().toLowerCase();
+  const jobId = String(s.job_id || r.active_job_id || '').trim();
+  return !!(jobId && (status === 'running' || status === 'queued' || status === 'waiting_for_slot'));
+}
+
 function renderBenchmark(summary, report, benchmarkMeta) {
   const safeSummary = summary || {};
   const safeReport = report || null;
@@ -3564,7 +3572,8 @@ async function refreshMemory() {
   refreshSeedStatus();
   try {
     const activeBenchmarkStatus = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
-    const benchmarkRunning = initialStateHydrated && activeBenchmarkStatus === 'running';
+    const activeBenchmarkJobId = String((lastBenchmarkSummary || {}).job_id || '').trim();
+    const benchmarkRunning = initialStateHydrated && (!!activeBenchmarkJobId || activeBenchmarkStatus === 'running' || activeBenchmarkStatus === 'queued' || activeBenchmarkStatus === 'waiting_for_slot');
 
     if (benchmarkRunning) {
       try {
@@ -3632,7 +3641,11 @@ async function refreshMemory() {
     renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {});
     renderRolling(mem.rolling_window || data.rolling_window || []);
 
-    lastBenchmarkSummary = (data.benchmark || {}).last_summary || lastBenchmarkSummary;
+    const inspectBenchmarkSummary = (data.benchmark || {}).last_summary || null;
+    const liveBenchmarkPinned = benchmarkSummaryHasLiveJob(lastBenchmarkSummary, lastBenchmarkReport);
+    if (!liveBenchmarkPinned && inspectBenchmarkSummary) {
+      lastBenchmarkSummary = inspectBenchmarkSummary;
+    }
     lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
     if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
       try {
@@ -3694,7 +3707,11 @@ async function refreshMemory() {
     safeRenderSection('runtime', () => renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {}));
     safeRenderSection('rolling', () => renderRolling(mem.rolling_window || data.rolling_window || []));
 
-    lastBenchmarkSummary = (data.benchmark || {}).last_summary || lastBenchmarkSummary;
+    const inspectBenchmarkSummary = (data.benchmark || {}).last_summary || null;
+    const liveBenchmarkPinned = benchmarkSummaryHasLiveJob(lastBenchmarkSummary, lastBenchmarkReport);
+    if (!liveBenchmarkPinned && inspectBenchmarkSummary) {
+      lastBenchmarkSummary = inspectBenchmarkSummary;
+    }
     lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
     if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
       try {
@@ -4139,6 +4156,7 @@ async function benchmarkHasLiveRun() {
     if (!summary) return false;
     const status = String(summary.status || '').trim().toLowerCase();
     const runId = String(summary.run_id || '').trim();
+    const jobId = String(summary.job_id || ((jb && jb.report && jb.report.active_job_id) || '')).trim();
     if (jb && jb.summary) {
       lastBenchmarkSummary = jb.summary || lastBenchmarkSummary;
       lastBenchmarkReport = jb.report || lastBenchmarkReport;
@@ -4146,7 +4164,7 @@ async function benchmarkHasLiveRun() {
       updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
       renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
     }
-    return !!(runId && (status === 'running' || status === 'queued' || status === 'waiting_for_slot'));
+    return !!((runId || jobId) && (status === 'running' || status === 'queued' || status === 'waiting_for_slot'));
   } catch (_) {
     return false;
   }
@@ -4173,9 +4191,10 @@ async function runBenchmark() {
   btn.dataset.prevLabel = prev;
   btn.disabled = true;
   btn.textContent = 'Starting...';
-  const optimisticRunId = 'pending-' + Date.now().toString(36);
+  const optimisticJobId = 'pending-job-' + Date.now().toString(36);
   lastBenchmarkSummary = {
-    run_id: optimisticRunId,
+    run_id: '',
+    job_id: optimisticJobId,
     suite: subset,
     semantic_mode: semanticMode,
     root_mode: rootMode,
@@ -4185,7 +4204,7 @@ async function runBenchmark() {
     qa_cases: 0,
     turns_ingested: 0,
   };
-  lastBenchmarkReport = {live: true, run_id: optimisticRunId, status: 'running', phase: 'starting', config: {suite: subset, root_mode: rootMode, semantic_mode: semanticMode}};
+  lastBenchmarkReport = {live: true, active_job_id: optimisticJobId, status: 'running', phase: 'starting', config: {suite: subset, root_mode: rootMode, semantic_mode: semanticMode}};
   renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
   updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
   addMsg(
@@ -4213,6 +4232,20 @@ async function runBenchmark() {
       throw new Error(data.error || ('HTTP ' + res.status));
     }
     const jobId = String(data.job_id || '').trim();
+    lastBenchmarkSummary = {
+      ...(lastBenchmarkSummary || {}),
+      run_id: '',
+      job_id: jobId,
+      status: 'queued',
+      phase: 'queued',
+    };
+    lastBenchmarkReport = {
+      ...(lastBenchmarkReport || {}),
+      active_job_id: jobId,
+      status: 'queued',
+      phase: 'queued',
+    };
+    renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
     let cursor = 0;
     let done = false;
     while (!done) {
