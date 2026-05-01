@@ -175,7 +175,8 @@ def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
     events = list(row.get('events') or [])
     latest = dict(events[-1] or {}) if events else {}
     return {
-        'run_id': str(row.get('job_id') or ''),
+        'run_id': '',
+        'job_id': str(row.get('job_id') or ''),
         'status': str(row.get('status') or 'running'),
         'phase': str(row.get('stage') or latest.get('stage') or 'working'),
         'started_at': datetime.fromtimestamp(int(row.get('started_ms') or _now_ms()) / 1000, timezone.utc).isoformat(),
