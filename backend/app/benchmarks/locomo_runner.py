@@ -136,10 +136,12 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         gold_evidence = [str(x).strip() for x in (qa.get("evidence") or []) if str(x).strip()]
         gold_evidence_set = set(gold_evidence)
         matched_gold_dia_ids = sorted({str(x).strip() for r in retrieved for x in (r.get("dia_ids") or []) if str(x).strip() in gold_evidence_set})
+        top_hits = {k: bool({str(x).strip() for row in retrieved[:k] for x in (row.get("dia_ids") or []) if str(x).strip()} & gold_evidence_set) for k in [1, 3, 5, 10]}
         projection_counts = {
-            "missing_bead_id": sum(1 for r in retrieved if str(((r.get("projection") or {}).get("bead_id_source") or "")) == "missing"),
-            "inspect_bead_miss": sum(1 for r in retrieved if not bool((r.get("projection") or {}).get("inspect_bead_found"))),
-            "missing_dia_ids": sum(1 for r in retrieved if str(((r.get("projection") or {}).get("dia_id_source") or "")) == "missing"),
+            "no_bead_id": sum(1 for r in retrieved if str(((r.get("projection") or {}).get("bead_id_source") or "")) == "missing"),
+            "bead_not_found": sum(1 for r in retrieved if not bool((r.get("projection") or {}).get("inspect_bead_found"))),
+            "metadata_missing": sum(1 for r in retrieved if str(((r.get("projection") or {}).get("metadata_source") or "")) == "none"),
+            "no_dia_ids_in_metadata": sum(1 for r in retrieved if str(((r.get("projection") or {}).get("dia_id_source") or "")) == "missing"),
         }
         return {
             "qa_id": str(qa.get("qa_id") or ""),
@@ -161,11 +163,17 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             "trace": trace_meta,
             "diagnostics": {
                 "raw_result_count": len(raw_results),
+                "raw_result_keys": sorted({str(k) for row in raw_results[:1] for k in dict(row or {}).keys()}),
+                "raw_top_ids": [str((row or {}).get("bead_id") or (row or {}).get("id") or (row or {}).get("result_id") or (row or {}).get("source_id") or "") for row in raw_results[:5]],
                 "retrieved_count": len(retrieved),
-                "projection_counts": projection_counts,
+                "projection_drops": projection_counts,
+                "projected_dia_ids_top5": [list((row or {}).get("dia_ids") or []) for row in retrieved[:5]],
                 "gold_evidence": gold_evidence,
+                "gold_in_top_k": top_hits,
+                "gold_in_any_retrieved": bool(matched_gold_dia_ids),
                 "matched_gold_dia_ids": matched_gold_dia_ids,
-                "used_dia_ids": list(answer.get("used_dia_ids") or []),
+                "answerer_used_dia_ids": list(answer.get("used_dia_ids") or []),
+                "answerer_unsupported": bool(answer.get("unsupported")),
             },
         }
     except Exception as exc:
