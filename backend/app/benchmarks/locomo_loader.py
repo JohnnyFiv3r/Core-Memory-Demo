@@ -8,6 +8,11 @@ from typing import Any
 
 DEFAULT_WORKSPACE_LOCOMO = Path(__file__).resolve().parents[4] / "tmp" / "locomo_src" / "locomo"
 DEFAULT_DATA_FILE = DEFAULT_WORKSPACE_LOCOMO / "data" / "locomo10.json"
+FALLBACK_DATA_FILES = [
+    Path(__file__).resolve().parents[2] / "data" / "locomo" / "locomo10.json",
+    Path(__file__).resolve().parents[4] / "data" / "locomo" / "locomo10.json",
+    DEFAULT_DATA_FILE,
+]
 
 
 class LocomoLoaderError(RuntimeError):
@@ -55,6 +60,9 @@ def resolve_locomo_data_file() -> Path:
     candidate = repo_root / "data" / "locomo10.json"
     if candidate.exists():
         return candidate
+    for fallback in FALLBACK_DATA_FILES:
+        if fallback.exists():
+            return fallback
     return DEFAULT_DATA_FILE
 
 
