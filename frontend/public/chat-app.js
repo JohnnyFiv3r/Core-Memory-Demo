@@ -3520,6 +3520,44 @@ async function refreshMemory() {
   if (authEnabled && !authReady) return;
   if (!modelOptionsHydrated) loadDemoModels();
   try {
+    const activeBenchmarkStatus = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
+    const activeBenchmarkJobId = String((lastBenchmarkSummary || {}).job_id || '').trim();
+    const benchmarkRunning = initialStateHydrated && (!!activeBenchmarkJobId || activeBenchmarkStatus === 'running' || activeBenchmarkStatus === 'queued' || activeBenchmarkStatus === 'waiting_for_slot');
+
+    if (benchmarkRunning) {
+      try {
+        const rb = await fetch('/api/demo/benchmark/last');
+        const jb = await parseApiJsonResponse(rb, 'benchmark-last');
+        if (jb && jb.summary) {
+          lastBenchmarkSummary = jb.summary || lastBenchmarkSummary;
+          lastBenchmarkReport = jb.report || lastBenchmarkReport;
+          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
+          updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
+          renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
+        }
+      } catch (_) {
+      }
+
+      try {
+        const rr = await fetch('/api/demo/runtime');
+        const jr = await parseApiJsonResponse(rr, 'runtime');
+        const runtimeLocal = jr.runtime || {};
+        const lastTurnLocal = jr.last_turn || {};
+        const sess = jr.session || {};
+        renderRuntime(runtimeLocal || {}, lastTurnLocal || {});
+        const budget = Number(sess.context_budget ?? 128000);
+        const usage = Number(sess.token_usage ?? 0);
+        if (sess.session_id) lastKnownSessionId = String(sess.session_id || '').trim();
+        document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || lastKnownSessionId || '---') + ' ▾';
+        document.getElementById('stat-tokens').textContent = Math.round(Math.max(0, usage));
+        document.getElementById('stat-budget').textContent = budget;
+      } catch (_) {
+      }
+
+      refreshErrorStreak = 0;
+      return;
+    }
+
     const stateUrl = claimsAsOf
       ? ('/v1/memory/inspect/state?as_of=' + encodeURIComponent(claimsAsOf))
       : '/v1/memory/inspect/state';
@@ -3979,6 +4017,28 @@ function formatBenchmarkSummary(s) {
   );
 }
 
+async function benchmarkHasLiveRun() {
+  try {
+    const rb = await fetch('/api/demo/benchmark/last');
+    const jb = await parseApiJsonResponse(rb, 'benchmark-last');
+    const summary = (jb && jb.summary) || null;
+    if (!summary) return false;
+    const status = String(summary.status || '').trim().toLowerCase();
+    const runId = String(summary.run_id || '').trim();
+    const jobId = String(summary.job_id || ((jb && jb.report && jb.report.active_job_id) || '')).trim();
+    if (jb && jb.summary) {
+      lastBenchmarkSummary = jb.summary || lastBenchmarkSummary;
+      lastBenchmarkReport = jb.report || lastBenchmarkReport;
+      lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
+      updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
+      renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+    }
+    return !!((runId || jobId) && (status === 'running' || status === 'queued' || status === 'waiting_for_slot'));
+  } catch (_) {
+    return false;
+  }
+}
+
 async function runBenchmark() {
   const btn = document.getElementById('btn-benchmark');
   if (!btn) return;
@@ -3994,6 +4054,22 @@ async function runBenchmark() {
   const prev = btn.textContent;
   btn.disabled = true;
   btn.textContent = 'Running...';
+  const optimisticJobId = 'pending-job-' + Date.now().toString(36);
+  lastBenchmarkSummary = {
+    run_id: '',
+    job_id: optimisticJobId,
+    suite: subset,
+    semantic_mode: semanticMode,
+    root_mode: rootMode,
+    status: 'running',
+    phase: 'starting',
+    samples: 0,
+    qa_cases: 0,
+    turns_ingested: 0,
+  };
+  lastBenchmarkReport = {live: true, active_job_id: optimisticJobId, status: 'running', phase: 'starting', config: {suite: subset, root_mode: rootMode, semantic_mode: semanticMode}};
+  renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+  updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
   addMsg(
     'system',
     'Running LOCOMO benchmark (' + subset + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
@@ -4019,6 +4095,20 @@ async function runBenchmark() {
       throw new Error(data.error || ('HTTP ' + res.status));
     }
     const jobId = String(data.job_id || '').trim();
+    lastBenchmarkSummary = {
+      ...(lastBenchmarkSummary || {}),
+      run_id: '',
+      job_id: jobId,
+      status: 'queued',
+      phase: 'queued',
+    };
+    lastBenchmarkReport = {
+      ...(lastBenchmarkReport || {}),
+      active_job_id: jobId,
+      status: 'queued',
+      phase: 'queued',
+    };
+    renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
     let cursor = 0;
     let done = false;
     while (!done) {
