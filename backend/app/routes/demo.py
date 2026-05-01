@@ -171,6 +171,26 @@ def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str,
     return out
 
 
+def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
+    events = list(row.get('events') or [])
+    latest = dict(events[-1] or {}) if events else {}
+    return {
+        'run_id': '',
+        'job_id': str(row.get('job_id') or ''),
+        'status': str(row.get('status') or 'running'),
+        'phase': str(row.get('stage') or latest.get('stage') or 'working'),
+        'started_at': datetime.fromtimestamp(int(row.get('started_ms') or _now_ms()) / 1000, timezone.utc).isoformat(),
+        'updated_at': datetime.fromtimestamp(int(row.get('updated_ms') or _now_ms()) / 1000, timezone.utc).isoformat(),
+        'qa_completed': int(latest.get('qa_completed') or 0),
+        'qa_cases': int(latest.get('qa_total') or 0),
+        'sample_id': str(latest.get('sample_id') or ''),
+        'qa_id': str(latest.get('qa_id') or ''),
+        'case_status': str(latest.get('case_status') or ''),
+        'warnings': [],
+        'active': True,
+    }
+
+
 def _chat_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
     events = [e for e in list(row.get('events') or []) if int((e or {}).get('seq') or 0) > int(cursor)]
     next_cursor = int(cursor)
@@ -910,9 +930,26 @@ def benchmark_job_status(job_id: str, cursor: int = 0):
 
 @router.get('/demo/benchmark/last')
 def benchmark_last():
+    _prune_benchmark_jobs()
     snapshot = get_last_benchmark_snapshot(history_limit=20)
     history = list(snapshot.get('history') or [])
     latest_compare = None
+    active_job = BENCHMARK_JOBS.get(str(ACTIVE_BENCHMARK_JOB_ID or '').strip()) if ACTIVE_BENCHMARK_JOB_ID else None
+
+    summary = dict(snapshot.get('summary') or {})
+    report = dict(snapshot.get('report') or {})
+    ok = bool(snapshot.get('ok'))
+
+    if isinstance(active_job, dict) and not bool(active_job.get('done')):
+        summary = _active_benchmark_summary(active_job)
+        report = {
+            'status': str(active_job.get('status') or 'running'),
+            'phase': str(active_job.get('stage') or 'working'),
+            'active_job_id': str(active_job.get('job_id') or ''),
+            'active': True,
+        }
+        ok = True
+
     if len(history) >= 2:
         left = str((history[1].get('summary') or {}).get('run_id') or history[1].get('run_id') or '')
         right = str((history[0].get('summary') or {}).get('run_id') or history[0].get('run_id') or '')
@@ -920,9 +957,9 @@ def benchmark_last():
             cmp = compare_benchmark_runs(left, right)
             latest_compare = cmp.get('compare') if cmp.get('ok') else None
     return {
-        'ok': bool(snapshot.get('ok')),
-        'summary': dict(snapshot.get('summary') or {}),
-        'report': dict(snapshot.get('report') or {}),
+        'ok': ok,
+        'summary': summary,
+        'report': report,
         'history': history,
         'latest_compare': latest_compare,
     }
