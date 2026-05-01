@@ -114,6 +114,32 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         raw_results = list(result.get("results") or [])
         retrieved = [_extract_result_row(root=root, rank=idx, row=dict(row or {})) for idx, row in enumerate(raw_results, start=1)]
         trace_meta = {"used": False, "reason": "trace_disabled", "chains": [], "grounding": {}}
+        trace_warning = None
+        try:
+            from core_memory.retrieval.trace import trace_request  # type: ignore
+
+            anchor_ids = [str((row or {}).get("bead_id") or "").strip() for row in raw_results if str((row or {}).get("bead_id") or "").strip()]
+            if anchor_ids:
+                trace = trace_request(
+                    root=root,
+                    query=str(qa.get("question") or "").strip(),
+                    k=max(3, min(int(retrieval_k or 8), len(anchor_ids))),
+                    anchor_ids=anchor_ids[: max(3, int(retrieval_k or 8))],
+                )
+                trace_meta = {
+                    "used": True,
+                    "reason": "trace_ok",
+                    "chains": list((trace or {}).get("chains") or []),
+                    "grounding": dict((trace or {}).get("grounding") or {}),
+                }
+            else:
+                trace_meta = {"used": False, "reason": "no_anchor_ids", "chains": [], "grounding": {}}
+        except TypeError as exc:
+            trace_warning = f"trace_request_type_error:{exc}"
+            trace_meta = {"used": False, "reason": "trace_type_error", "chains": [], "grounding": {}}
+        except Exception as exc:
+            trace_warning = f"trace_request_failed:{exc}"
+            trace_meta = {"used": False, "reason": "trace_failed", "chains": [], "grounding": {}}
         evidence = compute_evidence_recall(
             gold_evidence=list(qa.get("evidence") or []),
             retrieved=retrieved,
@@ -158,7 +184,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             "status": "ok",
             "retrieved": retrieved,
             "evidence_recall": evidence,
-            "warnings": list(result.get("warnings") or []),
+            "warnings": list(result.get("warnings") or []) + ([trace_warning] if trace_warning else []),
             "backend": str(result.get("backend") or "unknown"),
             "raw_result_count": len(raw_results),
             "trace": trace_meta,
