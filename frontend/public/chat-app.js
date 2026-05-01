@@ -4065,6 +4065,12 @@ function syncBenchmarkButton(summary) {
   if (btn.textContent !== 'Run LOCOMO Test') btn.textContent = 'Run LOCOMO Test';
 }
 
+function updateBenchmarkProgressMessage(summary, report) {
+  const btn = document.getElementById('btn-benchmark');
+  if (!btn) return;
+  syncBenchmarkButton(summary || {});
+}
+
 function formatBenchmarkSummary(s) {
   if (!s) return 'Benchmark completed.';
   const warns = benchmarkWarnCount(s.warnings);
