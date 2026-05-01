@@ -2950,14 +2950,16 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "retrieved_preview": [
                     {
                         "rank": int(r.get("rank") or 0),
-                        "dia_id": str(r.get("dia_id") or ""),
+                        "bead_id": str(r.get("bead_id") or ""),
+                        "dia_ids": list(r.get("dia_ids") or []),
                         "score": float(r.get("score") or 0.0),
-                        "anchor_type": str(r.get("anchor_type") or ""),
-                        "anchor_reason": str(r.get("anchor_reason") or ""),
+                        "source_surface": str(r.get("source_surface") or ""),
+                        "projection": dict(r.get("projection") or {}),
                     }
                     for r in list(c.get("retrieved") or [])[:5]
                 ],
-                "top_retrieved_dia_ids": [str((r or {}).get("dia_id") or "") for r in list(c.get("retrieved") or [])[:5] if str((r or {}).get("dia_id") or "")],
+                "top_retrieved_dia_ids": [str(did) for r in list(c.get("retrieved") or [])[:5] for did in list((r or {}).get("dia_ids") or []) if str(did)],
+                "diagnostics": dict(c.get("diagnostics") or {}),
                 "warnings": list(c.get("warnings") or []),
                 "status": str(c.get("status") or ""),
             }
