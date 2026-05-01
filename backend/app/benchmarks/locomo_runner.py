@@ -113,6 +113,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         result = memory_tools.execute(req, root=root, explain=False)
         raw_results = list(result.get("results") or [])
         retrieved = [_extract_result_row(root=root, rank=idx, row=dict(row or {})) for idx, row in enumerate(raw_results, start=1)]
+        trace_meta = {"used": False, "reason": "trace_disabled", "chains": [], "grounding": {}}
         evidence = compute_evidence_recall(
             gold_evidence=list(qa.get("evidence") or []),
             retrieved=retrieved,
