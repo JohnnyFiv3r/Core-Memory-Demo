@@ -3,6 +3,7 @@ from __future__ import annotations
 import asyncio
 import time
 import uuid
+from datetime import datetime, timezone
 from typing import Any
 
 from pathlib import Path
@@ -169,6 +170,28 @@ def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str,
     if bool(row.get('done')) and isinstance(row.get('result'), dict):
         out['result'] = dict(row.get('result') or {})
     return out
+
+
+def _benchmark_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> None:
+    events = list(row.get('events') or [])
+    seq = int(row.get('seq') or 0) + 1
+    evt: dict[str, Any] = {
+        'seq': seq,
+        'ts_ms': _now_ms(),
+        'stage': str(stage or ''),
+        'message': str(message or ''),
+    }
+    for k, v in dict(extra or {}).items():
+        if v is None:
+            continue
+        evt[str(k)] = v
+    events.append(evt)
+    if len(events) > BENCHMARK_JOB_MAX_EVENTS:
+        events = events[-BENCHMARK_JOB_MAX_EVENTS:]
+    row['events'] = events
+    row['seq'] = seq
+    row['stage'] = str(stage or '')
+    row['updated_ms'] = _now_ms()
 
 
 def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
@@ -934,13 +957,13 @@ def benchmark_last():
     snapshot = get_last_benchmark_snapshot(history_limit=20)
     history = list(snapshot.get('history') or [])
     latest_compare = None
-    active_job = BENCHMARK_JOBS.get(str(ACTIVE_BENCHMARK_JOB_ID or '').strip()) if ACTIVE_BENCHMARK_JOB_ID else None
+    active_job = next((row for row in BENCHMARK_JOBS.values() if isinstance(row, dict) and not bool(row.get('done'))), None)
 
     summary = dict(snapshot.get('summary') or {})
     report = dict(snapshot.get('report') or {})
     ok = bool(snapshot.get('ok'))
 
-    if isinstance(active_job, dict) and not bool(active_job.get('done')):
+    if isinstance(active_job, dict):
         summary = _active_benchmark_summary(active_job)
         report = {
             'status': str(active_job.get('status') or 'running'),
