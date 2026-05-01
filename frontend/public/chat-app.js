@@ -3493,6 +3493,14 @@ function ensureBenchmarkPaneRenderer() {
   );
 }
 
+function benchmarkSummaryHasLiveJob(summary, report) {
+  const s = summary || {};
+  const r = report || {};
+  const status = String(s.status || r.status || '').trim().toLowerCase();
+  const jobId = String(s.job_id || r.active_job_id || '').trim();
+  return !!(jobId && (status === 'running' || status === 'queued' || status === 'waiting_for_slot'));
+}
+
 function renderBenchmark(summary, report, benchmarkMeta) {
   const safeSummary = summary || {};
   const safeReport = report || null;
@@ -3588,7 +3596,11 @@ async function refreshMemory() {
     renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {});
     renderRolling(mem.rolling_window || data.rolling_window || []);
 
-    lastBenchmarkSummary = (data.benchmark || {}).last_summary || lastBenchmarkSummary;
+    const inspectBenchmarkSummary = (data.benchmark || {}).last_summary || null;
+    const liveBenchmarkPinned = benchmarkSummaryHasLiveJob(lastBenchmarkSummary, lastBenchmarkReport);
+    if (!liveBenchmarkPinned && inspectBenchmarkSummary) {
+      lastBenchmarkSummary = inspectBenchmarkSummary;
+    }
     lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
     if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
       try {
@@ -3636,6 +3648,40 @@ async function refreshMemory() {
     fill.style.width = windowPct.toFixed(1) + '%';
     fill.className = 'budget-fill' + (windowPct >= AUTO_FLUSH_THRESHOLD_PCT ? ' critical' : windowPct >= 50 ? ' warn' : '');
     document.getElementById('budget-text').textContent = windowPct.toFixed(1) + '% used';
+
+    safeRenderSection('beads', () => renderBeads(mem.beads || data.beads || []));
+    safeRenderSection('associations', () => renderAssociations(mem.associations || data.associations || []));
+    safeRenderSection('claims', () => renderClaims(claims.slots || data.claim_state || [], claims));
+    safeRenderSection('entities', () => renderEntities(entities));
+    safeRenderSection('runtime', () => renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {}));
+    safeRenderSection('rolling', () => renderRolling(mem.rolling_window || data.rolling_window || []));
+
+    const inspectBenchmarkSummary = (data.benchmark || {}).last_summary || null;
+    const liveBenchmarkPinned = benchmarkSummaryHasLiveJob(lastBenchmarkSummary, lastBenchmarkReport);
+    if (!liveBenchmarkPinned && inspectBenchmarkSummary) {
+      lastBenchmarkSummary = inspectBenchmarkSummary;
+    }
+    lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
+    if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
+      try {
+        const rb = await fetch('/api/demo/benchmark/last');
+        const jb = await parseApiJsonResponse(rb, 'benchmark-last');
+        if (jb && jb.ok && jb.report) {
+          lastBenchmarkReport = jb.report;
+          if (jb.summary) lastBenchmarkSummary = jb.summary;
+          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
+        }
+      } catch (_) {
+        // best effort only
+      }
+    }
+    if (sess.session_id || statsCompat.session_id) lastKnownSessionId = String(sess.session_id || statsCompat.session_id || '').trim();
+    if (lastKnownSessionId && !chatHydratedFromTurns) {
+      hydrateChatFromTurns(lastKnownSessionId);
+    }
+    safeRenderSection('benchmark-progress', () => updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null));
+    safeRenderSection('benchmark-pane', () => renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory}));
+    initialStateHydrated = true;
     refreshErrorStreak = 0;
   } catch (err) {
     refreshErrorStreak += 1;
