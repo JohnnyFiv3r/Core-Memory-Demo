@@ -292,13 +292,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             sample_id=sample_id,
             retrieved=retrieved,
         )
-        retrieved, trace_meta = _expand_via_causal_trace(
-            root=root,
-            question=question,
-            sample_id=sample_id,
-            anchors=retrieved[: max(3, int(retrieval_k or 8))],
-            retrieval_k=retrieval_k,
-        )
+        trace_meta = {"used": False, "reason": "trace_disabled", "chains": [], "grounding": {}}
         evidence = compute_evidence_recall(
             gold_evidence=list(qa.get("evidence") or []),
             retrieved=retrieved,
