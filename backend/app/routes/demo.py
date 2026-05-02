@@ -977,8 +977,11 @@ def benchmark_last():
         left = str((history[1].get('summary') or {}).get('run_id') or history[1].get('run_id') or '')
         right = str((history[0].get('summary') or {}).get('run_id') or history[0].get('run_id') or '')
         if left and right:
-            cmp = compare_benchmark_runs(left, right)
-            latest_compare = cmp.get('compare') if cmp.get('ok') else None
+            try:
+                cmp = compare_benchmark_runs(left, right)
+                latest_compare = cmp.get('compare') if cmp.get('ok') else None
+            except Exception:
+                latest_compare = None
     return {
         'ok': ok,
         'summary': summary,
