@@ -275,8 +275,14 @@ async def _run_chat_job(job_id: str, message: str) -> None:
         _chat_event(current, 'failed', 'Chat failed', error=str(exc or 'chat_failed'))
 
 
+<<<<<<< HEAD
 async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
     global ACTIVE_BENCHMARK_JOB_ID
+=======
+async def _run_benchmark_job(job_id: str, request: Request, kwargs: dict[str, Any]) -> None:
+    global ACTIVE_BENCHMARK_JOB_ID
+
+>>>>>>> bef8824 (fix: share active benchmark job state with worker)
     row = BENCHMARK_JOBS.get(job_id)
     if not isinstance(row, dict):
         return
