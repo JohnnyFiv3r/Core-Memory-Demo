@@ -206,6 +206,8 @@ async def _run_chat_job(job_id: str, message: str) -> None:
 
 
 async def _run_benchmark_job(job_id: str, request: Request, kwargs: dict[str, Any]) -> None:
+    global ACTIVE_BENCHMARK_JOB_ID
+
     row = BENCHMARK_JOBS.get(job_id)
     if not isinstance(row, dict):
         return
