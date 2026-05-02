@@ -275,14 +275,9 @@ async def _run_chat_job(job_id: str, message: str) -> None:
         _chat_event(current, 'failed', 'Chat failed', error=str(exc or 'chat_failed'))
 
 
-<<<<<<< HEAD
 async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
     global ACTIVE_BENCHMARK_JOB_ID
-=======
-async def _run_benchmark_job(job_id: str, request: Request, kwargs: dict[str, Any]) -> None:
-    global ACTIVE_BENCHMARK_JOB_ID
 
->>>>>>> bef8824 (fix: share active benchmark job state with worker)
     row = BENCHMARK_JOBS.get(job_id)
     if not isinstance(row, dict):
         return
@@ -303,26 +298,6 @@ async def _run_benchmark_job(job_id: str, request: Request, kwargs: dict[str, An
         await asyncio.sleep(0.25)
 
     ACTIVE_BENCHMARK_JOB_ID = job_id
-    row['status'] = 'running'
-    _benchmark_event(row, 'starting', 'Benchmark started')
-
-    def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
-        current = BENCHMARK_JOBS.get(job_id)
-        if not isinstance(current, dict):
-            return
-        current['status'] = 'running'
-        current['updated_ms'] = _now_ms()
-        _benchmark_event(
-            current,
-            'retrieving',
-            f'QA {int(completed)}/{int(total)}',
-            qa_completed=int(completed),
-            qa_total=int(total),
-            sample_id=str((case or {}).get('sample_id') or ''),
-            qa_id=str((case or {}).get('qa_id') or ''),
-            case_status=str((result or {}).get('status') or ''),
-        )
-
     try:
         out = await asyncio.to_thread(run_benchmark, progress=progress, **kwargs)
         current = BENCHMARK_JOBS.get(job_id)
@@ -351,14 +326,6 @@ async def _run_benchmark_job(job_id: str, request: Request, kwargs: dict[str, An
     finally:
         if ACTIVE_BENCHMARK_JOB_ID == job_id:
             ACTIVE_BENCHMARK_JOB_ID = None
-
-
-def _set_seed_status(*, active: bool, kind: str = '', status: str = '', message: str = '') -> None:
-    SEED_STATUS['active'] = bool(active)
-    SEED_STATUS['kind'] = str(kind or '')
-    SEED_STATUS['status'] = str(status or ('running' if active else 'idle'))
-    SEED_STATUS['updated_ms'] = _now_ms()
-    SEED_STATUS['message'] = str(message or '')
 
 
 def _http_exc_response(exc: HTTPException) -> JSONResponse:
