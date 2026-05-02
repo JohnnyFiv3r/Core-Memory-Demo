@@ -3596,27 +3596,6 @@ async function refreshMemory() {
     renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {});
     renderRolling(mem.rolling_window || data.rolling_window || []);
 
-    const inspectBenchmarkSummary = (data.benchmark || {}).last_summary || null;
-    const liveBenchmarkPinned = benchmarkSummaryHasLiveJob(lastBenchmarkSummary, lastBenchmarkReport);
-    if (!liveBenchmarkPinned && inspectBenchmarkSummary) {
-      lastBenchmarkSummary = inspectBenchmarkSummary;
-    }
-    lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
-    if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
-      try {
-        const rb = await fetch('/api/demo/benchmark/last');
-        const jb = await rb.json();
-        if (jb && jb.ok && jb.report) {
-          lastBenchmarkReport = jb.report;
-          if (jb.summary) lastBenchmarkSummary = jb.summary;
-          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
-        }
-      } catch (_) {
-        // best effort only
-      }
-    }
-    renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
-
     document.getElementById('stat-beads').textContent = Number(statsCompat.total_beads || (mem.beads || []).length || 0);
     document.getElementById('stat-assoc').textContent = Number(statsCompat.total_associations || (mem.associations || []).length || 0);
     document.getElementById('stat-claims').textContent = Number(statsCompat.claim_slot_count || (claims.slots || []).length || 0);
