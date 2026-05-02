@@ -228,58 +228,62 @@ async def _run_benchmark_job(job_id: str, request: Request, kwargs: dict[str, An
         await asyncio.sleep(0.25)
 
     ACTIVE_BENCHMARK_JOB_ID = job_id
-    row['status'] = 'running'
-    _benchmark_event(row, 'starting', 'Benchmark started')
-
-    def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
-        current = BENCHMARK_JOBS.get(job_id)
-        if not isinstance(current, dict):
-            return
-        current['status'] = 'running'
-        current['updated_ms'] = _now_ms()
-        _benchmark_event(
-            current,
-            'retrieving',
-            f'QA {int(completed)}/{int(total)}',
-            qa_completed=int(completed),
-            qa_total=int(total),
-            sample_id=str((case or {}).get('sample_id') or ''),
-            qa_id=str((case or {}).get('qa_id') or ''),
-            case_status=str((result or {}).get('status') or ''),
-        )
-
     try:
-        out = await asyncio.to_thread(run_benchmark, progress=progress, **kwargs)
-        current = BENCHMARK_JOBS.get(job_id)
-        if not isinstance(current, dict):
-            return
-        current['status'] = 'completed' if bool((out or {}).get('ok')) else 'failed'
-        current['done'] = True
-        current['result'] = dict(out or {})
-        current['updated_ms'] = _now_ms()
-        summary = dict((out or {}).get('summary') or {})
-        _chat_event(current, 'done', 'Benchmark finished', run_id=str(summary.get('run_id') or ''), status=current['status'])
-    except Exception as exc:
-        current = BENCHMARK_JOBS.get(job_id)
-        if not isinstance(current, dict):
-            return
-        current['status'] = 'failed'
-        current['done'] = True
-        current['error'] = str(exc or 'benchmark_failed')
-        current['updated_ms'] = _now_ms()
+        row['status'] = 'running'
+        _benchmark_event(row, 'starting', 'Benchmark started')
+
+        def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
+            current = BENCHMARK_JOBS.get(job_id)
+            if not isinstance(current, dict):
+                return
+            current['status'] = 'running'
+            current['updated_ms'] = _now_ms()
+            _benchmark_event(
+                current,
+                'retrieving',
+                f'QA {int(completed)}/{int(total)}',
+                qa_completed=int(completed),
+                qa_total=int(total),
+                sample_id=str((case or {}).get('sample_id') or ''),
+                qa_id=str((case or {}).get('qa_id') or ''),
+                case_status=str((result or {}).get('status') or ''),
+            )
+
         try:
-            snap = get_last_benchmark_snapshot(history_limit=20)
-            summary = dict(snap.get('summary') or {})
-            run_id = str(summary.get('run_id') or '').strip()
-            if run_id and str(summary.get('status') or '').strip().lower() == 'running':
-                _update_benchmark_live_state(
-                    run_id=run_id,
-                    summary_patch={'status': 'failed', 'phase': 'failed', 'error': str(exc or 'benchmark_failed')},
-                    report_patch={'status': 'failed', 'phase': 'failed', 'error': str(exc or 'benchmark_failed')},
-                )
-        except Exception:
-            pass
-        _chat_event(current, 'failed', 'Benchmark failed', error=str(exc or 'benchmark_failed'))
+            out = await asyncio.to_thread(run_benchmark, progress=progress, **kwargs)
+            current = BENCHMARK_JOBS.get(job_id)
+            if not isinstance(current, dict):
+                return
+            current['status'] = 'completed' if bool((out or {}).get('ok')) else 'failed'
+            current['done'] = True
+            current['result'] = dict(out or {})
+            current['updated_ms'] = _now_ms()
+            summary = dict((out or {}).get('summary') or {})
+            _benchmark_event(current, 'done', 'Benchmark finished', run_id=str(summary.get('run_id') or ''), status=current['status'])
+        except Exception as exc:
+            current = BENCHMARK_JOBS.get(job_id)
+            if not isinstance(current, dict):
+                return
+            current['status'] = 'failed'
+            current['done'] = True
+            current['error'] = str(exc or 'benchmark_failed')
+            current['updated_ms'] = _now_ms()
+            try:
+                snap = get_last_benchmark_snapshot(history_limit=20)
+                summary = dict(snap.get('summary') or {})
+                run_id = str(summary.get('run_id') or '').strip()
+                if run_id and str(summary.get('status') or '').strip().lower() == 'running':
+                    _update_benchmark_live_state(
+                        run_id=run_id,
+                        summary_patch={'status': 'failed', 'phase': 'failed', 'error': str(exc or 'benchmark_failed')},
+                        report_patch={'status': 'failed', 'phase': 'failed', 'error': str(exc or 'benchmark_failed')},
+                    )
+            except Exception:
+                pass
+            _benchmark_event(current, 'failed', 'Benchmark failed', error=str(exc or 'benchmark_failed'))
+    finally:
+        if ACTIVE_BENCHMARK_JOB_ID == job_id:
+            ACTIVE_BENCHMARK_JOB_ID = None
 
 
 def _http_exc_response(exc: HTTPException) -> JSONResponse:
@@ -824,7 +828,6 @@ async def benchmark_run(request: Request):
         'seq': 0,
     }
     BENCHMARK_JOBS[job_id] = row
-    _chat_event(row, 'queued', 'Benchmark request accepted')
     kwargs = {
         'suite': suite,
         'subset': subset,
