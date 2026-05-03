@@ -4138,6 +4138,10 @@ async function runBenchmark() {
   const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
   const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
   const preloadMax = Number.isFinite(preloadRaw) ? Math.max(0, Math.floor(preloadRaw)) : 200;
+  const locomoSampleMode = document.getElementById('locomo-sample-mode')?.value || 'single';
+  const locomoSampleId = String(document.getElementById('locomo-sample-id')?.value || '').trim();
+  const locomoMaxTurnsRaw = Number(document.getElementById('locomo-max-turns')?.value || 200);
+  const locomoMaxTurns = Number.isFinite(locomoMaxTurnsRaw) ? Math.max(1, Math.floor(locomoMaxTurnsRaw)) : 200;
 
   const prev = btn.textContent;
   btn.dataset.prevLabel = prev;
@@ -4165,19 +4169,27 @@ async function runBenchmark() {
       ', preload=' + (preloadEnabled ? preloadMax : 0) + ')...'
   );
   try {
+    const benchmarkPayload = {
+      suite: subset,
+      semantic_mode: semanticMode,
+      vector_backend: 'local-faiss',
+      myelination,
+      root_mode: rootMode,
+      embeddings_provider: embeddingsProvider,
+      preload_from_demo: preloadEnabled,
+      preload_turns_max: preloadMax,
+    };
+    if (subset === 'locomo_mini') {
+      if (locomoSampleMode === 'single' && locomoSampleId) {
+        benchmarkPayload.sample_ids = [locomoSampleId];
+        benchmarkPayload.sample_limit = 1;
+      }
+      benchmarkPayload.qa_limit = locomoMaxTurns;
+    }
     const res = await fetch('/api/benchmark-run', {
       method: 'POST',
       headers: {'Content-Type': 'application/json'},
-      body: JSON.stringify({
-        suite: subset,
-        semantic_mode: semanticMode,
-        vector_backend: 'local-faiss',
-        myelination,
-        root_mode: rootMode,
-        embeddings_provider: embeddingsProvider,
-        preload_from_demo: preloadEnabled,
-        preload_turns_max: preloadMax,
-      }),
+      body: JSON.stringify(benchmarkPayload),
     });
     const data = await parseApiJsonResponse(res, 'benchmark-run');
     if (!res.ok || !data.ok || !data.job_id) {
