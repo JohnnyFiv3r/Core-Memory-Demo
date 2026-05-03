@@ -924,7 +924,7 @@ def benchmark_job_status(job_id: str, cursor: int = 0):
     row = BENCHMARK_JOBS.get(str(job_id or '').strip())
     if not isinstance(row, dict):
         return JSONResponse({'ok': False, 'error': 'benchmark_job_not_found'}, status_code=404)
-    return _job_payload(row, cursor=max(0, int(cursor)), poll_after_ms=BENCHMARK_JOB_POLL_MS)
+    return _benchmark_job_payload(row, cursor=max(0, int(cursor)))
 
 
 @router.get('/demo/benchmark/last')
