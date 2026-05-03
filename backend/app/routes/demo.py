@@ -125,45 +125,14 @@ def _chat_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> 
     row['updated_ms'] = _now_ms()
 
 
-def _prune_benchmark_jobs() -> None:
-    global ACTIVE_BENCHMARK_JOB_ID
-    now = _now_ms()
-    ttl_ms = int(BENCHMARK_JOB_TTL_SECONDS * 1000)
-    stale: list[str] = []
-    for job_id, row in list(BENCHMARK_JOBS.items()):
-        updated = int((row or {}).get('updated_ms') or 0)
-        done = bool((row or {}).get('done'))
-        age_ms = now - updated
-        if done and age_ms > ttl_ms:
-            stale.append(job_id)
-        elif not done and age_ms > max(ttl_ms * 2, 10 * 60_000):
-            stale.append(job_id)
-    for job_id in stale:
-        BENCHMARK_JOBS.pop(job_id, None)
-        if ACTIVE_BENCHMARK_JOB_ID == job_id:
-            ACTIVE_BENCHMARK_JOB_ID = None
-
-
-def _benchmark_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> None:
-    events = list(row.get('events') or [])
-    seq = int(row.get('seq') or 0) + 1
-    evt: dict[str, Any] = {
-        'seq': seq,
-        'ts_ms': _now_ms(),
-        'stage': str(stage or ''),
+def _set_seed_status(*, active: bool, kind: str, status: str, message: str) -> None:
+    SEED_STATUS.update({
+        'active': bool(active),
+        'kind': str(kind or ''),
+        'status': str(status or ''),
+        'updated_ms': _now_ms(),
         'message': str(message or ''),
-    }
-    for k, v in dict(extra or {}).items():
-        if v is None:
-            continue
-        evt[str(k)] = v
-    events.append(evt)
-    if len(events) > BENCHMARK_JOB_MAX_EVENTS:
-        events = events[-BENCHMARK_JOB_MAX_EVENTS:]
-    row['events'] = events
-    row['seq'] = seq
-    row['stage'] = str(stage or '')
-    row['updated_ms'] = _now_ms()
+    })
 
 
 def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
@@ -233,6 +202,27 @@ def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
         'warnings': [],
         'active': True,
     }
+
+
+def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
+    summary = dict(snapshot.get('summary') or {})
+    report = dict(snapshot.get('report') or {})
+    live_run_id = str(summary.get('run_id') or report.get('run_id') or '').strip()
+    active_job_id = str(active_job.get('job_id') or '')
+    if live_run_id:
+        summary['job_id'] = active_job_id
+        summary['active'] = True
+        report['active_job_id'] = active_job_id
+        report['active'] = True
+        return summary, report
+    summary = _active_benchmark_summary(active_job)
+    report = {
+        'status': str(active_job.get('status') or 'running'),
+        'phase': str(active_job.get('stage') or 'working'),
+        'active_job_id': active_job_id,
+        'active': True,
+    }
+    return summary, report
 
 
 def _chat_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
@@ -319,6 +309,26 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         await asyncio.sleep(0.25)
 
     ACTIVE_BENCHMARK_JOB_ID = job_id
+    row['status'] = 'running'
+    _benchmark_event(row, 'starting', 'Benchmark started')
+
+    def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
+        current = BENCHMARK_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        current['status'] = 'running'
+        current['updated_ms'] = _now_ms()
+        _benchmark_event(
+            current,
+            'retrieving',
+            f'QA {int(completed)}/{int(total)}',
+            qa_completed=int(completed),
+            qa_total=int(total),
+            sample_id=str((case or {}).get('sample_id') or ''),
+            qa_id=str((case or {}).get('qa_id') or ''),
+            case_status=str((result or {}).get('status') or ''),
+        )
+
     try:
         out = await asyncio.to_thread(run_benchmark, progress=progress, **kwargs)
         current = BENCHMARK_JOBS.get(job_id)
@@ -958,13 +968,7 @@ def benchmark_last():
     ok = bool(snapshot.get('ok'))
 
     if isinstance(active_job, dict):
-        summary = _active_benchmark_summary(active_job)
-        report = {
-            'status': str(active_job.get('status') or 'running'),
-            'phase': str(active_job.get('stage') or 'working'),
-            'active_job_id': str(active_job.get('job_id') or ''),
-            'active': True,
-        }
+        summary, report = _active_benchmark_state(active_job, snapshot)
         ok = True
 
     if len(history) >= 2:
