@@ -82,6 +82,27 @@ def _prune_chat_jobs() -> None:
         CHAT_JOBS.pop(job_id, None)
 
 
+
+def _prune_benchmark_jobs() -> None:
+    global ACTIVE_BENCHMARK_JOB_ID
+
+    now = _now_ms()
+    ttl_ms = int(BENCHMARK_JOB_TTL_SECONDS * 1000)
+    stale: list[str] = []
+    for job_id, row in list(BENCHMARK_JOBS.items()):
+        updated = int((row or {}).get('updated_ms') or 0)
+        done = bool((row or {}).get('done'))
+        age_ms = now - updated
+        if done and age_ms > ttl_ms:
+            stale.append(job_id)
+        elif not done and age_ms > max(ttl_ms * 2, 10 * 60_000):
+            stale.append(job_id)
+    for job_id in stale:
+        BENCHMARK_JOBS.pop(job_id, None)
+        if ACTIVE_BENCHMARK_JOB_ID == job_id:
+            ACTIVE_BENCHMARK_JOB_ID = None
+
+
 def _chat_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> None:
     events = list(row.get('events') or [])
     seq = int(row.get('seq') or 0) + 1
