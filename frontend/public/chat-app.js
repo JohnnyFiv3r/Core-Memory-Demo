@@ -3534,15 +3534,14 @@ async function refreshMemory() {
 
     if (benchmarkRunning) {
       try {
-        const rb = await fetch('/api/demo/benchmark/last');
-        const jb = await parseApiJsonResponse(rb, 'benchmark-last');
-        if (jb && jb.summary) {
-          lastBenchmarkSummary = jb.summary || lastBenchmarkSummary;
-          lastBenchmarkReport = jb.report || lastBenchmarkReport;
-          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
-          updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
-          renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
-        }
+        const controlRes = await fetch('/api/demo/control-state');
+        const control = await parseApiJsonResponse(controlRes, 'control-state');
+        const bench = control.benchmark || {};
+        if (bench.summary) lastBenchmarkSummary = bench.summary || lastBenchmarkSummary;
+        if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
+        if (bench.history) lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
+        updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
+        renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
       } catch (_) {
       }
 
