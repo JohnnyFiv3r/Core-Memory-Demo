@@ -191,6 +191,10 @@ def _chat_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]
     return _job_payload(row, cursor=cursor, poll_after_ms=CHAT_JOB_POLL_MS)
 
 
+def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
+    return _job_payload(row, cursor=cursor, poll_after_ms=BENCHMARK_JOB_POLL_MS)
+
+
 async def _run_chat_job(job_id: str, message: str) -> None:
     row = CHAT_JOBS.get(job_id)
     if not isinstance(row, dict):
@@ -879,7 +883,7 @@ def benchmark_job_status(job_id: str, cursor: int = 0):
     row = BENCHMARK_JOBS.get(str(job_id or '').strip())
     if not isinstance(row, dict):
         return JSONResponse({'ok': False, 'error': 'benchmark_job_not_found'}, status_code=404)
-    return _job_payload(row, cursor=max(0, int(cursor)), poll_after_ms=BENCHMARK_JOB_POLL_MS)
+    return _benchmark_job_payload(row, cursor=max(0, int(cursor)))
 
 
 @router.get('/demo/benchmark/last')
