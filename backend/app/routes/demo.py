@@ -54,6 +54,14 @@ BENCHMARK_JOB_TTL_SECONDS = 60 * 60
 BENCHMARK_JOB_POLL_MS = 1200
 BENCHMARK_JOB_MAX_EVENTS = 128
 BENCHMARK_JOBS: dict[str, dict[str, Any]] = {}
+ACTIVE_BENCHMARK_JOB_ID: str | None = None
+SEED_STATUS: dict[str, Any] = {
+    'active': False,
+    'kind': '',
+    'status': 'idle',
+    'updated_ms': 0,
+    'message': '',
+}
 
 
 def _now_ms() -> int:
