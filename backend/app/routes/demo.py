@@ -223,9 +223,42 @@ def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]
     if live_run_id:
         summary['job_id'] = active_job_id
         summary['active'] = True
-        report['active_job_id'] = active_job_id
-        report['active'] = True
-        return summary, report
+        compact_report: dict[str, Any] = {
+            'live': True,
+            'run_id': live_run_id,
+            'status': str(report.get('status') or summary.get('status') or active_job.get('status') or 'running'),
+            'phase': str(report.get('phase') or summary.get('phase') or active_job.get('stage') or 'working'),
+            'active_job_id': active_job_id,
+            'active': True,
+        }
+        config = report.get('config')
+        if isinstance(config, dict) and config:
+            compact_report['config'] = {
+                'suite': str(config.get('suite') or summary.get('suite') or ''),
+                'root_mode': str(config.get('root_mode') or summary.get('root_mode') or ''),
+                'semantic_mode': str(config.get('semantic_mode') or summary.get('semantic_mode') or ''),
+            }
+        elif summary:
+            compact_report['config'] = {
+                'suite': str(summary.get('suite') or ''),
+                'root_mode': str(summary.get('root_mode') or ''),
+                'semantic_mode': str(summary.get('semantic_mode') or ''),
+            }
+        dataset = report.get('dataset')
+        if isinstance(dataset, dict) and dataset:
+            compact_report['dataset'] = {
+                'dataset_path': str(dataset.get('dataset_path') or ''),
+                'samples': int(dataset.get('samples') or 0),
+                'qa_total': int(dataset.get('qa_total') or 0),
+                'turns_total': int(dataset.get('turns_total') or 0),
+                'selected_samples': int(dataset.get('selected_samples') or 0),
+                'selected_qa_cases': int(dataset.get('selected_qa_cases') or 0),
+                'python_version': str(dataset.get('python_version') or ''),
+            }
+            sample_ids = dataset.get('selected_sample_ids')
+            if isinstance(sample_ids, list) and sample_ids:
+                compact_report['dataset']['selected_sample_ids'] = [str(x) for x in sample_ids[:10] if str(x).strip()]
+        return summary, compact_report
     summary = _active_benchmark_summary(active_job)
     report = {
         'status': str(active_job.get('status') or 'running'),
@@ -620,6 +653,12 @@ def demo_control_state():
     active_job = BENCHMARK_JOBS.get(str(ACTIVE_BENCHMARK_JOB_ID or '').strip()) if ACTIVE_BENCHMARK_JOB_ID else None
     benchmark_job = _benchmark_job_payload(active_job, cursor=0) if isinstance(active_job, dict) else None
     snapshot = get_last_benchmark_snapshot(history_limit=5)
+    benchmark_summary = dict(snapshot.get('summary') or {})
+    benchmark_report = dict(snapshot.get('report') or {})
+    benchmark_history = list(snapshot.get('history') or [])
+    if isinstance(active_job, dict):
+        benchmark_summary, benchmark_report = _active_benchmark_state(active_job, snapshot)
+        benchmark_history = benchmark_history[:2]
     return {
         'ok': True,
         'seed': dict(SEED_STATUS),
@@ -627,9 +666,9 @@ def demo_control_state():
             'active_job_id': str(ACTIVE_BENCHMARK_JOB_ID or ''),
             'active': bool(isinstance(active_job, dict) and not bool(active_job.get('done'))),
             'job': benchmark_job,
-            'summary': dict(snapshot.get('summary') or {}),
-            'report': dict(snapshot.get('report') or {}),
-            'history': list(snapshot.get('history') or []),
+            'summary': benchmark_summary,
+            'report': benchmark_report,
+            'history': benchmark_history,
             'qa_completed': int(((benchmark_job or {}).get('events') or [{}])[-1].get('qa_completed') or 0) if benchmark_job else 0,
             'qa_total': int(((benchmark_job or {}).get('events') or [{}])[-1].get('qa_total') or 0) if benchmark_job else 0,
         },
@@ -952,6 +991,8 @@ def benchmark_last():
                 latest_compare = cmp.get('compare') if cmp.get('ok') else None
             except Exception:
                 latest_compare = None
+    if isinstance(active_job, dict):
+        history = history[:2]
     return {
         'ok': ok,
         'summary': summary,
