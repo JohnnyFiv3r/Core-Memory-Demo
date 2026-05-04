@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import Any
 
 from app.benchmarks.locomo_ingest import ingest_locomo_turns
+from app.benchmarks.locomo_replay import replay_locomo_sample
 from app.benchmarks.locomo_loader import LocomoLoaderError, load_locomo_dataset
 from app.core.config import settings
 
@@ -81,14 +82,23 @@ def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], inge
     total_turns = 0
     ingested_turns = 0
     skipped_existing = 0
+    ingest_path = str(settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
+    replay_mode = str(settings.locomo_replay_mode or 'transcript_only').strip().lower() or 'transcript_only'
+    flush_policy = str(settings.locomo_replay_flush_policy or 'per_session').strip().lower() or 'per_session'
     for sample in samples:
-        out = ingest_locomo_turns(root=base_root, sample=sample, mode=ingestion_mode)
+        if ingest_path == 'canonical_replay':
+            out = replay_locomo_sample(root=base_root, sample=sample, mode=replay_mode, flush_policy=flush_policy)
+        else:
+            out = ingest_locomo_turns(root=base_root, sample=sample, mode=ingestion_mode)
         rows.append(out)
         total_turns += int(out.get("turns_total") or 0)
         ingested_turns += int(out.get("ingested_count") or 0)
         skipped_existing += int(out.get("skipped_existing_count") or 0)
     return {
         "mode": ingestion_mode,
+        "ingest_path": ingest_path,
+        "replay_mode": replay_mode if ingest_path == 'canonical_replay' else '',
+        "flush_policy": flush_policy if ingest_path == 'canonical_replay' else '',
         "samples": len(samples),
         "turns_total": total_turns,
         "ingested_turns": ingested_turns,

@@ -52,6 +52,9 @@ class Settings(BaseSettings):
     locomo_case_artifact_limit_inline: int = 100
     locomo_answer_timeout_seconds: int = 60
     locomo_ingest_mode_default: str = 'turns'
+    locomo_ingest_path: str = 'bead_direct'
+    locomo_replay_mode: str = 'transcript_only'
+    locomo_replay_flush_policy: str = 'per_session'
 
     async_jobs_tick_enabled: bool = True
     async_jobs_tick_interval_seconds: int = 60

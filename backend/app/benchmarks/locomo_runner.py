@@ -51,6 +51,11 @@ def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[st
             if raw_dia_ids and not dia_id_source:
                 dia_id_source = f"metadata.{key}"
     if not raw_dia_ids:
+        locomo_dia_id = str(metadata.get("locomo_dia_id") or "").strip()
+        if locomo_dia_id:
+            raw_dia_ids.append(locomo_dia_id)
+            dia_id_source = dia_id_source or "metadata.locomo_dia_id"
+    if not raw_dia_ids:
         raw_dia_ids.extend([str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip()])
         if raw_dia_ids:
             dia_id_source = "row.dia_ids"
