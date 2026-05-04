@@ -20,6 +20,7 @@ from app.core.state_fallback import safe_state_fallback
 from app.core.runtime import (
     compare_benchmark_runs,
     decide_entity_merge,
+    detect_model,
     get_locomo_meta,
     get_story_pack_meta,
     get_last_benchmark_snapshot,
@@ -864,6 +865,8 @@ def benchmark_preflight(
     semantic_mode_name = str(semantic_mode or 'required').strip().lower() or 'required'
     answer_mode_name = str(answer_mode or 'none').strip().lower() or 'none'
     generator_model_name = str(generator_model or '').strip()
+    if answer_mode_name == 'llm' and not generator_model_name:
+        generator_model_name = detect_model()
     embeddings_provider = str(os.environ.get('CORE_MEMORY_EMBEDDINGS_PROVIDER') or '').strip() or 'hash'
     embeddings_model = str(os.environ.get('CORE_MEMORY_EMBEDDINGS_MODEL') or '').strip()
 

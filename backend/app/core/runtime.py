@@ -2716,6 +2716,9 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
 
         resolved_answer_mode = str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm"))
+        resolved_generator_model = str(generator_model or "").strip()
+        if resolved_answer_mode == "llm" and not resolved_generator_model:
+            resolved_generator_model = detect_model()
         benchmark_embeddings_provider = _resolve_benchmark_embeddings_provider(embeddings_provider)
         benchmark_semantic_build: dict[str, Any] | None = None
         with semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
@@ -2726,7 +2729,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
                 evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
                 answer_mode=resolved_answer_mode,
-                generator_model=generator_model,
+                generator_model=resolved_generator_model,
                 gold_context_map=gold_context_map,
                 progress=progress,
             )
@@ -2747,7 +2750,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "evidence_recall_at_5": float((score_summary.get("overall") or {}).get("evidence_recall@5") or 0.0),
             "semantic_mode": semantic_mode_name,
             "answer_mode": resolved_answer_mode,
-            "generator_model": str(generator_model or ""),
+            "generator_model": resolved_generator_model,
             "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
             "root_mode": root_mode,
             "warnings": warnings,
@@ -2811,7 +2814,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "ingestion_mode": ingestion_mode_name,
                 "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
                 "answer_mode": resolved_answer_mode,
-                "generator_model": str(generator_model or ""),
+                "generator_model": resolved_generator_model,
                 "evidence_recall_k": list(evidence_recall_k or [1, 3, 5, 8, 10]),
                 "persist_case_artifacts": bool(persist_case_artifacts),
                 "compare_paths_requested": compare_requested,
@@ -2830,7 +2833,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "answering": {
                 "status": "completed" if resolved_answer_mode != "none" else "not_run",
                 "mode": resolved_answer_mode,
-                "generator_model": str(generator_model or ""),
+                "generator_model": resolved_generator_model,
                 "reason": "milestone_5_answer_generation" if resolved_answer_mode != "none" else "milestone_4_retrieval_only",
             },
             "scores": dict(score_summary or {}),
@@ -2841,7 +2844,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "core_memory_version": "",
                 "semantic_mode": semantic_mode_name,
                 "embeddings_provider": benchmark_embeddings_provider,
-                "provider_model": str(generator_model or ""),
+                "provider_model": resolved_generator_model,
             },
             "ingestion": dict(ingestion_meta or {}),
             "semantic_build": dict(benchmark_semantic_build or {}),
@@ -2878,7 +2881,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                         retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
                         evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
                         answer_mode=resolved_answer_mode,
-                        generator_model=generator_model,
+                        generator_model=resolved_generator_model,
                         gold_context_map=gold_context_map,
                         progress=None,
                     )
