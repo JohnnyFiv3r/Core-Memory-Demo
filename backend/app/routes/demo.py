@@ -21,7 +21,6 @@ from app.core.runtime import (
     compare_benchmark_runs,
     decide_entity_merge,
     get_locomo_meta,
-    get_locomo_path_debug,
     get_story_pack_meta,
     get_last_benchmark_snapshot,
     inspect_bead_hydration_payload,
@@ -40,7 +39,6 @@ from app.core.runtime import (
     seed_demo_history,
     set_demo_model_override,
     suggest_entity_merges,
-    _update_benchmark_live_state,
 )
 
 public_router = APIRouter(prefix='/api', tags=['demo-public'])
@@ -50,7 +48,7 @@ CHAT_JOB_TTL_SECONDS = 15 * 60
 CHAT_JOB_POLL_MS = 450
 CHAT_JOB_MAX_EVENTS = 48
 CHAT_JOBS: dict[str, dict[str, Any]] = {}
-BENCHMARK_JOB_TTL_SECONDS = 60 * 60
+BENCHMARK_JOB_TTL_SECONDS = 30 * 60
 BENCHMARK_JOB_POLL_MS = 1200
 BENCHMARK_JOB_MAX_EVENTS = 128
 BENCHMARK_JOBS: dict[str, dict[str, Any]] = {}
@@ -137,7 +135,7 @@ def _set_seed_status(*, active: bool, kind: str, status: str, message: str) -> N
     })
 
 
-def _job_payload(row: dict[str, Any], *, cursor: int = 0, poll_after_ms: int = CHAT_JOB_POLL_MS) -> dict[str, Any]:
+def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
     events = [e for e in list(row.get('events') or []) if int((e or {}).get('seq') or 0) > int(cursor)]
     next_cursor = int(cursor)
     if events:
@@ -149,12 +147,13 @@ def _job_payload(row: dict[str, Any], *, cursor: int = 0, poll_after_ms: int = C
         'status': str(row.get('status') or 'running'),
         'stage': str(row.get('stage') or ''),
         'done': bool(row.get('done')),
-        'poll_after_ms': int(poll_after_ms),
+        'poll_after_ms': BENCHMARK_JOB_POLL_MS,
         'events': events,
         'cursor_next': next_cursor,
         'started_ms': int(row.get('started_ms') or 0),
         'updated_ms': int(row.get('updated_ms') or 0),
         'elapsed_ms': max(0, _now_ms() - int(row.get('started_ms') or _now_ms())),
+        'abandoned': bool(row.get('abandoned')),
     }
     if row.get('error'):
         out['error'] = str(row.get('error') or '')
@@ -203,16 +202,6 @@ def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
         'warnings': [],
         'active': True,
     }
-
-
-def _chat_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
-    return _job_payload(row, cursor=cursor, poll_after_ms=CHAT_JOB_POLL_MS)
-
-
-def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
-    out = _job_payload(row, cursor=cursor, poll_after_ms=BENCHMARK_JOB_POLL_MS)
-    out['abandoned'] = bool(row.get('abandoned'))
-    return out
 
 
 def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
@@ -305,6 +294,32 @@ def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]
     return summary, report
 
 
+def _chat_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
+    events = [e for e in list(row.get('events') or []) if int((e or {}).get('seq') or 0) > int(cursor)]
+    next_cursor = int(cursor)
+    if events:
+        next_cursor = int((events[-1] or {}).get('seq') or cursor)
+
+    out: dict[str, Any] = {
+        'ok': True,
+        'job_id': str(row.get('job_id') or ''),
+        'status': str(row.get('status') or 'running'),
+        'stage': str(row.get('stage') or ''),
+        'done': bool(row.get('done')),
+        'poll_after_ms': CHAT_JOB_POLL_MS,
+        'events': events,
+        'cursor_next': next_cursor,
+        'started_ms': int(row.get('started_ms') or 0),
+        'updated_ms': int(row.get('updated_ms') or 0),
+        'elapsed_ms': max(0, _now_ms() - int(row.get('started_ms') or _now_ms())),
+    }
+    if row.get('error'):
+        out['error'] = str(row.get('error') or '')
+    if bool(row.get('done')) and isinstance(row.get('result'), dict):
+        out['result'] = dict(row.get('result') or {})
+    return out
+
+
 async def _run_chat_job(job_id: str, message: str) -> None:
     row = CHAT_JOBS.get(job_id)
     if not isinstance(row, dict):
@@ -340,7 +355,7 @@ async def _run_chat_job(job_id: str, message: str) -> None:
         _chat_event(current, 'failed', 'Chat failed', error=str(exc or 'chat_failed'))
 
 
-async def _run_benchmark_job(job_id: str, request: Request, kwargs: dict[str, Any]) -> None:
+async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
     global ACTIVE_BENCHMARK_JOB_ID
 
     row = BENCHMARK_JOBS.get(job_id)
@@ -363,59 +378,51 @@ async def _run_benchmark_job(job_id: str, request: Request, kwargs: dict[str, An
         await asyncio.sleep(0.25)
 
     ACTIVE_BENCHMARK_JOB_ID = job_id
+    row['status'] = 'running'
+    _benchmark_event(row, 'starting', 'Benchmark started')
+
+    def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
+        current = BENCHMARK_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        current['status'] = 'running'
+        current['updated_ms'] = _now_ms()
+        _benchmark_event(
+            current,
+            'retrieving',
+            f'QA {int(completed)}/{int(total)}',
+            qa_completed=int(completed),
+            qa_total=int(total),
+            sample_id=str((case or {}).get('sample_id') or ''),
+            qa_id=str((case or {}).get('qa_id') or ''),
+            case_status=str((result or {}).get('status') or ''),
+        )
+
     try:
-        row['status'] = 'running'
-        _benchmark_event(row, 'starting', 'Benchmark started')
-
-        def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
-            current = BENCHMARK_JOBS.get(job_id)
-            if not isinstance(current, dict):
-                return
-            current['status'] = 'running'
-            current['updated_ms'] = _now_ms()
-            _benchmark_event(
-                current,
-                'retrieving',
-                f'QA {int(completed)}/{int(total)}',
-                qa_completed=int(completed),
-                qa_total=int(total),
-                sample_id=str((case or {}).get('sample_id') or ''),
-                qa_id=str((case or {}).get('qa_id') or ''),
-                case_status=str((result or {}).get('status') or ''),
-            )
-
-        try:
-            out = await asyncio.to_thread(run_benchmark, progress=progress, **kwargs)
-            current = BENCHMARK_JOBS.get(job_id)
-            if not isinstance(current, dict):
-                return
-            current['status'] = 'completed' if bool((out or {}).get('ok')) else 'failed'
-            current['done'] = True
-            current['result'] = dict(out or {})
-            current['updated_ms'] = _now_ms()
-            summary = dict((out or {}).get('summary') or {})
-            _benchmark_event(current, 'done', 'Benchmark finished', run_id=str(summary.get('run_id') or ''), status=current['status'])
-        except Exception as exc:
-            current = BENCHMARK_JOBS.get(job_id)
-            if not isinstance(current, dict):
-                return
-            current['status'] = 'failed'
-            current['done'] = True
-            current['error'] = str(exc or 'benchmark_failed')
-            current['updated_ms'] = _now_ms()
-            try:
-                snap = get_last_benchmark_snapshot(history_limit=20)
-                summary = dict(snap.get('summary') or {})
-                run_id = str(summary.get('run_id') or '').strip()
-                if run_id and str(summary.get('status') or '').strip().lower() == 'running':
-                    _update_benchmark_live_state(
-                        run_id=run_id,
-                        summary_patch={'status': 'failed', 'phase': 'failed', 'error': str(exc or 'benchmark_failed')},
-                        report_patch={'status': 'failed', 'phase': 'failed', 'error': str(exc or 'benchmark_failed')},
-                    )
-            except Exception:
-                pass
-            _benchmark_event(current, 'failed', 'Benchmark failed', error=str(exc or 'benchmark_failed'))
+        out = await asyncio.to_thread(run_benchmark, progress=progress, **kwargs)
+        current = BENCHMARK_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        current['status'] = 'completed' if bool((out or {}).get('ok')) else 'failed'
+        current['done'] = True
+        current['result'] = dict(out or {})
+        current['updated_ms'] = _now_ms()
+        if bool(current.get('abandoned')):
+            _benchmark_event(current, 'abandoned', 'Benchmark finished after being superseded')
+        elif bool((out or {}).get('ok')):
+            _benchmark_event(current, 'done', 'Benchmark completed', run_id=str(((out or {}).get('summary') or {}).get('run_id') or ''))
+        else:
+            current['error'] = str((out or {}).get('error') or 'benchmark_failed')
+            _benchmark_event(current, 'failed', 'Benchmark failed', error=current['error'])
+    except Exception as exc:
+        current = BENCHMARK_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        current['status'] = 'failed'
+        current['done'] = True
+        current['error'] = str(exc or 'benchmark_failed')
+        current['updated_ms'] = _now_ms()
+        _benchmark_event(current, 'failed', 'Benchmark failed', error=current['error'])
     finally:
         if ACTIVE_BENCHMARK_JOB_ID == job_id:
             ACTIVE_BENCHMARK_JOB_ID = None
@@ -672,15 +679,14 @@ def locomo_meta():
     try:
         return get_locomo_meta()
     except FileNotFoundError as exc:
-        return JSONResponse({'ok': False, 'error': str(exc), 'debug': get_locomo_path_debug()}, status_code=404)
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=404)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
-@public_router.get('/locomo/debug')
-def locomo_debug():
-    debug = get_locomo_path_debug()
-    return {'ok': True, 'debug': debug}
+@router.get('/demo/seed-status')
+def demo_seed_status():
+    return {'ok': True, **dict(SEED_STATUS)}
 
 
 @router.get('/demo/control-state')
@@ -720,10 +726,10 @@ async def locomo_replay(request: Request):
     max_turns_raw = (body or {}).get('max_turns')
     start_session_raw = (body or {}).get('start_session')
     max_sessions_raw = (body or {}).get('max_sessions')
-    wait_for_idle = bool((body or {}).get('wait_for_idle', False))
-    idle_timeout_ms = int((body or {}).get('idle_timeout_ms') or 20000)
+    wait_for_idle = bool((body or {}).get('wait_for_idle', True))
+    idle_timeout_ms = int((body or {}).get('idle_timeout_ms') or 120000)
     idle_poll_ms = int((body or {}).get('idle_poll_ms') or 250)
-    auto_flush = bool((body or {}).get('auto_flush', False))
+    auto_flush = bool((body or {}).get('auto_flush', True))
     flush_threshold_ratio = float((body or {}).get('flush_threshold_ratio') or 0.80)
     flush_every_turns = int((body or {}).get('flush_every_turns') or 0)
     max_compaction_per_pass = int((body or {}).get('max_compaction_per_pass') or 2)
@@ -734,7 +740,8 @@ async def locomo_replay(request: Request):
     start_session = int(start_session_raw) if isinstance(start_session_raw, (int, float)) and int(start_session_raw) > 0 else None
     max_sessions = int(max_sessions_raw) if isinstance(max_sessions_raw, (int, float)) and int(max_sessions_raw) > 0 else None
     try:
-        return await replay_locomo_corpus(
+        _set_seed_status(active=True, kind='locomo', status='running', message='LoCoMo replay in progress')
+        out = await replay_locomo_corpus(
             sample_mode=sample_mode,
             sample_id=str(sample_id).strip() if sample_id is not None else None,
             replay_mode=replay_mode,
@@ -751,11 +758,16 @@ async def locomo_replay(request: Request):
             max_side_effects_per_pass=max_side_effects_per_pass,
             reset_session=reset_session,
         )
+        _set_seed_status(active=False, kind='locomo', status='completed' if bool((out or {}).get('ok')) else 'failed', message=str((out or {}).get('error') or 'LoCoMo replay complete'))
+        return out
     except FileNotFoundError as exc:
+        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=404)
     except ValueError as exc:
+        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=400)
     except Exception as exc:
+        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
@@ -806,6 +818,7 @@ async def story_pack_replay(request: Request):
         benchmark_limit = min(benchmark_limit, max(1, int(settings.benchmark_limit_max_cases)))
 
     try:
+        _set_seed_status(active=True, kind='story_pack', status='running', message='Story-pack replay in progress')
         with heavy_operation_slot(request):
             await rate_limit_heavy(request)
             out = await replay_story_pack(
@@ -826,11 +839,14 @@ async def story_pack_replay(request: Request):
                 benchmark_semantic_mode=benchmark_semantic_mode,
                 benchmark_limit=benchmark_limit,
             )
+        _set_seed_status(active=False, kind='story_pack', status='completed' if bool(out.get('ok')) else 'failed', message=str(out.get('error') or 'Story-pack replay complete'))
         code = 200 if bool(out.get('ok')) else 400
         return JSONResponse(out, status_code=code)
     except HTTPException as exc:
+        _set_seed_status(active=False, kind='story_pack', status='failed', message=str(exc.detail))
         return _http_exc_response(exc)
     except Exception as exc:
+        _set_seed_status(active=False, kind='story_pack', status='failed', message=str(exc))
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
@@ -914,17 +930,11 @@ async def benchmark_run(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
     suite = str((body or {}).get('suite') or '').strip().lower()
     subset = str((body or {}).get('subset') or 'local').strip().lower() or 'local'
-    source = str((body or {}).get('source') or '').strip().lower()
     if subset not in {'local', 'full'}:
         subset = 'local'
-    legacy_mode = not bool((body or {}).get('suite'))
-    valid_suites = {'fixture_smoke', 'locomo_qa', 'locomo_retrieval', 'locomo_mini'}
-    if source == 'locomo':
-        if suite not in {'locomo_qa', 'locomo_retrieval', 'locomo_mini'}:
-            suite = 'locomo_mini'
-        legacy_mode = False
-    elif suite not in valid_suites:
+    if suite not in {'fixture_smoke', 'locomo_qa', 'locomo_retrieval', 'locomo_mini'}:
         suite = 'fixture_smoke'
+    legacy_mode = not bool((body or {}).get('suite'))
     if legacy_mode and subset == 'full':
         suite = 'locomo_qa'
     semantic_mode = str((body or {}).get('semantic_mode') or 'degraded_allowed').strip() or 'degraded_allowed'
@@ -957,45 +967,63 @@ async def benchmark_run(request: Request):
     evidence_recall_k = [int(x) for x in ((body or {}).get('evidence_recall_k') or [1, 3, 5, 8, 10]) if str(x).strip()]
     persist_case_artifacts = bool((body or {}).get('persist_case_artifacts', True))
 
-    job_id = f'benchjob-{uuid.uuid4().hex[:10]}'
+    kwargs = dict(
+        suite=suite,
+        subset=subset,
+        semantic_mode_name=semantic_mode,
+        root_mode=root_mode,
+        preload_from_demo=preload_from_demo,
+        preload_turns_max=preload_turns_max,
+        limit=limit,
+        sample_limit=sample_limit,
+        qa_limit=qa_limit,
+        sample_ids=sample_ids,
+        category_filter=category_filter,
+        retrieval_k=retrieval_k,
+        ingestion_mode=ingestion_mode,
+        answer_mode=answer_mode,
+        generator_model=generator_model,
+        evidence_recall_k=evidence_recall_k,
+        persist_case_artifacts=persist_case_artifacts,
+        legacy_mode=legacy_mode,
+        embeddings_provider=embeddings_provider,
+    )
+
+    _prune_benchmark_jobs()
+    prior_job_id = ACTIVE_BENCHMARK_JOB_ID
+    prior_row = BENCHMARK_JOBS.get(prior_job_id or '') if prior_job_id else None
+    if isinstance(prior_row, dict) and not bool(prior_row.get('done')):
+        prior_row['abandoned'] = True
+        prior_row['superseded_by'] = None
+        prior_row['updated_ms'] = _now_ms()
+        _benchmark_event(prior_row, 'abandoned', 'Superseded by a newer benchmark request')
+
+    job_id = uuid.uuid4().hex[:12]
     row = {
         'job_id': job_id,
         'status': 'queued',
         'stage': 'queued',
         'done': False,
-        'started_ms': _now_ms(),
-        'updated_ms': _now_ms(),
+        'error': None,
+        'result': None,
         'events': [],
         'seq': 0,
+        'started_ms': _now_ms(),
+        'updated_ms': _now_ms(),
+        'abandoned': False,
     }
     BENCHMARK_JOBS[job_id] = row
-    kwargs = {
-        'suite': suite,
-        'subset': subset,
-        'semantic_mode_name': semantic_mode,
-        'root_mode': root_mode,
-        'preload_from_demo': preload_from_demo,
-        'preload_turns_max': preload_turns_max,
-        'limit': limit,
-        'sample_limit': sample_limit,
-        'qa_limit': qa_limit,
-        'sample_ids': sample_ids,
-        'category_filter': category_filter,
-        'retrieval_k': retrieval_k,
-        'ingestion_mode': ingestion_mode,
-        'answer_mode': answer_mode,
-        'generator_model': generator_model,
-        'evidence_recall_k': evidence_recall_k,
-        'persist_case_artifacts': persist_case_artifacts,
-        'legacy_mode': legacy_mode,
-        'embeddings_provider': embeddings_provider,
-    }
-    asyncio.create_task(_run_benchmark_job(job_id, request, kwargs))
-    return {'ok': True, 'job_id': job_id, 'status': 'queued', 'poll_after_ms': BENCHMARK_JOB_POLL_MS}
+    if isinstance(prior_row, dict) and not bool(prior_row.get('done')):
+        prior_row['superseded_by'] = job_id
+    task = asyncio.create_task(_run_benchmark_job(job_id, kwargs))
+    row['task'] = task
+    _benchmark_event(row, 'queued', 'Benchmark queued', supersedes=prior_job_id or '')
+    return {'ok': True, 'job_id': job_id, 'status': 'queued', 'superseded_job_id': prior_job_id}
 
 
 @router.get('/demo/benchmark/job/{job_id}')
 def benchmark_job_status(job_id: str, cursor: int = 0):
+    _prune_benchmark_jobs()
     row = BENCHMARK_JOBS.get(str(job_id or '').strip())
     if not isinstance(row, dict):
         return JSONResponse({'ok': False, 'error': 'benchmark_job_not_found'}, status_code=404)
@@ -1040,7 +1068,7 @@ def benchmark_last():
 
 @router.get('/demo/benchmark/artifact/{run_id}/{filename}')
 def benchmark_artifact_download(run_id: str, filename: str):
-    allowed = {'report.json', 'summary.json', 'config.json', 'dataset_meta.json', 'ingestion_meta.json', 'cases.jsonl', 'failures.jsonl'}
+    allowed = {'report.json', 'summary.json', 'config.json', 'dataset_meta.json', 'ingestion_meta.json', 'comparison.json', 'cases.jsonl', 'failures.jsonl'}
     name = str(filename or '').strip()
     if name not in allowed:
         raise HTTPException(status_code=404, detail='artifact_not_found')
