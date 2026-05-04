@@ -74,7 +74,8 @@ def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'tran
             if str(mode or 'transcript_only') == 'canonical_turn':
                 out = finalize_and_process_turn(root=root, policy=None, **env)
                 emitted_flag = bool((out or {}).get('processed') or (out or {}).get('ok'))
-                if (out or {}).get('emitted') and not (out or {}).get('emitted', {}).get('emitted', True):
+                emitted_row = (out or {}).get('emitted') or {}
+                if emitted_row and not bool(emitted_row.get('emitted', True)):
                     emitted_flag = False
             else:
                 event_id = emit_turn_finalized(root=root, strict=False, **env)
@@ -102,9 +103,15 @@ def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'tran
                     }
                 )
         if str(flush_policy or 'per_session') == 'per_session':
-            flushes.append(process_flush(root=root, session_id=f'locomo:{sample_id}', promote=True, token_budget=128000, max_beads=200, source='locomo_replay'))
+            try:
+                flushes.append(process_flush(root=root, session_id=f'locomo:{sample_id}', promote=True, token_budget=128000, max_beads=200, source='locomo_replay'))
+            except Exception as exc:
+                flushes.append({'ok': False, 'step': 'process_flush', 'error': str(exc), 'session_id': f'locomo:{sample_id}'})
     if str(flush_policy or 'per_session') == 'end_only':
-        flushes.append(process_flush(root=root, session_id=f'locomo:{sample_id}', promote=True, token_budget=128000, max_beads=200, source='locomo_replay'))
+        try:
+            flushes.append(process_flush(root=root, session_id=f'locomo:{sample_id}', promote=True, token_budget=128000, max_beads=200, source='locomo_replay'))
+        except Exception as exc:
+            flushes.append({'ok': False, 'step': 'process_flush', 'error': str(exc), 'session_id': f'locomo:{sample_id}'})
     return {
         'ok': True,
         'sample_id': sample_id,
