@@ -51,10 +51,10 @@ from core_memory.association.crawler_contract import merge_crawler_updates
 from core_memory.write_pipeline.continuity_injection import load_continuity_injection
 
 from app.benchmarks.fixture_smoke import load_fixture_smoke_cases
-from app.benchmarks.locomo_loader import LocomoLoaderError, load_locomo_dataset
+from app.benchmarks.locomo_loader import LocomoLoaderError
 from app.benchmarks.locomo_runner import run_locomo_retrieval_suite
 from app.benchmarks.locomo_scoring import aggregate_case_scores
-from app.benchmarks.locomo_suite import build_locomo_suite_metadata, ingest_locomo_samples, make_locomo_missing_dataset_response, write_locomo_run_artifacts
+from app.benchmarks.locomo_suite import build_locomo_comparison, build_locomo_suite_metadata, ingest_locomo_samples, make_locomo_missing_dataset_response, write_locomo_run_artifacts
 from app.core.config import settings
 
 
@@ -97,11 +97,12 @@ DEFAULT_SEED_USER_MESSAGES: list[str] = [
     "Why FastAPI?",
 ]
 
-# Demo defaults should preserve visible claim/entity extraction unless explicitly overridden.
-# Keep resolution disabled by default, but do not silently turn off claim extraction for
-# LoCoMo/demo evaluation surfaces because that collapses benchmark observability.
-os.environ.setdefault("CORE_MEMORY_CLAIM_LAYER", "1")
-os.environ.setdefault("CORE_MEMORY_CLAIM_EXTRACTION_MODE", "heuristic")
+# Demo defaults to keep claim/association surfaces active unless explicitly overridden.
+# Claim layer defaults are disabled here because heuristic claim extraction can pollute
+# claim_state with assistant/meta chatter and degrade grounded retrieval quality.
+# Keep this agent-driven by grounding on bead/association evidence.
+os.environ.setdefault("CORE_MEMORY_CLAIM_LAYER", "0")
+os.environ.setdefault("CORE_MEMORY_CLAIM_EXTRACTION_MODE", "off")
 os.environ.setdefault("CORE_MEMORY_CLAIM_RESOLUTION", "0")
 os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_PROMOTION", "1")
 os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_ALLOW_SHARED_TAG", "1")
@@ -141,49 +142,12 @@ def _candidate_locomo_data_paths() -> list[Path]:
     return deduped
 
 
-def get_locomo_path_debug() -> dict[str, Any]:
-    repo_root = Path(__file__).resolve().parents[3]
-    backend_root = repo_root / "backend"
-    candidates = _candidate_locomo_data_paths()
-    rows: list[dict[str, Any]] = []
-    resolved_path: str | None = None
-    for path in candidates:
-        exists = path.exists()
-        is_file = path.is_file() if exists else False
-        rows.append(
-            {
-                "path": str(path),
-                "exists": bool(exists),
-                "is_file": bool(is_file),
-            }
-        )
-        if resolved_path is None and is_file:
-            resolved_path = str(path)
-    return {
-        "cwd": os.getcwd(),
-        "repo_root": str(repo_root),
-        "backend_root": str(backend_root),
-        "module_file": str(Path(__file__).resolve()),
-        "locomo_dir": str(LOCOMO_DIR),
-        "locomo_data_path_constant": str(LOCOMO_DATA_PATH),
-        "env": {
-            "LOCOMO_DATA_PATH": str(os.environ.get("LOCOMO_DATA_PATH") or ""),
-            "RENDER": str(os.environ.get("RENDER") or ""),
-            "RENDER_SERVICE_ID": str(os.environ.get("RENDER_SERVICE_ID") or ""),
-            "RENDER_GIT_COMMIT": str(os.environ.get("RENDER_GIT_COMMIT") or ""),
-        },
-        "candidates": rows,
-        "resolved_path": resolved_path,
-    }
-
-
 def _resolve_locomo_data_path() -> Path:
-    debug = get_locomo_path_debug()
-    resolved_path = str(debug.get("resolved_path") or "").strip()
-    if resolved_path:
-        return Path(resolved_path)
-    checked = ", ".join(str((row or {}).get("path") or "") for row in list(debug.get("candidates") or []))
-    raise FileNotFoundError(f"locomo_dataset_not_found: checked=[{checked}]")
+    candidates = _candidate_locomo_data_paths()
+    for path in candidates:
+        if path.exists():
+            return path
+    raise FileNotFoundError(f"locomo_dataset_not_found: {candidates[0]}")
 TURN_HEADER_RE = re.compile(r"^##\s*Turn\s+(\d{3})\s*:\s*(.+?)\s*$", re.MULTILINE)
 SEND_PROMPT_RE = re.compile(r"^\*\*Send:\*\*\s*`([^`]+)`\s*$", re.MULTILINE)
 ENTITY_CANDIDATE_RE = re.compile(r"\b([A-Z][A-Za-z0-9._-]{2,}|[A-Z]{2,}[A-Za-z0-9._-]*)\b")
@@ -314,7 +278,7 @@ def get_story_pack_meta() -> dict[str, Any]:
 
 def _load_locomo_dataset(*, data_path: Path | None = None) -> list[dict[str, Any]]:
     global _LOC0MO_CACHE
-    path = Path(data_path or _resolve_locomo_data_path())
+    path = Path(data_path) if data_path is not None else _resolve_locomo_data_path()
     if _LOC0MO_CACHE is not None and _LOC0MO_CACHE.get("path") == str(path):
         return list(_LOC0MO_CACHE.get("rows") or [])
     if not path.exists():
@@ -474,25 +438,17 @@ def _replay_locomo_row(row: dict[str, Any]) -> dict[str, Any]:
     if row.get("query") is not None:
         metadata["locomo_image_query"] = row.get("query")
 
-    prev_gate_mode = os.environ.get("CORE_MEMORY_AGENT_AUTHORED_MODE")
-    try:
-        os.environ["CORE_MEMORY_AGENT_AUTHORED_MODE"] = "off"
-        process_turn_finalized(
-            root=settings.core_memory_root,
-            session_id=session_id,
-            turn_id=turn_id,
-            transaction_id=f"locomo-tx:{sample_id}:{dia_id}",
-            trace_id=f"locomo-tr:{sample_id}:{dia_id}",
-            user_query="[LoCoMo transcript replay]",
-            assistant_final=display,
-            origin="BENCHMARK_REPLAY",
-            metadata=metadata,
-        )
-    finally:
-        if prev_gate_mode is None:
-            os.environ.pop("CORE_MEMORY_AGENT_AUTHORED_MODE", None)
-        else:
-            os.environ["CORE_MEMORY_AGENT_AUTHORED_MODE"] = prev_gate_mode
+    process_turn_finalized(
+        root=settings.core_memory_root,
+        session_id=session_id,
+        turn_id=turn_id,
+        transaction_id=f"locomo-tx:{sample_id}:{dia_id}",
+        trace_id=f"locomo-tr:{sample_id}:{dia_id}",
+        user_query="[LoCoMo transcript replay]",
+        assistant_final=display,
+        origin="BENCHMARK_REPLAY",
+        metadata=metadata,
+    )
     return {"ok": True, "session_id": session_id, "turn_id": turn_id, "dia_id": dia_id}
 
 
@@ -2581,62 +2537,17 @@ def _set_last_benchmark_cache(*, summary: dict[str, Any], report: dict[str, Any]
     LAST_BENCHMARK_HISTORY[:] = ([dict(history_row or {})] + existing)[:100]
 
 
-def _update_benchmark_live_state(*, run_id: str, summary_patch: dict[str, Any] | None = None, report_patch: dict[str, Any] | None = None) -> None:
-    summary = dict(LAST_BENCHMARK_SUMMARY or {})
-    report = dict(LAST_BENCHMARK_REPORT or {})
-    if str(summary.get("run_id") or "").strip() != str(run_id or "").strip():
-        summary = {"run_id": str(run_id or "").strip()}
-        report = {"live": True, "run_id": str(run_id or "").strip()}
-    if isinstance(summary_patch, dict):
-        summary.update(dict(summary_patch or {}))
-    if isinstance(report_patch, dict):
-        report.update(dict(report_patch or {}))
-    _set_last_benchmark_cache(
-        summary=summary,
-        report=report,
-        history_row={"run_id": str(run_id or "").strip(), "created_at": str(summary.get("started_at") or summary.get("finished_at") or _utc_now_iso()), "summary": summary, "report": report},
-    )
-
-
-def _benchmark_row_is_locomo(row: dict[str, Any]) -> bool:
-    summary = dict((row or {}).get("summary") or {})
-    report = dict((row or {}).get("report") or {})
-    suite = str(summary.get("suite") or ((report.get("config") or {}).get("suite") if isinstance(report.get("config"), dict) else "") or "").strip().lower()
-    if suite in {"locomo_mini", "locomo_retrieval", "locomo_qa"}:
-        return True
-    dataset = dict(report.get("dataset") or {})
-    source = str(dataset.get("source") or "").strip().lower()
-    return source == "locomo_dataset"
-
-
 def get_last_benchmark_snapshot(*, history_limit: int = 20) -> dict[str, Any]:
     rows = read_benchmark_history(limit=max(1, int(history_limit)))
-    locomo_latest = next((dict(r or {}) for r in rows if _benchmark_row_is_locomo(dict(r or {}))), {})
+    latest = dict(rows[0] or {}) if rows else {}
 
     summary = dict(LAST_BENCHMARK_SUMMARY or {})
     report = dict(LAST_BENCHMARK_REPORT or {})
 
-    has_live_cache = bool(summary) and bool(report)
-    if not has_live_cache:
-        if locomo_latest:
-            summary = dict(locomo_latest.get("summary") or {})
-            report = dict(locomo_latest.get("report") or {})
-        else:
-            summary = {}
-            report = {}
-
-    preferred_run_id = str((summary or {}).get("run_id") or "").strip()
-    if preferred_run_id:
-        rows = sorted(
-            rows,
-            key=lambda r: 0 if str(((r.get("summary") or {}).get("run_id") or r.get("run_id") or "")).strip() == preferred_run_id else 1,
-        )
-    elif locomo_latest:
-        locomo_run_id = str(((locomo_latest.get("summary") or {}).get("run_id") or locomo_latest.get("run_id") or "")).strip()
-        rows = sorted(
-            rows,
-            key=lambda r: 0 if str(((r.get("summary") or {}).get("run_id") or r.get("run_id") or "")).strip() == locomo_run_id else 1,
-        )
+    if not summary:
+        summary = dict(latest.get("summary") or {})
+    if not report:
+        report = dict(latest.get("report") or {})
 
     return {
         "ok": bool(report),
@@ -2770,87 +2681,30 @@ def _resolve_benchmark_embeddings_provider(explicit_provider: str | None = None)
 def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, progress: Any | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
-        run_id = f"bench-{uuid.uuid4().hex[:10]}"
-        started = _utc_now_iso()
-        _update_benchmark_live_state(
-            run_id=run_id,
-            summary_patch={
-                "run_id": run_id,
-                "started_at": started,
-                "suite": suite_name,
-                "semantic_mode": semantic_mode_name,
-                "root_mode": root_mode,
-                "status": "running",
-                "phase": "resolving_dataset",
-            },
-            report_patch={
-                "live": True,
-                "run_id": run_id,
-                "status": "running",
-                "phase": "resolving_dataset",
-                "config": {"suite": suite_name, "root_mode": root_mode, "semantic_mode": semantic_mode_name},
-            },
-        )
         try:
-            locomo_data_file = _resolve_locomo_data_path()
-            _update_benchmark_live_state(
-                run_id=run_id,
-                summary_patch={"status": "running", "phase": "building_suite"},
-                report_patch={"status": "running", "phase": "building_suite", "dataset": {"dataset_path": str(locomo_data_file)}},
-            )
             dataset_meta, selected_cases, selected_samples, gold_context_map = build_locomo_suite_metadata(
                 suite=suite_name,
                 sample_limit=sample_limit,
                 qa_limit=qa_limit,
                 sample_ids=sample_ids,
                 category_filter=category_filter,
-                data_file=locomo_data_file,
             )
         except LocomoLoaderError as exc:
-            _update_benchmark_live_state(
-                run_id=run_id,
-                summary_patch={"status": "failed", "phase": "failed", "error": str(exc)},
-                report_patch={"status": "failed", "phase": "failed", "error": str(exc)},
-            )
             return make_locomo_missing_dataset_response(
                 suite=suite_name,
                 root_mode=root_mode,
                 semantic_mode_name=semantic_mode_name,
                 error=exc,
             )
-        except Exception as exc:
-            _update_benchmark_live_state(
-                run_id=run_id,
-                summary_patch={"status": "failed", "phase": "failed", "error": str(exc)},
-                report_patch={"status": "failed", "phase": "failed", "error": str(exc)},
-            )
-            raise
 
+        run_id = f"bench-{uuid.uuid4().hex[:10]}"
+        started = _utc_now_iso()
         warnings = []
-        _update_benchmark_live_state(
-            run_id=run_id,
-            summary_patch={
-                "status": "running",
-                "phase": "starting",
-                "samples": int((dataset_meta.get("dataset") or {}).get("selected_samples") or 0),
-                "qa_cases": int((dataset_meta.get("dataset") or {}).get("selected_qa_cases") or 0),
-            },
-            report_patch={
-                "status": "running",
-                "phase": "starting",
-                "dataset": dict(dataset_meta.get("dataset") or {}),
-            },
-        )
         if suite_name == "locomo_mini":
             warnings.append("locomo_mini_preview_only")
         if legacy_mode:
             warnings.append("legacy_locomo_like_fixture")
 
-        _update_benchmark_live_state(
-            run_id=run_id,
-            summary_patch={"status": "running", "phase": "preparing_root"},
-            report_patch={"status": "running", "phase": "preparing_root"},
-        )
         run_root = Path(settings.core_memory_demo_benchmark_root) / run_id
         run_root.mkdir(parents=True, exist_ok=True)
         base_root = run_root / "base"
@@ -2858,33 +2712,14 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         if str(root_mode or "snapshot") == "snapshot":
             _copy_tree(Path(settings.core_memory_root), base_root)
         ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
-        _update_benchmark_live_state(
-            run_id=run_id,
-            summary_patch={"status": "running", "phase": "ingesting"},
-            report_patch={"status": "running", "phase": "ingesting"},
-        )
+        ingest_path_active = str(settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
-        _update_benchmark_live_state(
-            run_id=run_id,
-            summary_patch={"status": "running", "phase": "ingested", "turns_ingested": int(ingestion_meta.get("ingested_turns") or 0)},
-            report_patch={"status": "running", "phase": "ingested", "ingestion": dict(ingestion_meta or {})},
-        )
 
         resolved_answer_mode = str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm"))
         benchmark_embeddings_provider = _resolve_benchmark_embeddings_provider(embeddings_provider)
         benchmark_semantic_build: dict[str, Any] | None = None
         with semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
             benchmark_semantic_build = build_semantic_index(Path(base_root))
-            _update_benchmark_live_state(
-                run_id=run_id,
-                summary_patch={"status": "running", "phase": "semantic_built"},
-                report_patch={"status": "running", "phase": "semantic_built", "semantic_build": dict(benchmark_semantic_build or {})},
-            )
-            _update_benchmark_live_state(
-                run_id=run_id,
-                summary_patch={"status": "running", "phase": "retrieving"},
-                report_patch={"status": "running", "phase": "retrieving"},
-            )
             retrieval_report = run_locomo_retrieval_suite(
                 root=str(base_root),
                 qa_cases=selected_cases,
@@ -2895,11 +2730,6 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 gold_context_map=gold_context_map,
                 progress=progress,
             )
-        _update_benchmark_live_state(
-            run_id=run_id,
-            summary_patch={"status": "running", "phase": "scoring"},
-            report_patch={"status": "running", "phase": "scoring", "retrieval": {"completed": int(retrieval_report.get("completed") or 0), "failed": int(retrieval_report.get("failed") or 0)}},
-        )
         score_summary = aggregate_case_scores(list(retrieval_report.get("cases") or []))
 
         finished_at = _utc_now_iso()
@@ -3010,11 +2840,40 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "cases": cases_inline,
             "benchmark_table": benchmark_table,
         }
-        _update_benchmark_live_state(
-            run_id=run_id,
-            summary_patch={"status": "running", "phase": "writing_artifacts", **dict(summary or {})},
-            report_patch={"status": "running", "phase": "writing_artifacts", **dict(report or {})},
-        )
+        comparison = None
+        if bool(settings.locomo_compare_paths_enabled):
+            compare_target = 'canonical_replay' if ingest_path_active == 'bead_direct' else 'bead_direct'
+            compare_root = run_root / compare_target
+            compare_root.mkdir(parents=True, exist_ok=True)
+            prior_ingest_path = settings.locomo_ingest_path
+            try:
+                settings.locomo_ingest_path = compare_target
+                compare_ingestion_meta = ingest_locomo_samples(base_root=str(compare_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
+                with semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
+                    compare_semantic_build = build_semantic_index(Path(compare_root))
+                    compare_retrieval_report = run_locomo_retrieval_suite(
+                        root=str(compare_root),
+                        qa_cases=selected_cases,
+                        retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
+                        evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
+                        answer_mode=resolved_answer_mode,
+                        generator_model=generator_model,
+                        gold_context_map=gold_context_map,
+                        progress=None,
+                    )
+                comparison = build_locomo_comparison(
+                    left_label=ingest_path_active,
+                    left_report=report,
+                    right_label=compare_target,
+                    right_report={
+                        'cases': list(compare_retrieval_report.get('cases') or []),
+                        'scores': dict(aggregate_case_scores(list(compare_retrieval_report.get('cases') or [])) or {}),
+                        'ingestion': dict(compare_ingestion_meta or {}),
+                        'semantic_build': dict(compare_semantic_build or {}),
+                    },
+                )
+            finally:
+                settings.locomo_ingest_path = prior_ingest_path
         artifacts = write_locomo_run_artifacts(
             run_id=run_id,
             summary=summary,
@@ -3022,11 +2881,14 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             config=dict(report.get("config") or {}),
             dataset_meta=dict(report.get("dataset") or {}),
             ingestion_meta=dict(report.get("ingestion") or {}),
+            comparison=comparison,
         )
         summary["artifact_path"] = artifacts.get("root")
         summary["artifact_download_url"] = f"/api/demo/benchmark/artifact/{run_id}/report.json"
         report["artifacts"] = artifacts
         report["artifact_download_url"] = f"/api/demo/benchmark/artifact/{run_id}/report.json"
+        if comparison is not None:
+            report['comparison'] = comparison
 
         history_row = {
             "run_id": run_id,
@@ -3034,11 +2896,6 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "summary": dict(summary),
             "report": dict(report),
         }
-        _update_benchmark_live_state(
-            run_id=run_id,
-            summary_patch={"status": "completed", **dict(summary or {})},
-            report_patch={"status": "completed", **dict(report or {})},
-        )
         _set_last_benchmark_cache(summary=summary, report=report, history_row=history_row)
         _append_history(history_row)
         _prune_benchmark_run_dirs()
