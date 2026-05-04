@@ -1070,7 +1070,7 @@ def benchmark_last():
 
 @router.get('/demo/benchmark/artifact/{run_id}/{filename}')
 def benchmark_artifact_download(run_id: str, filename: str):
-    allowed = {'report.json', 'summary.json', 'config.json', 'dataset_meta.json', 'ingestion_meta.json', 'comparison.json', 'cases.jsonl', 'failures.jsonl'}
+    allowed = {'report.json', 'summary.json', 'config.json', 'dataset_meta.json', 'ingestion_meta.json', 'comparison.json', 'comparison_error.json', 'cases.jsonl', 'failures.jsonl'}
     name = str(filename or '').strip()
     if name not in allowed:
         raise HTTPException(status_code=404, detail='artifact_not_found')

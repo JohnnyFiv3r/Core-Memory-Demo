@@ -167,7 +167,7 @@ def build_locomo_comparison(*, left_label: str, left_report: dict[str, Any], rig
     }
 
 
-def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: dict[str, Any], config: dict[str, Any], dataset_meta: dict[str, Any], ingestion_meta: dict[str, Any] | None = None, comparison: dict[str, Any] | None = None) -> dict[str, str]:
+def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: dict[str, Any], config: dict[str, Any], dataset_meta: dict[str, Any], ingestion_meta: dict[str, Any] | None = None, comparison: dict[str, Any] | None = None, comparison_error: dict[str, Any] | None = None) -> dict[str, str]:
     root = Path(settings.core_memory_demo_artifacts_root) / "locomo-runs" / run_id
     root.mkdir(parents=True, exist_ok=True)
 
@@ -179,6 +179,7 @@ def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: 
     cases_path = root / "cases.jsonl"
     failures_path = root / "failures.jsonl"
     comparison_path = root / "comparison.json"
+    comparison_error_path = root / "comparison_error.json"
 
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -187,6 +188,8 @@ def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: 
     ingestion_meta_path.write_text(json.dumps(dict(ingestion_meta or {}), ensure_ascii=False, indent=2), encoding="utf-8")
     if comparison is not None:
         comparison_path.write_text(json.dumps(dict(comparison or {}), ensure_ascii=False, indent=2), encoding="utf-8")
+    if comparison_error is not None:
+        comparison_error_path.write_text(json.dumps(dict(comparison_error or {}), ensure_ascii=False, indent=2), encoding="utf-8")
 
     cases = list(report.get("cases") or [])
     with cases_path.open("w", encoding="utf-8") as fh:
@@ -207,6 +210,7 @@ def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: 
         "cases": str(cases_path),
         "failures": str(failures_path),
         "comparison": str(comparison_path) if comparison is not None else "",
+        "comparison_error": str(comparison_error_path) if comparison_error is not None else "",
     }
 
 
