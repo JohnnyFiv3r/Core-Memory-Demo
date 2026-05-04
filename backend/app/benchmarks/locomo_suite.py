@@ -77,12 +77,12 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
     }, selected_cases, selected, gold_context_map
 
 
-def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], ingestion_mode: str = "turns") -> dict[str, Any]:
+def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], ingestion_mode: str = "turns", ingest_path_override: str | None = None) -> dict[str, Any]:
     rows = []
     total_turns = 0
     ingested_turns = 0
     skipped_existing = 0
-    ingest_path = str(settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
+    ingest_path = str(ingest_path_override or settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
     replay_mode = str(settings.locomo_replay_mode or 'transcript_only').strip().lower() or 'transcript_only'
     flush_policy = str(settings.locomo_replay_flush_policy or 'per_session').strip().lower() or 'per_session'
     for sample in samples:
