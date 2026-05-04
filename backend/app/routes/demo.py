@@ -220,33 +220,69 @@ def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]
             'active_job_id': active_job_id,
             'active': True,
         }
+        for key in (
+            'started_at',
+            'finished_at',
+            'suite',
+            'root_mode',
+            'semantic_mode',
+            'answer_mode',
+            'retrieval_k',
+            'artifact_path',
+            'warnings',
+            'samples',
+            'qa_cases',
+            'turns_ingested',
+            'preload_turn_count',
+            'backend_modes',
+        ):
+            if key in summary:
+                compact_report[key] = summary.get(key)
         config = report.get('config')
         if isinstance(config, dict) and config:
             compact_report['config'] = {
                 'suite': str(config.get('suite') or summary.get('suite') or ''),
                 'root_mode': str(config.get('root_mode') or summary.get('root_mode') or ''),
                 'semantic_mode': str(config.get('semantic_mode') or summary.get('semantic_mode') or ''),
+                'answer_mode': str(config.get('answer_mode') or summary.get('answer_mode') or ''),
+                'retrieval_k': int(config.get('retrieval_k') or summary.get('retrieval_k') or 0),
             }
         elif summary:
             compact_report['config'] = {
                 'suite': str(summary.get('suite') or ''),
                 'root_mode': str(summary.get('root_mode') or ''),
                 'semantic_mode': str(summary.get('semantic_mode') or ''),
+                'answer_mode': str(summary.get('answer_mode') or ''),
+                'retrieval_k': int(summary.get('retrieval_k') or 0),
             }
         dataset = report.get('dataset')
         if isinstance(dataset, dict) and dataset:
             compact_report['dataset'] = {
-                'dataset_path': str(dataset.get('dataset_path') or ''),
-                'samples': int(dataset.get('samples') or 0),
-                'qa_total': int(dataset.get('qa_total') or 0),
-                'turns_total': int(dataset.get('turns_total') or 0),
-                'selected_samples': int(dataset.get('selected_samples') or 0),
-                'selected_qa_cases': int(dataset.get('selected_qa_cases') or 0),
+                'dataset_path': str(dataset.get('dataset_path') or summary.get('dataset_path') or ''),
+                'samples': int(dataset.get('samples') or summary.get('samples') or 0),
+                'qa_total': int(dataset.get('qa_total') or summary.get('qa_cases') or 0),
+                'turns_total': int(dataset.get('turns_total') or summary.get('turns_ingested') or 0),
+                'selected_samples': int(dataset.get('selected_samples') or summary.get('samples') or 0),
+                'selected_qa_cases': int(dataset.get('selected_qa_cases') or summary.get('qa_cases') or 0),
                 'python_version': str(dataset.get('python_version') or ''),
             }
             sample_ids = dataset.get('selected_sample_ids')
             if isinstance(sample_ids, list) and sample_ids:
                 compact_report['dataset']['selected_sample_ids'] = [str(x) for x in sample_ids[:10] if str(x).strip()]
+        environment = report.get('environment')
+        if isinstance(environment, dict) and environment:
+            compact_report['environment'] = {
+                'embeddings_provider': str(environment.get('embeddings_provider') or ''),
+                'embeddings_model': str(environment.get('embeddings_model') or ''),
+            }
+        semantic_build = report.get('semantic_build')
+        if isinstance(semantic_build, dict) and semantic_build:
+            compact_report['semantic_build'] = {
+                'ok': bool(semantic_build.get('ok')),
+                'backend': semantic_build.get('backend'),
+                'entries': semantic_build.get('entries'),
+                'error': semantic_build.get('error'),
+            }
         return summary, compact_report
     summary = _active_benchmark_summary(active_job)
     report = {
