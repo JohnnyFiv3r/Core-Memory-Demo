@@ -9,11 +9,12 @@ from typing import Any
 
 from app.benchmarks.locomo_ingest import ingest_locomo_turns
 from app.benchmarks.locomo_loader import LocomoLoaderError, load_locomo_dataset
+from app.benchmarks.locomo_scoring import aggregate_case_scores
 from app.core.config import settings
 
 
-def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, data_file: str | Path | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
-    samples, meta = load_locomo_dataset(data_file=data_file)
+def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    samples, meta = load_locomo_dataset()
     selected = list(samples)
 
     wanted_ids = [str(x).strip() for x in (sample_ids or []) if str(x).strip()]
@@ -81,14 +82,24 @@ def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], inge
     total_turns = 0
     ingested_turns = 0
     skipped_existing = 0
+    ingest_path = str(settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
+    replay_mode = str(settings.locomo_replay_mode or 'transcript_only').strip().lower() or 'transcript_only'
+    flush_policy = str(settings.locomo_replay_flush_policy or 'per_session').strip().lower() or 'per_session'
     for sample in samples:
-        out = ingest_locomo_turns(root=base_root, sample=sample, mode=ingestion_mode)
+        if ingest_path == 'canonical_replay':
+            from app.benchmarks.locomo_replay import replay_locomo_sample
+            out = replay_locomo_sample(root=base_root, sample=sample, mode=replay_mode, flush_policy=flush_policy)
+        else:
+            out = ingest_locomo_turns(root=base_root, sample=sample, mode=ingestion_mode)
         rows.append(out)
         total_turns += int(out.get("turns_total") or 0)
         ingested_turns += int(out.get("ingested_count") or 0)
         skipped_existing += int(out.get("skipped_existing_count") or 0)
     return {
         "mode": ingestion_mode,
+        "ingest_path": ingest_path,
+        "replay_mode": replay_mode if ingest_path == 'canonical_replay' else '',
+        "flush_policy": flush_policy if ingest_path == 'canonical_replay' else '',
         "samples": len(samples),
         "turns_total": total_turns,
         "ingested_turns": ingested_turns,
@@ -97,7 +108,66 @@ def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], inge
     }
 
 
-def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: dict[str, Any], config: dict[str, Any], dataset_meta: dict[str, Any], ingestion_meta: dict[str, Any] | None = None) -> dict[str, str]:
+def build_locomo_comparison(*, left_label: str, left_report: dict[str, Any], right_label: str, right_report: dict[str, Any]) -> dict[str, Any]:
+    left_cases = list((left_report or {}).get('cases') or [])
+    right_cases = list((right_report or {}).get('cases') or [])
+    left_scores = aggregate_case_scores(left_cases)
+    right_scores = aggregate_case_scores(right_cases)
+
+    def _metrics(scores: dict[str, Any]) -> dict[str, float]:
+        overall = dict((scores or {}).get('overall') or {})
+        return {
+            'answer_f1_mean': float(overall.get('answer_f1_mean') or 0.0),
+            'evidence_recall@5': float(overall.get('evidence_recall@5') or 0.0),
+            'hit_any': float(overall.get('hit_any') or 0.0),
+            'mrr': float(overall.get('mrr') or 0.0),
+        }
+
+    def _by_category(scores: dict[str, Any]) -> dict[str, dict[str, float]]:
+        return {str(k): dict(v or {}) for k, v in dict((scores or {}).get('by_category') or {}).items()}
+
+    left_metrics = _metrics(left_scores)
+    right_metrics = _metrics(right_scores)
+    categories = sorted(set(_by_category(left_scores).keys()) | set(_by_category(right_scores).keys()), key=lambda x: int(x))
+    by_category = {}
+    left_by_category = _by_category(left_scores)
+    right_by_category = _by_category(right_scores)
+    for cat in categories:
+        l = left_by_category.get(cat) or {}
+        r = right_by_category.get(cat) or {}
+        by_category[cat] = {
+            left_label: {
+                'qa_count': int(l.get('qa_count') or 0),
+                'answer_f1_mean': float(l.get('answer_f1_mean') or 0.0),
+                'evidence_recall@5': float(l.get('evidence_recall@5') or 0.0),
+                'hit_any': float(l.get('hit_any') or 0.0),
+            },
+            right_label: {
+                'qa_count': int(r.get('qa_count') or 0),
+                'answer_f1_mean': float(r.get('answer_f1_mean') or 0.0),
+                'evidence_recall@5': float(r.get('evidence_recall@5') or 0.0),
+                'hit_any': float(r.get('hit_any') or 0.0),
+            },
+            'delta': {
+                'answer_f1_mean': float(r.get('answer_f1_mean') or 0.0) - float(l.get('answer_f1_mean') or 0.0),
+                'evidence_recall@5': float(r.get('evidence_recall@5') or 0.0) - float(l.get('evidence_recall@5') or 0.0),
+                'hit_any': float(r.get('hit_any') or 0.0) - float(l.get('hit_any') or 0.0),
+            },
+        }
+    return {
+        'ok': True,
+        'left': left_label,
+        'right': right_label,
+        'overall': {
+            left_label: left_metrics,
+            right_label: right_metrics,
+            'delta': {key: right_metrics[key] - left_metrics[key] for key in left_metrics.keys()},
+        },
+        'by_category': by_category,
+    }
+
+
+def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: dict[str, Any], config: dict[str, Any], dataset_meta: dict[str, Any], ingestion_meta: dict[str, Any] | None = None, comparison: dict[str, Any] | None = None) -> dict[str, str]:
     root = Path(settings.core_memory_demo_artifacts_root) / "locomo-runs" / run_id
     root.mkdir(parents=True, exist_ok=True)
 
@@ -108,12 +178,15 @@ def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: 
     ingestion_meta_path = root / "ingestion_meta.json"
     cases_path = root / "cases.jsonl"
     failures_path = root / "failures.jsonl"
+    comparison_path = root / "comparison.json"
 
     summary_path.write_text(json.dumps(summary, ensure_ascii=False, indent=2), encoding="utf-8")
     report_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     config_path.write_text(json.dumps(config, ensure_ascii=False, indent=2), encoding="utf-8")
     dataset_meta_path.write_text(json.dumps(dataset_meta, ensure_ascii=False, indent=2), encoding="utf-8")
     ingestion_meta_path.write_text(json.dumps(dict(ingestion_meta or {}), ensure_ascii=False, indent=2), encoding="utf-8")
+    if comparison is not None:
+        comparison_path.write_text(json.dumps(dict(comparison or {}), ensure_ascii=False, indent=2), encoding="utf-8")
 
     cases = list(report.get("cases") or [])
     with cases_path.open("w", encoding="utf-8") as fh:
@@ -133,6 +206,7 @@ def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: 
         "ingestion_meta": str(ingestion_meta_path),
         "cases": str(cases_path),
         "failures": str(failures_path),
+        "comparison": str(comparison_path) if comparison is not None else "",
     }
 
 
