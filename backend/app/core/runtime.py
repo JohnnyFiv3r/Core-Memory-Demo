@@ -54,7 +54,7 @@ from app.benchmarks.fixture_smoke import load_fixture_smoke_cases
 from app.benchmarks.locomo_loader import LocomoLoaderError
 from app.benchmarks.locomo_runner import run_locomo_retrieval_suite
 from app.benchmarks.locomo_scoring import aggregate_case_scores
-from app.benchmarks.locomo_suite import build_locomo_suite_metadata, ingest_locomo_samples, make_locomo_missing_dataset_response, write_locomo_run_artifacts
+from app.benchmarks.locomo_suite import build_locomo_comparison, build_locomo_suite_metadata, ingest_locomo_samples, make_locomo_missing_dataset_response, write_locomo_run_artifacts
 from app.core.config import settings
 
 
@@ -2678,7 +2678,7 @@ def _resolve_benchmark_embeddings_provider(explicit_provider: str | None = None)
     return "hash"
 
 
-def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, progress: Any | None = None) -> dict[str, Any]:
+def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, progress: Any | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
         try:
@@ -2712,6 +2712,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         if str(root_mode or "snapshot") == "snapshot":
             _copy_tree(Path(settings.core_memory_root), base_root)
         ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
+        ingest_path_active = str(settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
 
         resolved_answer_mode = str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm"))
@@ -2839,6 +2840,40 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "cases": cases_inline,
             "benchmark_table": benchmark_table,
         }
+        comparison = None
+        if bool(compare_paths or settings.locomo_compare_paths_enabled):
+            compare_target = 'canonical_replay' if ingest_path_active == 'bead_direct' else 'bead_direct'
+            compare_root = run_root / compare_target
+            compare_root.mkdir(parents=True, exist_ok=True)
+            prior_ingest_path = settings.locomo_ingest_path
+            try:
+                settings.locomo_ingest_path = compare_target
+                compare_ingestion_meta = ingest_locomo_samples(base_root=str(compare_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
+                with semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
+                    compare_semantic_build = build_semantic_index(Path(compare_root))
+                    compare_retrieval_report = run_locomo_retrieval_suite(
+                        root=str(compare_root),
+                        qa_cases=selected_cases,
+                        retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
+                        evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
+                        answer_mode=resolved_answer_mode,
+                        generator_model=generator_model,
+                        gold_context_map=gold_context_map,
+                        progress=None,
+                    )
+                comparison = build_locomo_comparison(
+                    left_label=ingest_path_active,
+                    left_report=report,
+                    right_label=compare_target,
+                    right_report={
+                        'cases': list(compare_retrieval_report.get('cases') or []),
+                        'scores': dict(aggregate_case_scores(list(compare_retrieval_report.get('cases') or [])) or {}),
+                        'ingestion': dict(compare_ingestion_meta or {}),
+                        'semantic_build': dict(compare_semantic_build or {}),
+                    },
+                )
+            finally:
+                settings.locomo_ingest_path = prior_ingest_path
         artifacts = write_locomo_run_artifacts(
             run_id=run_id,
             summary=summary,
@@ -2846,11 +2881,14 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             config=dict(report.get("config") or {}),
             dataset_meta=dict(report.get("dataset") or {}),
             ingestion_meta=dict(report.get("ingestion") or {}),
+            comparison=comparison,
         )
         summary["artifact_path"] = artifacts.get("root")
         summary["artifact_download_url"] = f"/api/demo/benchmark/artifact/{run_id}/report.json"
         report["artifacts"] = artifacts
         report["artifact_download_url"] = f"/api/demo/benchmark/artifact/{run_id}/report.json"
+        if comparison is not None:
+            report['comparison'] = comparison
 
         history_row = {
             "run_id": run_id,
