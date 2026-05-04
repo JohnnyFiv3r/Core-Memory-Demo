@@ -2795,6 +2795,10 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             }
             for c in cases_inline
         ]
+        compare_requested = bool(compare_paths or settings.locomo_compare_paths_enabled)
+        compare_executed = False
+        compare_target = ''
+        comparison_error: dict[str, Any] | None = None
         report = {
             "config": {
                 "suite": suite_name,
@@ -2810,6 +2814,10 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "generator_model": str(generator_model or ""),
                 "evidence_recall_k": list(evidence_recall_k or [1, 3, 5, 8, 10]),
                 "persist_case_artifacts": bool(persist_case_artifacts),
+                "compare_paths_requested": compare_requested,
+                "compare_paths_executed": False,
+                "compare_target": "",
+                "ingest_path_active": ingest_path_active,
             },
             "dataset": dict((dataset_meta.get("dataset") or {})),
             "retrieval": {
@@ -2841,16 +2849,29 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "benchmark_table": benchmark_table,
         }
         comparison = None
-        if bool(compare_paths or settings.locomo_compare_paths_enabled):
+        if compare_requested:
             compare_target = 'canonical_replay' if ingest_path_active == 'bead_direct' else 'bead_direct'
+            report['config']['compare_target'] = compare_target
             compare_root = run_root / compare_target
             compare_root.mkdir(parents=True, exist_ok=True)
-            prior_ingest_path = settings.locomo_ingest_path
+            compare_executed = True
+            report['config']['compare_paths_executed'] = True
             try:
-                settings.locomo_ingest_path = compare_target
-                compare_ingestion_meta = ingest_locomo_samples(base_root=str(compare_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
-                with semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
-                    compare_semantic_build = build_semantic_index(Path(compare_root))
+                try:
+                    compare_ingestion_meta = ingest_locomo_samples(
+                        base_root=str(compare_root),
+                        samples=selected_samples,
+                        ingestion_mode=ingestion_mode_name,
+                        ingest_path_override=compare_target,
+                    )
+                except Exception as exc:
+                    raise RuntimeError(f'ingest_locomo_samples: {exc}') from exc
+                try:
+                    with semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
+                        compare_semantic_build = build_semantic_index(Path(compare_root))
+                except Exception as exc:
+                    raise RuntimeError(f'build_semantic_index: {exc}') from exc
+                try:
                     compare_retrieval_report = run_locomo_retrieval_suite(
                         root=str(compare_root),
                         qa_cases=selected_cases,
@@ -2861,19 +2882,37 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                         gold_context_map=gold_context_map,
                         progress=None,
                     )
-                comparison = build_locomo_comparison(
-                    left_label=ingest_path_active,
-                    left_report=report,
-                    right_label=compare_target,
-                    right_report={
-                        'cases': list(compare_retrieval_report.get('cases') or []),
-                        'scores': dict(aggregate_case_scores(list(compare_retrieval_report.get('cases') or [])) or {}),
-                        'ingestion': dict(compare_ingestion_meta or {}),
-                        'semantic_build': dict(compare_semantic_build or {}),
+                except Exception as exc:
+                    raise RuntimeError(f'run_locomo_retrieval_suite: {exc}') from exc
+                compare_report = {
+                    'config': {
+                        **dict(report.get('config') or {}),
+                        'compare_paths_requested': compare_requested,
+                        'compare_paths_executed': True,
+                        'compare_target': compare_target,
+                        'ingest_path_active': compare_target,
                     },
-                )
-            finally:
-                settings.locomo_ingest_path = prior_ingest_path
+                    'dataset': dict(report.get('dataset') or {}),
+                    'environment': dict(report.get('environment') or {}),
+                    'cases': list(compare_retrieval_report.get('cases') or []),
+                    'scores': dict(aggregate_case_scores(list(compare_retrieval_report.get('cases') or [])) or {}),
+                    'ingestion': dict(compare_ingestion_meta or {}),
+                    'semantic_build': dict(compare_semantic_build or {}),
+                }
+                try:
+                    comparison = build_locomo_comparison(
+                        left_label=ingest_path_active,
+                        left_report=report,
+                        right_label=compare_target,
+                        right_report=compare_report,
+                    )
+                except Exception as exc:
+                    raise RuntimeError(f'build_locomo_comparison: {exc}') from exc
+            except Exception as exc:
+                text = str(exc)
+                step = text.split(':', 1)[0] if ':' in text else 'compare'
+                detail = text.split(':', 1)[1].strip() if ':' in text else text
+                comparison_error = {'step': step, 'error': detail}
         artifacts = write_locomo_run_artifacts(
             run_id=run_id,
             summary=summary,
@@ -2889,6 +2928,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         report["artifact_download_url"] = f"/api/demo/benchmark/artifact/{run_id}/report.json"
         if comparison is not None:
             report['comparison'] = comparison
+        if comparison_error:
+            report['comparison_error'] = comparison_error
 
         history_row = {
             "run_id": run_id,
