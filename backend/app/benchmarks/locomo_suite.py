@@ -8,12 +8,13 @@ from pathlib import Path
 from typing import Any
 
 from app.benchmarks.locomo_ingest import ingest_locomo_turns
+from app.benchmarks.locomo_replay import replay_locomo_sample
 from app.benchmarks.locomo_loader import LocomoLoaderError, load_locomo_dataset
 from app.core.config import settings
 
 
-def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, data_file: str | Path | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
-    samples, meta = load_locomo_dataset(data_file=data_file)
+def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
+    samples, meta = load_locomo_dataset()
     selected = list(samples)
 
     wanted_ids = [str(x).strip() for x in (sample_ids or []) if str(x).strip()]
@@ -81,14 +82,23 @@ def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], inge
     total_turns = 0
     ingested_turns = 0
     skipped_existing = 0
+    ingest_path = str(settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
+    replay_mode = str(settings.locomo_replay_mode or 'transcript_only').strip().lower() or 'transcript_only'
+    flush_policy = str(settings.locomo_replay_flush_policy or 'per_session').strip().lower() or 'per_session'
     for sample in samples:
-        out = ingest_locomo_turns(root=base_root, sample=sample, mode=ingestion_mode)
+        if ingest_path == 'canonical_replay':
+            out = replay_locomo_sample(root=base_root, sample=sample, mode=replay_mode, flush_policy=flush_policy)
+        else:
+            out = ingest_locomo_turns(root=base_root, sample=sample, mode=ingestion_mode)
         rows.append(out)
         total_turns += int(out.get("turns_total") or 0)
         ingested_turns += int(out.get("ingested_count") or 0)
         skipped_existing += int(out.get("skipped_existing_count") or 0)
     return {
         "mode": ingestion_mode,
+        "ingest_path": ingest_path,
+        "replay_mode": replay_mode if ingest_path == 'canonical_replay' else '',
+        "flush_policy": flush_policy if ingest_path == 'canonical_replay' else '',
         "samples": len(samples),
         "turns_total": total_turns,
         "ingested_turns": ingested_turns,
