@@ -2913,6 +2913,10 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 step = text.split(':', 1)[0] if ':' in text else 'compare'
                 detail = text.split(':', 1)[1].strip() if ':' in text else text
                 comparison_error = {'step': step, 'error': detail}
+        if comparison is not None:
+            report['comparison'] = comparison
+        if comparison_error:
+            report['comparison_error'] = comparison_error
         artifacts = write_locomo_run_artifacts(
             run_id=run_id,
             summary=summary,
@@ -2921,15 +2925,12 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             dataset_meta=dict(report.get("dataset") or {}),
             ingestion_meta=dict(report.get("ingestion") or {}),
             comparison=comparison,
+            comparison_error=comparison_error,
         )
         summary["artifact_path"] = artifacts.get("root")
         summary["artifact_download_url"] = f"/api/demo/benchmark/artifact/{run_id}/report.json"
         report["artifacts"] = artifacts
         report["artifact_download_url"] = f"/api/demo/benchmark/artifact/{run_id}/report.json"
-        if comparison is not None:
-            report['comparison'] = comparison
-        if comparison_error:
-            report['comparison_error'] = comparison_error
 
         history_row = {
             "run_id": run_id,
