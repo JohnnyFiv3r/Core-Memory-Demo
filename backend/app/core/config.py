@@ -55,6 +55,7 @@ class Settings(BaseSettings):
     locomo_ingest_path: str = 'bead_direct'
     locomo_replay_mode: str = 'transcript_only'
     locomo_replay_flush_policy: str = 'per_session'
+    locomo_compare_paths_enabled: bool = False
 
     async_jobs_tick_enabled: bool = True
     async_jobs_tick_interval_seconds: int = 60
