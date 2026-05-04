@@ -4113,6 +4113,7 @@ async function runBenchmark() {
       embeddings_provider: embeddingsProvider,
       preload_from_demo: preloadEnabled,
       preload_turns_max: preloadMax,
+      compare_paths: true,
     };
     if (subset === 'locomo_mini') {
       if (locomoSampleMode === 'single' && locomoSampleId) {
