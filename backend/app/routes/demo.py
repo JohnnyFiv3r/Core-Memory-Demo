@@ -966,6 +966,7 @@ async def benchmark_run(request: Request):
     embeddings_provider = str((body or {}).get('embeddings_provider') or '').strip() or None
     evidence_recall_k = [int(x) for x in ((body or {}).get('evidence_recall_k') or [1, 3, 5, 8, 10]) if str(x).strip()]
     persist_case_artifacts = bool((body or {}).get('persist_case_artifacts', True))
+    compare_paths = bool((body or {}).get('compare_paths', False))
 
     kwargs = dict(
         suite=suite,
@@ -987,6 +988,7 @@ async def benchmark_run(request: Request):
         persist_case_artifacts=persist_case_artifacts,
         legacy_mode=legacy_mode,
         embeddings_provider=embeddings_provider,
+        compare_paths=compare_paths,
     )
 
     _prune_benchmark_jobs()
