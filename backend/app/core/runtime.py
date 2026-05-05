@@ -2737,14 +2737,18 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
 
         finished_at = _utc_now_iso()
         duration_ms = max(0, int((datetime.fromisoformat(finished_at.replace('Z', '+00:00')) - datetime.fromisoformat(started.replace('Z', '+00:00'))).total_seconds() * 1000)) if started else 0
+        selected_qa_total = int((dataset_meta.get("dataset") or {}).get("selected_qa_cases") or 0)
         summary = {
             "run_id": run_id,
+            "status": "completed",
+            "phase": "done",
             "started_at": started,
             "finished_at": finished_at,
             "duration_ms": duration_ms,
             "suite": suite_name,
             "samples": int((dataset_meta.get("dataset") or {}).get("selected_samples") or 0),
-            "qa_cases": int((dataset_meta.get("dataset") or {}).get("selected_qa_cases") or 0),
+            "qa_cases": selected_qa_total,
+            "qa_completed": selected_qa_total,
             "turns_ingested": int(ingestion_meta.get("ingested_turns") or 0),
             "answer_f1_mean": float((score_summary.get("overall") or {}).get("answer_f1_mean") or 0.0),
             "evidence_recall_at_5": float((score_summary.get("overall") or {}).get("evidence_recall@5") or 0.0),
@@ -3051,6 +3055,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
 
     summary = {
         "run_id": run_id,
+        "status": "completed",
+        "phase": "done",
         "started_at": started,
         "finished_at": _utc_now_iso(),
         "cases": total,
