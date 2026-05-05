@@ -42,29 +42,30 @@ def _intent_for_question(question: str) -> str:
 
 
 def _locomo_facets(*, sample_id: str, question: str) -> dict[str, Any]:
-    """Build retrieval hints that keep LoCoMo QA anchored to its sample/session.
+    """Build metadata-aware retrieval hints for LoCoMo QA.
 
-    The Core Memory execute API currently treats arbitrary constraints as advisory
-    metadata, while typed search honors facets.  Add both topic filters and
-    lexical terms so snapshot-mode benchmark runs don't drift into unrelated demo
-    memory before post-projection diagnostics can catch it.
+    Keep sample/session anchoring in metadata filters instead of hard lexical
+    terms.  The question text itself already drives semantic search; making every
+    entity/token a required term can filter out the gold turn before reranking.
     """
     q = str(question or "")
     sample = str(sample_id or "").strip()
-    must_terms: list[str] = []
+    metadata: dict[str, Any] = {}
     if sample:
-        must_terms.extend([sample, f"sample_id={sample}", f"sample:{sample}", f"locomo:{sample}"])
+        metadata["sample_id"] = sample
+        metadata["session_id"] = f"locomo:{sample}"
 
-    # Date phrases and named entities are often decisive in LoCoMo questions.
+    must_terms: list[str] = []
+    # Session references are metadata on LoCoMo turns, so they remain safe as
+    # key=value terms once the engine includes metadata in typed filtering.
+    for match in re.finditer(r"\bsession\s+(\d+)\b", q, flags=re.IGNORECASE):
+        value = str(match.group(1))
+        metadata["session_index"] = value
+        must_terms.append(f"session_index={value}")
+    # Exact dates are unusually high-signal and can appear in either turn text or
+    # session metadata.
     for match in re.finditer(r"\b\d{1,2}\s+[A-Z][a-z]+\s+\d{4}\b", q):
         must_terms.append(match.group(0))
-    for match in re.finditer(r"\bsession\s+(\d+)\b", q, flags=re.IGNORECASE):
-        must_terms.append(f"session_index={match.group(1)}")
-    for token in re.findall(r"\b[A-Z][a-zA-Z]{2,}\b", q):
-        must_terms.append(token)
-    for token in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", q.lower()):
-        if token not in _STOP_TERMS:
-            must_terms.append(token)
 
     deduped: list[str] = []
     seen: set[str] = set()
@@ -79,7 +80,8 @@ def _locomo_facets(*, sample_id: str, question: str) -> dict[str, Any]:
     return {
         "scope": "project",
         "topic_keys": [f"sample:{sample}"] if sample else [],
-        "must_terms": deduped[:24],
+        "metadata": metadata,
+        "must_terms": deduped[:8],
     }
 
 

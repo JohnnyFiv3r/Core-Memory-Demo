@@ -77,10 +77,13 @@ class TestLocomoRunnerRetrieval(unittest.TestCase):
             run_locomo_retrieval_case(root="/tmp/fake", sample_id="conv-1", qa=qa, retrieval_k=8)
 
         req = mt.execute.call_args.args[0]
-        self.assertEqual("project", ((req.get("facets") or {}).get("scope") or ""))
-        must_terms = list((req.get("facets") or {}).get("must_terms") or [])
-        self.assertIn("conv-1", must_terms)
-        self.assertIn("caroline", [str(x).lower() for x in must_terms])
+        facets = req.get("facets") or {}
+        self.assertEqual("project", (facets.get("scope") or ""))
+        self.assertEqual("conv-1", ((facets.get("metadata") or {}).get("sample_id") or ""))
+        self.assertEqual("locomo:conv-1", ((facets.get("metadata") or {}).get("session_id") or ""))
+        must_terms = list(facets.get("must_terms") or [])
+        self.assertNotIn("conv-1", must_terms)
+        self.assertNotIn("caroline", [str(x).lower() for x in must_terms])
         self.assertTrue(any("7 may 2023" == str(x).lower() for x in must_terms))
 
     def test_retrieval_request_includes_session_hints(self):
@@ -105,9 +108,11 @@ class TestLocomoRunnerRetrieval(unittest.TestCase):
             run_locomo_retrieval_case(root="/tmp/fake", sample_id="conv-1", qa=qa, retrieval_k=8)
 
         req = mt.execute.call_args.args[0]
-        must_terms = list((req.get("facets") or {}).get("must_terms") or [])
+        facets = req.get("facets") or {}
+        must_terms = list(facets.get("must_terms") or [])
+        self.assertEqual("3", str(((facets.get("metadata") or {}).get("session_index") or "")))
         self.assertIn("session_index=3", must_terms)
-        self.assertIn("after", [str(x).lower() for x in must_terms])
+        self.assertNotIn("after", [str(x).lower() for x in must_terms])
 
     def test_retrieval_case_reranks_same_sample_and_speaker_cues(self):
         qa = {
