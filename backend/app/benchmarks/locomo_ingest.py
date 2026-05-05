@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,41 @@ def _turn_tags(*, sample_id: str, session_index: int, speaker: str) -> list[str]
     return tags
 
 
+def _compact_text(value: str, *, limit: int = 220) -> str:
+    text = re.sub(r"\s+", " ", str(value or "").strip())
+    if len(text) <= limit:
+        return text
+    return text[: max(0, limit - 1)].rstrip() + "…"
+
+
+def _build_retrieval_facts(*, sample_id: str, session_index: int, turn_index: int, dia_id: str, speaker: str, text: str, session_date_time: str, blip_caption: str, img_url: str) -> list[str]:
+    facts: list[str] = [
+        f"sample_id={sample_id}",
+        f"session_index={session_index}",
+        f"turn_index={turn_index}",
+        f"dia_id={dia_id}",
+    ]
+    if speaker:
+        facts.append(f"speaker={speaker}")
+    if session_date_time:
+        facts.append(f"session_date_time={session_date_time}")
+    if text:
+        facts.append(_compact_text(f"{speaker}: {text}" if speaker else text, limit=280))
+    if blip_caption:
+        facts.append(_compact_text(f"image_caption={blip_caption}", limit=220))
+    if img_url:
+        facts.append(f"has_image=true")
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for fact in facts:
+        key = str(fact or "").strip()
+        if not key or key in seen:
+            continue
+        seen.add(key)
+        deduped.append(key)
+    return deduped
+
+
 def build_turn_bead(turn: dict[str, Any]) -> dict[str, Any]:
     sample_id = str(turn.get("sample_id") or "").strip()
     session_index = int(turn.get("session_index") or 0)
@@ -31,11 +67,26 @@ def build_turn_bead(turn: dict[str, Any]) -> dict[str, Any]:
     blip_caption = str(turn.get("blip_caption") or "").strip()
     img_url = str(turn.get("img_url") or "").strip()
     dia_id = str(turn.get("dia_id") or f"S{session_index}:{turn_index}").strip()
+    session_date_time = str(turn.get("session_date_time") or "").strip()
     detail = text
+    if session_date_time:
+        detail = f"Session date: {session_date_time}\n\n{detail}".strip()
     if blip_caption:
         detail = detail + f"\n\nImage caption: {blip_caption}"
     if img_url:
         detail = detail + f"\nImage URL: {img_url}"
+
+    retrieval_facts = _build_retrieval_facts(
+        sample_id=sample_id,
+        session_index=session_index,
+        turn_index=turn_index,
+        dia_id=dia_id,
+        speaker=speaker,
+        text=text,
+        session_date_time=session_date_time,
+        blip_caption=blip_caption,
+        img_url=img_url,
+    )
 
     return {
         "type": "context",
@@ -46,20 +97,15 @@ def build_turn_bead(turn: dict[str, Any]) -> dict[str, Any]:
         "source_turn_ids": [dia_id],
         "tags": _turn_tags(sample_id=sample_id, session_index=session_index, speaker=speaker),
         "retrieval_eligible": True,
-        "retrieval_title": f"{speaker}: {text[:160]}".strip(),
-        "retrieval_facts": [
-            f"sample_id={sample_id}",
-            f"session_index={session_index}",
-            f"dia_id={dia_id}",
-            f"speaker={speaker}",
-        ],
+        "retrieval_title": _compact_text(f"{speaker}: {text}".strip(), limit=160),
+        "retrieval_facts": retrieval_facts,
         "metadata": {
             "source": "locomo",
             "sample_id": sample_id,
             "session_index": session_index,
             "dia_id": dia_id,
             "speaker": speaker,
-            "session_date_time": str(turn.get("session_date_time") or "").strip(),
+            "session_date_time": session_date_time,
             "turn_index": turn_index,
             "has_image": bool(img_url or blip_caption),
             "img_url": img_url,
