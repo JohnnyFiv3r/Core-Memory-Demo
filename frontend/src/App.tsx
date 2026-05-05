@@ -2,7 +2,7 @@ import { useEffect, useMemo } from 'react'
 import { getApiBase } from './api'
 
 export function App() {
-  const uiRev = '20260420-auth-session-13'
+  const uiRev = '20260428-locomo-sync-1'
   const apiBase = getApiBase()
 
   const targetUrl = useMemo(() => {

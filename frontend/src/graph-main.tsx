@@ -63,7 +63,7 @@ try {
 }
 const isHostedDemo = window.location.hostname === 'demo.usecorememory.com'
 const hostedBase = ''
-const hostedDirectBase = isHostedDemo ? 'https://core-memory-demo.onrender.com' : ''
+const hostedDirectBase = ''
 const apiBase = (queryBase || (isHostedDemo ? hostedBase : localBase) || '').replace(/\/+$/, '')
 try {
   if (queryBase) localStorage.setItem('CORE_MEMORY_API_BASE', apiBase)
@@ -142,7 +142,7 @@ async function fetchAuthMeta(): Promise<MetaResponse['auth'] | null> {
   if (!graphMetaPromise) {
     graphMetaPromise = (async () => {
       const primary = apiBase ? `${apiBase}/api/meta` : '/api/meta'
-      const fallback = !apiBase && hostedDirectBase ? `${hostedDirectBase}/api/meta` : ''
+      const fallback = ''
       try {
         const res = await fetch(primary)
         if (res.ok) {
@@ -247,7 +247,7 @@ async function refreshGraphTokenSilently(): Promise<string> {
 
 async function fetchWithFallback(path: string, init?: RequestInit): Promise<Response> {
   const primaryUrl = apiBase && path.startsWith('/') ? `${apiBase}${path}` : path
-  const directUrl = !apiBase && hostedDirectBase && path.startsWith('/') ? `${hostedDirectBase}${path}` : ''
+  const directUrl = ''
   const reqInit = { ...(init || {}) }
   let res: Response
   try {

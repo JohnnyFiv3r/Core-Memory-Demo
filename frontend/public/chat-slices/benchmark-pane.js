@@ -36,15 +36,16 @@ function BenchmarkPane(props) {
 
   const suite = String((summary || {}).suite || '')
   const isLocomo = suite && suite !== 'fixture_smoke'
-  const status = String((summary || {}).status || (report || {}).status || '').trim().toLowerCase()
-  const phase = String((summary || {}).phase || (report || {}).phase || '').trim().toLowerCase()
+  const hasFinishedAt = !!String((summary || {}).finished_at || '').trim()
+  const status = String((summary || {}).status || (report || {}).status || (hasFinishedAt ? 'completed' : '')).trim().toLowerCase()
+  const phase = String((summary || {}).phase || (report || {}).phase || (hasFinishedAt ? 'done' : '')).trim().toLowerCase()
   const runId = String((summary || {}).run_id || (report || {}).run_id || '').trim()
   const activeJobId = String((summary || {}).job_id || (report || {}).active_job_id || '').trim()
   const turnsIngested = Number((summary || {}).turns_ingested || (((report || {}).ingestion || {}).ingested_turns || 0) || 0)
   const qaCases = Number((summary || {}).qa_cases || 0)
-  const qaCompleted = Number((summary || {}).qa_completed || 0)
+  const qaCompleted = Number((summary || {}).qa_completed || (status === 'completed' ? qaCases : 0))
   const activeSampleId = String((summary || {}).sample_id || '').trim()
-  const isActiveRun = !!((runId || activeJobId) && status !== 'completed' && status !== 'failed')
+  const isActiveRun = !!((runId || activeJobId) && !hasFinishedAt && status !== 'completed' && status !== 'failed')
   const runLabel = isActiveRun
     ? (activeJobId ? ('job_id=' + activeJobId) : (runId ? ('run_id=' + runId) : ''))
     : (runId ? ('run_id=' + runId) : '')

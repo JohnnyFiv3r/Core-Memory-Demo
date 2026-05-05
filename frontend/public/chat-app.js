@@ -22,6 +22,8 @@ function showEmptyChat() {
 showEmptyChat();
 
 let firstMessage = true;
+let chatHydratedFromTurns = false;
+let lastKnownSessionId = '';
 let lastBenchmarkReport = null;
 let lastBenchmarkSummary = null;
 let lastBenchmarkHistory = [];
@@ -189,6 +191,9 @@ let authClient = null;
 let authRequestedScope = 'openid profile email';
 let refreshTimerId = null;
 let refreshErrorStreak = 0;
+let refreshBackoffMs = 2500;
+let refreshPauseNoticeShown = false;
+let initialStateHydrated = false;
 let authRedirecting = false;
 const AUTH_LOOP_GUARD_KEY = 'CM_AUTH_LOOP_GUARD';
 const CHAT_API_MODE_KEY = 'CM_CHAT_API_MODE';
@@ -1038,6 +1043,34 @@ function syncClaimsStateToUrl() {
     if (claimsAsOf) u.searchParams.set('cm_as_of', claimsAsOf);
     else u.searchParams.delete('cm_as_of');
     window.history.replaceState({}, '', u.toString());
+  } catch (_) {
+    // best effort only
+  }
+}
+
+function renderChatTurns(items) {
+  const rows = Array.isArray(items) ? items : [];
+  if (!rows.length) return;
+  messagesEl.textContent = '';
+  firstMessage = false;
+  for (const row of rows) {
+    const uq = String((row && (row.user_query || row.query)) || '').trim();
+    const af = String((row && (row.assistant_final || row.response || row.assistant)) || '').trim();
+    const tid = String((row && row.turn_id) || '').trim();
+    if (uq) addMsg('user', uq);
+    if (af) addMsg('assistant', af, tid);
+  }
+  chatHydratedFromTurns = true;
+}
+
+async function hydrateChatFromTurns(sessionId) {
+  if (chatHydratedFromTurns) return;
+  try {
+    const url = '/api/demo/turns?limit=30' + (sessionId ? ('&session_id=' + encodeURIComponent(sessionId)) : '');
+    const res = await fetch(url);
+    const data = await parseApiJsonResponse(res, 'turns');
+    const items = Array.isArray(data.items) ? data.items : Array.isArray(data.turns) ? data.turns : [];
+    if (items.length) renderChatTurns(items.slice().reverse());
   } catch (_) {
     // best effort only
   }
@@ -3524,9 +3557,19 @@ function renderBenchmark(summary, report, benchmarkMeta) {
   );
 }
 
+function safeRenderSection(label, fn) {
+  try {
+    return fn();
+  } catch (err) {
+    console.error('render section failed:', label, err);
+    return null;
+  }
+}
+
 async function refreshMemory() {
   if (authEnabled && !authReady) return;
   if (!modelOptionsHydrated) loadDemoModels();
+  refreshSeedStatus();
   try {
     const activeBenchmarkStatus = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
     const activeBenchmarkJobId = String((lastBenchmarkSummary || {}).job_id || '').trim();
@@ -3543,6 +3586,7 @@ async function refreshMemory() {
         updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
         renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
       } catch (_) {
+        // best effort only
       }
 
       try {
@@ -3559,6 +3603,7 @@ async function refreshMemory() {
         document.getElementById('stat-tokens').textContent = Math.round(Math.max(0, usage));
         document.getElementById('stat-budget').textContent = budget;
       } catch (_) {
+        // best effort only
       }
 
       refreshErrorStreak = 0;
@@ -3612,6 +3657,11 @@ async function refreshMemory() {
       Math.max(0, usage) + Math.max(0, rollingWindowTokens)
     );
     const windowPct = budget > 0 ? ((totalUsedTokens / budget) * 100) : 0;
+    document.getElementById('stat-beads').textContent = Number(statsCompat.total_beads || (mem.beads || []).length || 0);
+    document.getElementById('stat-assoc').textContent = Number(statsCompat.total_associations || (mem.associations || []).length || 0);
+    document.getElementById('stat-claims').textContent = Number(statsCompat.claim_slot_count || (claims.slots || []).length || 0);
+    document.getElementById('stat-entities').textContent = Number(statsCompat.entity_count || (entities.rows || []).length || 0);
+    document.getElementById('stat-rolling').textContent = Number(statsCompat.rolling_window_size || (mem.rolling_window || []).length || 0);
     document.getElementById('stat-tokens').textContent = Math.round(totalUsedTokens);
     document.getElementById('stat-budget').textContent = budget;
     document.getElementById('session-badge').textContent = 'session: ' + String(sess.session_id || statsCompat.session_id || '---') + ' ▾';
@@ -3661,12 +3711,16 @@ async function refreshMemory() {
     safeRenderSection('benchmark-pane', () => renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory}));
     initialStateHydrated = true;
     refreshErrorStreak = 0;
+    refreshBackoffMs = 2500;
+    refreshPauseNoticeShown = false;
+    restartRefreshTimer(refreshBackoffMs);
   } catch (err) {
     refreshErrorStreak += 1;
-    if (refreshErrorStreak >= 3 && refreshTimerId) {
-      clearInterval(refreshTimerId);
-      refreshTimerId = null;
-      addMsg('system', 'Data refresh paused due to repeated backend/proxy errors. Use Refresh or reload after backend recovers.');
+    refreshBackoffMs = Math.min(30000, Math.max(2500, refreshBackoffMs * 2));
+    restartRefreshTimer(refreshBackoffMs);
+    if (refreshErrorStreak >= 3 && !refreshPauseNoticeShown) {
+      refreshPauseNoticeShown = true;
+      addMsg('system', 'Data refresh is degraded due to repeated backend/proxy errors. Retrying automatically with backoff.');
     }
     console.error('refreshMemory failed:', err);
   }
@@ -3795,6 +3849,8 @@ async function seedMemory() {
     seedBtn.disabled = true;
     seedBtn.textContent = 'Seeding...';
   }
+  seedStatusState = {active: true, kind: 'seed', status: 'running', message: 'Seeding in progress'};
+  updateBenchmarkButtonGate();
 
   try {
     const seedSource = document.getElementById('seed-source')?.value || 'story_pack';
@@ -3973,11 +4029,14 @@ async function seedMemory() {
       }
     }
 
+    seedStatusState = {active: false, kind: seedSource, status: 'completed', message: 'Seed complete'};
+    updateBenchmarkButtonGate();
     refreshMemory();
   } catch (err) {
     if (String(err && err.message || '') === 'Hard reset canceled') return;
     alert('Seed failed: ' + err.message);
   } finally {
+    await refreshSeedStatus();
     if (seedBtn) {
       seedBtn.disabled = false;
       seedBtn.textContent = prevSeedLabel || 'Seed';
@@ -4066,6 +4125,11 @@ async function benchmarkHasLiveRun() {
 async function runBenchmark() {
   const btn = document.getElementById('btn-benchmark');
   if (!btn) return;
+  if (seedStatusState && seedStatusState.active) {
+    addMsg('system', 'Benchmark blocked: wait until seeding is confirmed complete' + (seedStatusState.kind ? (' (' + seedStatusState.kind + ')') : '') + '.');
+    updateBenchmarkButtonGate();
+    return;
+  }
   const subset = document.getElementById('bench-subset')?.value || 'locomo_mini';
   const semanticMode = document.getElementById('bench-semantic')?.value || 'required';
   const myelination = document.getElementById('bench-myelination')?.value || 'off';
@@ -4080,8 +4144,9 @@ async function runBenchmark() {
   const locomoMaxTurns = Number.isFinite(locomoMaxTurnsRaw) ? Math.max(1, Math.floor(locomoMaxTurnsRaw)) : 200;
 
   const prev = btn.textContent;
+  btn.dataset.prevLabel = prev;
   btn.disabled = true;
-  btn.textContent = 'Running...';
+  btn.textContent = 'Starting...';
   const optimisticJobId = 'pending-job-' + Date.now().toString(36);
   lastBenchmarkSummary = {
     run_id: '',
@@ -4100,7 +4165,7 @@ async function runBenchmark() {
   updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
   addMsg(
     'system',
-    'Running LOCOMO benchmark (' + subset + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
+    'Starting LOCOMO benchmark (' + subset + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
       ', preload=' + (preloadEnabled ? preloadMax : 0) + ')...'
   );
   try {
@@ -4186,13 +4251,14 @@ async function runBenchmark() {
           lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
           updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
           renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+          syncBenchmarkButton(lastBenchmarkSummary || {});
         }
       } catch (_) {
         // best effort only
       }
       done = !!job.done;
       if (!done) {
-        btn.textContent = 'Running...';
+        syncBenchmarkButton(lastBenchmarkSummary || {});
         await new Promise(resolve => setTimeout(resolve, Math.max(500, Number(job.poll_after_ms || 1200))));
       } else if (job.result && job.result.ok) {
         const result = job.result || {};
@@ -4214,7 +4280,16 @@ async function runBenchmark() {
     }
   } catch (err) {
     const msg = String((err && err.message) || err || 'benchmark_failed');
-    addMsg('system', 'Benchmark failed: ' + msg);
+    if (/failed to fetch/i.test(msg)) {
+      const liveRun = await benchmarkHasLiveRun();
+      if (liveRun) {
+        addMsg('system', 'Benchmark started, but live polling briefly lost connection. Recovering from backend state...');
+      } else {
+        addMsg('system', 'Benchmark transport hiccup. Checking backend state...');
+      }
+    } else {
+      addMsg('system', 'Benchmark failed: ' + msg);
+    }
   } finally {
     syncBenchmarkButton(lastBenchmarkSummary || {});
   }
@@ -4226,6 +4301,12 @@ function switchTab(name) {
   document.querySelectorAll('.tab-content').forEach(t => t.classList.toggle('active', t.id === 'tab-' + name));
 }
 
+function restartRefreshTimer(ms) {
+  const nextMs = Math.max(1000, Number(ms || 2500));
+  if (refreshTimerId) clearInterval(refreshTimerId);
+  refreshTimerId = setInterval(refreshMemory, nextMs);
+}
+
 function startDemoUi() {
   bindUiEventHandlers();
   loadClaimsStateFromUrl();
@@ -4233,10 +4314,12 @@ function startDemoUi() {
   bindSessionPopoverControls();
   loadDemoModels();
   refreshLocomoMeta();
+  refreshSeedStatus();
   refreshErrorStreak = 0;
+  refreshBackoffMs = 2500;
+  refreshPauseNoticeShown = false;
   refreshMemory();
-  if (refreshTimerId) clearInterval(refreshTimerId);
-  refreshTimerId = setInterval(refreshMemory, 2500);
+  restartRefreshTimer(2500);
 }
 
 async function bootstrapDemo() {

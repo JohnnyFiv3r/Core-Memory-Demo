@@ -9,18 +9,18 @@ from app.core.agent_runtime import run_agent_for_root
 
 
 def _support_strength(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
-    rows = [dict(r or {}) for r in (retrieved_context or [])]
-    if not rows:
+    if not retrieved_context:
         return {"supported": False, "reason": "no_retrieval"}
-    top = rows[0]
+    top = retrieved_context[0] or {}
     top_text = str(top.get("text") or top.get("snippet") or "").strip()
-    top_score = float(top.get("locomo_score") or top.get("score") or 0.0)
+    raw_score = top.get("locomo_score", top.get("score"))
+    top_score = float(raw_score) if raw_score is not None else None
     used_dia_ids = [str(x).strip() for x in (top.get("dia_ids") or []) if str(x).strip()]
     if not top_text:
         return {"supported": False, "reason": "empty_top_text"}
     if not used_dia_ids:
         return {"supported": False, "reason": "missing_dia_ids"}
-    if top_score <= 0.0:
+    if top_score is not None and top_score <= 0.0:
         return {"supported": False, "reason": "non_positive_score"}
     return {"supported": True, "reason": "top_hit_grounded"}
 
@@ -99,8 +99,9 @@ def _normalize_answer_payload(raw: str) -> dict[str, Any]:
 
 def _reconcile_used_dia_ids(*, used_dia_ids: list[str], retrieved_context: list[dict[str, Any]], gold_context: list[dict[str, Any]] | None = None) -> list[str]:
     allowed = set()
-    for row in list(retrieved_context or []) + list(gold_context or []):
-        allowed.update(str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip())
+    for source in (retrieved_context or [], gold_context or []):
+        for row in source:
+            allowed.update(str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip())
     used = [str(x).strip() for x in (used_dia_ids or []) if str(x).strip()]
     normalized = [x for x in used if x in allowed]
     if normalized:
@@ -115,7 +116,7 @@ def _reconcile_used_dia_ids(*, used_dia_ids: list[str], retrieved_context: list[
 
 def _format_retrieved_context(retrieved_context: list[dict[str, Any]], *, limit: int = 5) -> str:
     lines: list[str] = []
-    for idx, row in enumerate(list(retrieved_context or [])[: max(1, int(limit))], start=1):
+    for idx, row in enumerate((retrieved_context or [])[: max(1, int(limit))], start=1):
         item = dict(row or {})
         dia_ids = ", ".join(str(x).strip() for x in (item.get("dia_ids") or []) if str(x).strip()) or "unknown"
         speaker = str(item.get("speaker") or "").strip()
