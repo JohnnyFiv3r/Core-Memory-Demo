@@ -9,13 +9,19 @@ from app.benchmarks.locomo_scoring import compute_evidence_recall, score_answer
 try:
     from core_memory.integrations.api import inspect_bead
     from core_memory.retrieval.normalize import classify_intent
-    from core_memory.retrieval.trace import trace_request
     from core_memory.retrieval.tools import memory as memory_tools
 except Exception:  # pragma: no cover
     inspect_bead = None  # type: ignore
     classify_intent = None  # type: ignore
-    trace_request = None  # type: ignore
     memory_tools = None  # type: ignore
+
+try:
+    from core_memory.retrieval.trace import trace_request
+except Exception:  # pragma: no cover
+    try:
+        from core_memory.retrieval.pipeline import memory_trace as trace_request
+    except Exception:  # pragma: no cover
+        trace_request = None  # type: ignore
 
 
 _STOP_TERMS = {
