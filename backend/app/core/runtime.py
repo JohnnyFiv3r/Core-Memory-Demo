@@ -2452,6 +2452,27 @@ def semantic_mode(mode: str, *, build_on_read: bool | None = None, embeddings_pr
                 os.environ[provider_key] = old_provider
 
 
+@contextmanager
+def benchmark_claim_mode():
+    """Enable claim-state retrieval only around isolated benchmark roots."""
+    keys = {
+        "CORE_MEMORY_CLAIM_LAYER": "1",
+        "CORE_MEMORY_CLAIM_RESOLUTION": "1",
+        "CORE_MEMORY_CLAIM_RETRIEVAL_BOOST": "1",
+    }
+    old = {key: os.environ.get(key) for key in keys}
+    try:
+        for key, value in keys.items():
+            os.environ[key] = value
+        yield
+    finally:
+        for key, value in old.items():
+            if value is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = value
+
+
 def _benchmark_history_file() -> Path:
     p = Path(settings.core_memory_demo_artifacts_root)
     p.mkdir(parents=True, exist_ok=True)
@@ -2721,7 +2742,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             resolved_generator_model = detect_model()
         benchmark_embeddings_provider = _resolve_benchmark_embeddings_provider(embeddings_provider)
         benchmark_semantic_build: dict[str, Any] | None = None
-        with semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
+        with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
             benchmark_semantic_build = build_semantic_index(Path(base_root))
             retrieval_report = run_locomo_retrieval_suite(
                 root=str(base_root),
@@ -2874,21 +2895,22 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 except Exception as exc:
                     raise RuntimeError(f'ingest_locomo_samples: {exc}') from exc
                 try:
-                    with semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
+                    with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
                         compare_semantic_build = build_semantic_index(Path(compare_root))
                 except Exception as exc:
                     raise RuntimeError(f'build_semantic_index: {exc}') from exc
                 try:
-                    compare_retrieval_report = run_locomo_retrieval_suite(
-                        root=str(compare_root),
-                        qa_cases=selected_cases,
-                        retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
-                        evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
-                        answer_mode=resolved_answer_mode,
-                        generator_model=resolved_generator_model,
-                        gold_context_map=gold_context_map,
-                        progress=None,
-                    )
+                    with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
+                        compare_retrieval_report = run_locomo_retrieval_suite(
+                            root=str(compare_root),
+                            qa_cases=selected_cases,
+                            retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
+                            evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
+                            answer_mode=resolved_answer_mode,
+                            generator_model=resolved_generator_model,
+                            gold_context_map=gold_context_map,
+                            progress=None,
+                        )
                 except Exception as exc:
                     raise RuntimeError(f'run_locomo_retrieval_suite: {exc}') from exc
                 compare_report = {
