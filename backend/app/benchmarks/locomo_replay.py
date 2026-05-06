@@ -2,9 +2,9 @@ from __future__ import annotations
 
 from typing import Any
 
-from core_memory.integrations.api import emit_turn_finalized
 from core_memory.integrations.openclaw_runtime import finalize_and_process_turn
-from core_memory.runtime.engine import process_flush
+from core_memory.runtime.engine import emit_turn_finalized, process_flush
+from core_memory.runtime.worker import process_memory_event
 
 
 def _turn_metadata(*, sample_id: str, session_index: int, session_date_time: str, turn_index: int, dia_id: str, speaker: str, img_url: str, blip_caption: str) -> dict[str, Any]:
@@ -78,9 +78,13 @@ def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'tran
                 if emitted_row and not bool(emitted_row.get('emitted', True)):
                     emitted_flag = False
             else:
-                event_id = emit_turn_finalized(root=root, strict=False, **env)
-                out = {'ok': True, 'event_id': event_id}
-                emitted_flag = bool(event_id)
+                out = emit_turn_finalized(root=root, **env)
+                event_id = out.get('event_id')
+                payload = out.get('payload') or {}
+                if payload:
+                    worker_out = process_memory_event(root, payload)
+                    out = {**out, 'worker': worker_out}
+                emitted_flag = bool(out.get('emitted') or event_id)
             if emitted_flag:
                 emitted.append(
                     {
