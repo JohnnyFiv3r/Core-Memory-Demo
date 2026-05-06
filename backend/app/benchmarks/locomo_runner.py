@@ -480,8 +480,11 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
                     "used": True,
                     "reason": "trace_ok",
                     "anchor_ids": anchor_ids[: max(3, int(retrieval_k or 8))],
+                    "result_count": len(list((trace or {}).get("results") or [])),
+                    "result_ids": [str((r or {}).get("bead_id") or "").strip() for r in list((trace or {}).get("results") or [])[:20] if str((r or {}).get("bead_id") or "").strip()],
                     "chains": list((trace or {}).get("chains") or []),
                     "grounding": dict((trace or {}).get("grounding") or {}),
+                    "diagnostics": dict((trace or {}).get("trace_diagnostics") or {}),
                     "archive_fallback_used": archive_fallback_used,
                 }
             else:
