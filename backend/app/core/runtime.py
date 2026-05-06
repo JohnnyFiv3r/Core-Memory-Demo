@@ -2802,7 +2802,7 @@ def _resolve_benchmark_embeddings_provider(explicit_provider: str | None = None)
     return "hash"
 
 
-def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, progress: Any | None = None) -> dict[str, Any]:
+def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", progress: Any | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
         try:
@@ -2849,6 +2849,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             resolved_generator_model = detect_model()
         benchmark_embeddings_provider = _resolve_benchmark_embeddings_provider(embeddings_provider)
         benchmark_semantic_build: dict[str, Any] | None = None
+        retrieval_pipeline_name = str(retrieval_pipeline or "execute_trace").strip().lower() or "execute_trace"
         with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
             benchmark_semantic_build = build_semantic_index(Path(base_root))
             retrieval_report = run_locomo_retrieval_suite(
@@ -2860,6 +2861,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 generator_model=resolved_generator_model,
                 gold_context_map=gold_context_map,
                 progress=progress,
+                retrieval_pipeline=retrieval_pipeline_name,
             )
         score_summary = aggregate_case_scores(list(retrieval_report.get("cases") or []))
 
@@ -2949,9 +2951,13 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "generator_model": resolved_generator_model,
                 "evidence_recall_k": list(evidence_recall_k or [1, 3, 5, 8, 10]),
                 "persist_case_artifacts": bool(persist_case_artifacts),
+                "retrieval_pipeline": retrieval_pipeline_name,
                 "compare_paths_requested": compare_requested,
                 "compare_paths_executed": False,
                 "compare_target": "",
+                "compare_retrieval_modes_requested": bool(compare_retrieval_modes),
+                "compare_retrieval_modes_executed": False,
+                "retrieval_compare_target": "",
                 "ingest_path_active": ingest_path_active,
             },
             "dataset": dict((dataset_meta.get("dataset") or {})),
@@ -2983,6 +2989,44 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "cases": cases_inline,
             "benchmark_table": benchmark_table,
         }
+        retrieval_mode_comparison = None
+        if bool(compare_retrieval_modes):
+            retrieval_compare_target = "execute_trace_hydrate" if retrieval_pipeline_name != "execute_trace_hydrate" else "execute_trace"
+            report["config"]["retrieval_compare_target"] = retrieval_compare_target
+            report["config"]["compare_retrieval_modes_executed"] = True
+            try:
+                with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
+                    compare_mode_retrieval_report = run_locomo_retrieval_suite(
+                        root=str(base_root),
+                        qa_cases=selected_cases,
+                        retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
+                        evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
+                        answer_mode=resolved_answer_mode,
+                        generator_model=resolved_generator_model,
+                        gold_context_map=gold_context_map,
+                        progress=None,
+                        retrieval_pipeline=retrieval_compare_target,
+                    )
+                mode_report = {
+                    'config': {**dict(report.get('config') or {}), 'retrieval_pipeline': retrieval_compare_target},
+                    'dataset': dict(report.get('dataset') or {}),
+                    'environment': dict(report.get('environment') or {}),
+                    'cases': list(compare_mode_retrieval_report.get('cases') or []),
+                    'scores': dict(aggregate_case_scores(list(compare_mode_retrieval_report.get('cases') or [])) or {}),
+                    'ingestion': dict(report.get('ingestion') or {}),
+                    'semantic_build': dict(report.get('semantic_build') or {}),
+                }
+                retrieval_mode_comparison = build_locomo_comparison(
+                    left_label=retrieval_pipeline_name,
+                    left_report=report,
+                    right_label=retrieval_compare_target,
+                    right_report=mode_report,
+                )
+                report['retrieval_mode_comparison'] = retrieval_mode_comparison
+                report['retrieval_mode_compare_report'] = mode_report
+            except Exception as exc:
+                report['retrieval_mode_comparison_error'] = {'step': 'compare_retrieval_modes', 'error': str(exc)}
+
         comparison = None
         if compare_requested:
             compare_target = 'canonical_replay' if ingest_path_active == 'bead_direct' else 'bead_direct'
@@ -3017,6 +3061,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                             generator_model=resolved_generator_model,
                             gold_context_map=gold_context_map,
                             progress=None,
+                            retrieval_pipeline=retrieval_pipeline_name,
                         )
                 except Exception as exc:
                     raise RuntimeError(f'run_locomo_retrieval_suite: {exc}') from exc

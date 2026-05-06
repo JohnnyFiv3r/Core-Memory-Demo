@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import re
 import uuid
@@ -15,6 +16,10 @@ try:
     from core_memory.persistence.store_claim_ops import write_claims_to_bead
 except Exception:  # pragma: no cover
     write_claims_to_bead = None  # type: ignore
+try:
+    from core_memory.runtime.turn_archive import append_turn_record
+except Exception:  # pragma: no cover
+    append_turn_record = None  # type: ignore
 
 
 def _turn_tags(*, sample_id: str, session_index: int, speaker: str) -> list[str]:
@@ -164,6 +169,57 @@ def _build_retrieval_facts(*, sample_id: str, session_index: int, turn_index: in
     return deduped
 
 
+def _archive_locomo_turn(*, root: str, turn: dict[str, Any]) -> None:
+    if append_turn_record is None:
+        return
+    sample_id = str(turn.get("sample_id") or "").strip()
+    dia_id = str(turn.get("dia_id") or "").strip()
+    if not sample_id or not dia_id:
+        return
+    speaker = str(turn.get("speaker") or "").strip()
+    text = str(turn.get("text") or "").strip()
+    session_index = int(turn.get("session_index") or 0)
+    turn_index = int(turn.get("turn_index") or 0)
+    session_date_time = str(turn.get("session_date_time") or turn.get("date_time") or "").strip()
+    img_url = str(turn.get("img_url") or "").strip()
+    blip_caption = str(turn.get("blip_caption") or "").strip()
+    assistant_final = f"{speaker}: {text}".strip(": ")
+    try:
+        append_turn_record(
+            root=Path(root),
+            session_id=f"locomo:{sample_id}",
+            turn_id=f"locomo:{sample_id}:{dia_id}",
+            transaction_id=f"tx-locomo:{sample_id}:{dia_id}",
+            trace_id=f"tr-locomo:{sample_id}:{dia_id}",
+            origin="LOCOMO_BENCHMARK_INGEST",
+            ts=datetime.now(timezone.utc).isoformat(),
+            user_query=f"[LoCoMo transcript] session={session_index} dia_id={dia_id} speaker={speaker}",
+            assistant_final=assistant_final,
+            assistant_final_ref=None,
+            assistant_final_hash=hashlib.sha256(assistant_final.encode("utf-8")).hexdigest(),
+            tools_trace=[],
+            mesh_trace=[],
+            metadata={
+                "benchmark_name": "locomo",
+                "locomo_sample_id": sample_id,
+                "locomo_session_index": session_index,
+                "locomo_session_date_time": session_date_time,
+                "locomo_dia_id": dia_id,
+                "locomo_dia_ids": [dia_id],
+                "locomo_speaker": speaker,
+                "locomo_turn_index": turn_index,
+                "locomo_has_image": bool(img_url or blip_caption),
+                "locomo_display_text": assistant_final,
+                "img_url": img_url,
+                "blip_caption": blip_caption,
+                "replay_source": "locomo",
+                "replay_policy": "bead_direct_turn_archive",
+            },
+        )
+    except Exception:
+        return
+
+
 def build_turn_bead(turn: dict[str, Any]) -> dict[str, Any]:
     sample_id = str(turn.get("sample_id") or "").strip()
     session_index = int(turn.get("session_index") or 0)
@@ -262,6 +318,7 @@ def ingest_locomo_turns(*, root: str, sample: dict[str, Any], mode: str = "turns
                 )
                 continue
             bead_id = store.add_bead(**bead)
+            _archive_locomo_turn(root=root, turn=dict(turn or {}))
             claims = _extract_locomo_claims(dict(turn or {}))
             if claims and write_claims_to_bead is not None:
                 write_claims_to_bead(root, bead_id, claims)

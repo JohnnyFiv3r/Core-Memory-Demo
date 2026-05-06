@@ -9,8 +9,9 @@ from app.benchmarks.locomo_answer import generate_locomo_answer
 from app.benchmarks.locomo_scoring import compute_evidence_recall, score_answer
 
 try:
-    from core_memory.integrations.api import inspect_bead
+    from core_memory.integrations.api import hydrate_bead_sources, inspect_bead
 except Exception:  # pragma: no cover
+    hydrate_bead_sources = None  # type: ignore
     inspect_bead = None  # type: ignore
 try:
     from core_memory.retrieval.normalize import classify_intent
@@ -31,6 +32,10 @@ except Exception:  # pragma: no cover
             from core_memory.retrieval.pipeline import memory_trace as trace_request
         except Exception:  # pragma: no cover
             trace_request = None  # type: ignore
+try:
+    from core_memory.runtime.turn_archive import find_turn_record
+except Exception:  # pragma: no cover
+    find_turn_record = None  # type: ignore
 
 
 _STOP_TERMS = {
@@ -203,12 +208,133 @@ def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     seen: set[str] = set()
     for row in rows:
-        key = str(row.get("bead_id") or row.get("title") or row.get("snippet") or "").strip()
+        dia_key = ",".join(str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip())
+        key = str(row.get("bead_id") or dia_key or row.get("title") or row.get("snippet") or "").strip()
         if not key or key in seen:
             continue
         seen.add(key)
         out.append(row)
     return out
+
+
+def _turn_text_from_record(rec: dict[str, Any]) -> tuple[str, dict[str, Any]]:
+    md = dict((rec or {}).get("metadata") or {})
+    text = str(md.get("locomo_display_text") or rec.get("assistant_final") or "").strip()
+    speaker = str(md.get("locomo_speaker") or "").strip()
+    if text and speaker and not text.lower().startswith(f"{speaker.lower()}:"):
+        text = f"{speaker}: {text}"
+    if str(md.get("locomo_session_date_time") or "").strip():
+        text = f"Session date: {str(md.get('locomo_session_date_time') or '').strip()}\n\n{text}".strip()
+    if str(md.get("blip_caption") or "").strip():
+        text = f"{text}\n\nImage caption: {str(md.get('blip_caption') or '').strip()}".strip()
+    return text, md
+
+
+def _hydrate_locomo_rows(*, root: str, rows: list[dict[str, Any]], sample_id: str, limit: int) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Force transcript hydration for retrieved LoCoMo rows.
+
+    Search/trace rows can be compressed bead summaries.  This pass uses bead
+    provenance and LoCoMo dia ids to fetch authoritative archived turn records
+    when available, then replaces row text/snippet with full transcript text.
+    """
+    if not rows:
+        return rows, {"used": False, "reason": "no_rows", "hydrated_rows": 0, "requested_turn_ids": []}
+    sample = str(sample_id or "").strip()
+    bead_ids: list[str] = []
+    turn_ids: list[str] = []
+    for row in rows[: max(1, int(limit or len(rows)))]:
+        bid = str(row.get("bead_id") or "").strip()
+        if bid and not bid.startswith("turn:"):
+            bead_ids.append(bid)
+        for tid in ((row.get("projection") or {}).get("source_turn_ids") or []):
+            tid_s = str(tid or "").strip()
+            if tid_s:
+                turn_ids.append(tid_s)
+        for dia in (row.get("dia_ids") or []):
+            dia_s = str(dia or "").strip()
+            if not dia_s:
+                continue
+            turn_ids.append(dia_s)
+            if sample:
+                turn_ids.append(f"locomo:{sample}:{dia_s}")
+    # Preserve order while deduping.
+    bead_ids = list(dict.fromkeys(bead_ids))
+    turn_ids = list(dict.fromkeys(turn_ids))
+    hydration: dict[str, Any] = {"used": False, "reason": "hydration_unavailable", "hydrated_rows": 0, "requested_turn_ids": turn_ids[:50]}
+    hydrated_by_dia: dict[str, tuple[str, dict[str, Any]]] = {}
+
+    def _capture_turn(rec: dict[str, Any] | None) -> bool:
+        if not rec:
+            return False
+        text, md = _turn_text_from_record(dict(rec or {}))
+        dia = str(md.get("locomo_dia_id") or "").strip()
+        dias = [str(x).strip() for x in (md.get("locomo_dia_ids") or []) if str(x).strip()]
+        if dia and dia not in dias:
+            dias.append(dia)
+        captured = False
+        for did in dias:
+            if text:
+                hydrated_by_dia[did] = (text, md)
+                captured = True
+        return captured
+
+    direct_records = 0
+    if find_turn_record is not None and turn_ids:
+        session_id = f"locomo:{sample}" if sample else None
+        for tid in turn_ids[: max(1, int(limit or 10)) * 3]:
+            rec = None
+            try:
+                rec = find_turn_record(root=Path(root), turn_id=tid, session_id=session_id)
+                if rec is None:
+                    rec = find_turn_record(root=Path(root), turn_id=tid, session_id=None)
+            except Exception:
+                rec = None
+            if _capture_turn(rec):
+                direct_records += 1
+
+    if hydrate_bead_sources is not None and (bead_ids or turn_ids):
+        try:
+            h = hydrate_bead_sources(root=root, bead_ids=bead_ids[: max(1, int(limit or 10))], turn_ids=turn_ids[: max(1, int(limit or 10)) * 3], include_tools=False, before=0, after=0)
+            for entry in list((h or {}).get("hydrated") or []):
+                _capture_turn(dict((entry or {}).get("turn") or {}))
+            hydration = {
+                "used": True,
+                "reason": "ok" if hydrated_by_dia else str((h or {}).get("reason") or "no_matching_turn_records"),
+                "direct_turn_records": direct_records,
+                "hydrated_turns": len(list((h or {}).get("hydrated") or [])) + direct_records,
+                "hydrated_rows": 0,
+                "requested_bead_ids": bead_ids[:50],
+                "requested_turn_ids": turn_ids[:50],
+            }
+        except Exception as exc:
+            hydration = {"used": bool(direct_records), "reason": "ok" if hydrated_by_dia else f"hydrate_failed:{exc}", "direct_turn_records": direct_records, "hydrated_rows": 0, "requested_turn_ids": turn_ids[:50]}
+    elif direct_records:
+        hydration = {"used": True, "reason": "ok", "direct_turn_records": direct_records, "hydrated_turns": direct_records, "hydrated_rows": 0, "requested_turn_ids": turn_ids[:50]}
+
+    out: list[dict[str, Any]] = []
+    hydrated_rows = 0
+    for row in rows:
+        item = dict(row or {})
+        matched: tuple[str, dict[str, Any]] | None = None
+        for dia in [str(x).strip() for x in (item.get("dia_ids") or []) if str(x).strip()]:
+            if dia in hydrated_by_dia:
+                matched = hydrated_by_dia[dia]
+                break
+        if matched:
+            text, md = matched
+            item["text"] = text
+            item["snippet"] = text
+            item["speaker"] = str(md.get("locomo_speaker") or item.get("speaker") or "").strip()
+            item["session_date_time"] = str(md.get("locomo_session_date_time") or item.get("session_date_time") or "").strip()
+            item["hydrated"] = True
+            item["hydration_source"] = "turn_archive"
+            hydrated_rows += 1
+        else:
+            item["hydrated"] = False
+            item["hydration_source"] = "bead_or_row_text"
+        out.append(item)
+    hydration["hydrated_rows"] = hydrated_rows
+    return out, hydration
 
 
 def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[str, Any]:
@@ -280,7 +406,7 @@ def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[st
     }
 
 
-def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, gold_context_map: dict[str, dict[str, Any]] | None = None) -> dict[str, Any]:
+def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, gold_context_map: dict[str, dict[str, Any]] | None = None, retrieval_pipeline: str = "execute_trace") -> dict[str, Any]:
     if memory_tools is None:
         return {
             "qa_id": str(qa.get("qa_id") or ""),
@@ -329,16 +455,20 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
                 limit=max(1, int(retrieval_k or 8)),
             )
             archive_fallback_used = bool(retrieved)
+        pipeline_name = str(retrieval_pipeline or "execute_trace").strip().lower() or "execute_trace"
+        force_three_phase = pipeline_name in {"execute_trace_hydrate", "forced_three_phase", "three_phase"}
         trace_meta = {"used": False, "reason": "trace_disabled", "anchor_ids": [], "chains": [], "grounding": {}, "archive_fallback_used": archive_fallback_used}
+        hydrate_meta = {"used": False, "reason": "not_requested", "hydrated_rows": 0}
         trace_warning = None
         try:
             anchor_ids = [str((row or {}).get("bead_id") or "").strip() for row in raw_results if str((row or {}).get("bead_id") or "").strip()]
-            if anchor_ids and trace_request is not None:
+            if (anchor_ids or force_three_phase) and trace_request is not None:
                 trace = trace_request(
                     root=root,
                     query=str(qa.get("question") or "").strip(),
-                    k=max(3, min(int(retrieval_k or 8), len(anchor_ids))),
-                    anchor_ids=anchor_ids[: max(3, int(retrieval_k or 8))],
+                    k=max(int(retrieval_k or 8), 8 if force_three_phase else 3),
+                    anchor_ids=anchor_ids[: max(3, int(retrieval_k or 8))] if anchor_ids else None,
+                    hydration={"max_beads": max(int(retrieval_k or 8), 8), "adjacent_before": 0, "adjacent_after": 0} if force_three_phase else None,
                 )
                 trace_rows = [
                     _extract_result_row(root=root, rank=len(retrieved) + idx, row=dict(row or {}))
@@ -362,6 +492,8 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         except Exception as exc:
             trace_warning = f"trace_request_failed:{exc}"
             trace_meta = {"used": False, "reason": "trace_failed", "anchor_ids": [], "chains": [], "grounding": {}, "archive_fallback_used": archive_fallback_used}
+        if force_three_phase:
+            retrieved, hydrate_meta = _hydrate_locomo_rows(root=root, rows=retrieved, sample_id=sample_id, limit=max(int(retrieval_k or 8), 8))
         for row in retrieved:
             row["locomo_score"] = _locomo_score(row, sample_id=sample_id, question=str(qa.get("question") or ""))
         retrieved.sort(key=lambda r: float(r.get("locomo_score") or 0.0), reverse=True)
@@ -415,6 +547,8 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             "backend": str(result.get("backend") or "unknown"),
             "raw_result_count": len(raw_results),
             "trace": trace_meta,
+            "hydration": hydrate_meta,
+            "retrieval_pipeline": pipeline_name,
             "diagnostics": {
                 "raw_result_count": len(raw_results),
                 "raw_result_keys": sorted({str(k) for row in raw_results[:1] for k in dict(row or {}).keys()}),
@@ -428,6 +562,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
                 "matched_gold_dia_ids": matched_gold_dia_ids,
                 "answerer_used_dia_ids": list(answer.get("used_dia_ids") or []),
                 "answerer_unsupported": bool(answer.get("unsupported")),
+                "hydration": hydrate_meta,
             },
         }
     except Exception as exc:
@@ -446,7 +581,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         }
 
 
-def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, gold_context_map: dict[str, dict[str, Any]] | None = None, progress: Any | None = None) -> dict[str, Any]:
+def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, gold_context_map: dict[str, dict[str, Any]] | None = None, progress: Any | None = None, retrieval_pipeline: str = "execute_trace") -> dict[str, Any]:
     cases = []
     qa_rows = qa_cases or []
     total = len(qa_rows)
@@ -460,6 +595,7 @@ def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], ret
             answer_mode=answer_mode,
             generator_model=generator_model,
             gold_context_map=gold_context_map,
+            retrieval_pipeline=retrieval_pipeline,
         )
         cases.append(result)
         if callable(progress):
@@ -472,4 +608,5 @@ def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], ret
         "completed": sum(1 for c in cases if c.get("status") == "ok"),
         "failed": sum(1 for c in cases if c.get("status") == "error"),
         "total": total,
+        "retrieval_pipeline": str(retrieval_pipeline or "execute_trace"),
     }
