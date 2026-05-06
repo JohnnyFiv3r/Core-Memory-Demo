@@ -32,6 +32,7 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
             'sample_limit': 1,
             'qa_limit': 1,
             'sample_ids': ['conv-1'],
+            'qa_per_category': {'1': 3, '2': 2},
         })
         fake_task = object()
         seen = {}
@@ -47,6 +48,7 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
             out = await demo_routes.benchmark_run(req)
         self.assertTrue(out['ok'])
         self.assertTrue(seen['kwargs']['compare_paths'])
+        self.assertEqual({'1': 3, '2': 2}, seen['kwargs']['qa_per_category'])
         demo_routes.BENCHMARK_JOBS.pop(out['job_id'], None)
 
 

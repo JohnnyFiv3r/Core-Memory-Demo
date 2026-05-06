@@ -13,7 +13,20 @@ from app.benchmarks.locomo_scoring import aggregate_case_scores
 from app.core.config import settings
 
 
-def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
+def _normalize_qa_per_category(raw: dict[int | str, int] | None) -> dict[int, int]:
+    out: dict[int, int] = {}
+    for key, value in dict(raw or {}).items():
+        try:
+            cat = int(key)
+            limit = int(value)
+        except Exception:
+            continue
+        if cat > 0 and limit > 0:
+            out[cat] = limit
+    return out
+
+
+def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
     samples, meta = load_locomo_dataset()
     selected = list(samples)
 
@@ -25,7 +38,10 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
     if isinstance(sample_limit, int) and sample_limit > 0:
         selected = selected[: sample_limit]
 
+    category_caps = _normalize_qa_per_category(qa_per_category)
     category_set = {int(x) for x in (category_filter or [])}
+    if category_caps:
+        category_set = set(category_set or category_caps.keys())
     selected_cases: list[dict[str, Any]] = []
     for sample in selected:
         sample_id = str(sample.get("sample_id") or "")
@@ -43,8 +59,34 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
                 }
             )
 
-    if isinstance(qa_limit, int) and qa_limit > 0:
+    available_by_category: dict[int, int] = {}
+    for row in selected_cases:
+        cat = int(row.get("category") or 0)
+        available_by_category[cat] = available_by_category.get(cat, 0) + 1
+
+    selected_by_category: dict[int, int] = {}
+    if category_caps:
+        selected_cases_stratified: list[dict[str, Any]] = []
+        used_by_category: dict[int, int] = {}
+        for row in selected_cases:
+            cat = int(row.get("category") or 0)
+            cap = int(category_caps.get(cat) or 0)
+            if cap <= 0:
+                continue
+            if int(used_by_category.get(cat) or 0) >= cap:
+                continue
+            selected_cases_stratified.append(row)
+            used_by_category[cat] = int(used_by_category.get(cat) or 0) + 1
+        selected_cases = selected_cases_stratified
+        selected_by_category = dict(sorted(used_by_category.items()))
+    elif isinstance(qa_limit, int) and qa_limit > 0:
         selected_cases = selected_cases[: qa_limit]
+
+    if not selected_by_category:
+        for row in selected_cases:
+            cat = int(row.get("category") or 0)
+            selected_by_category[cat] = selected_by_category.get(cat, 0) + 1
+        selected_by_category = dict(sorted(selected_by_category.items()))
 
     dataset_meta = meta.to_dict()
     dataset_meta.update(
@@ -53,6 +95,11 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
             "selected_qa_cases": len(selected_cases),
             "selected_sample_ids": [str(s.get("sample_id") or "") for s in selected],
             "category_filter": sorted(category_set),
+            "qa_limit": qa_limit,
+            "qa_per_category": {str(k): int(v) for k, v in sorted(category_caps.items())},
+            "available_qa_by_category": {str(k): int(v) for k, v in sorted(available_by_category.items())},
+            "selected_qa_by_category": {str(k): int(v) for k, v in sorted(selected_by_category.items())},
+            "selection_strategy": "stratified_by_category" if category_caps else "dataset_order",
             "python_version": platform.python_version(),
         }
     )

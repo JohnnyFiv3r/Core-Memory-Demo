@@ -2802,7 +2802,7 @@ def _resolve_benchmark_embeddings_provider(explicit_provider: str | None = None)
     return "hash"
 
 
-def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", progress: Any | None = None) -> dict[str, Any]:
+def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", progress: Any | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
         try:
@@ -2812,6 +2812,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 qa_limit=qa_limit,
                 sample_ids=sample_ids,
                 category_filter=category_filter,
+                qa_per_category=qa_per_category,
             )
         except LocomoLoaderError as exc:
             return make_locomo_missing_dataset_response(
@@ -2945,6 +2946,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "qa_limit": qa_limit,
                 "sample_ids": list(sample_ids or []),
                 "category_filter": list(category_filter or []),
+                "qa_per_category": {str(k): int(v) for k, v in dict(qa_per_category or {}).items()},
                 "ingestion_mode": ingestion_mode_name,
                 "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
                 "answer_mode": resolved_answer_mode,

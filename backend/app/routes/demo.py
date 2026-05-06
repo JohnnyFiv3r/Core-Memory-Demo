@@ -961,6 +961,17 @@ async def benchmark_run(request: Request):
         qa_limit = min(qa_limit, max(1, int(settings.locomo_max_qa_cases)))
     sample_ids = [str(x).strip() for x in ((body or {}).get('sample_ids') or []) if str(x).strip()]
     category_filter = [int(x) for x in ((body or {}).get('category_filter') or []) if str(x).strip()]
+    qa_per_category_raw = (body or {}).get('qa_per_category') or {}
+    qa_per_category: dict[str, int] = {}
+    if isinstance(qa_per_category_raw, dict):
+        for key, value in qa_per_category_raw.items():
+            try:
+                cat = int(key)
+                cap = int(value)
+            except Exception:
+                continue
+            if cat > 0 and cap > 0:
+                qa_per_category[str(cat)] = min(cap, max(1, int(settings.locomo_max_qa_cases)))
     retrieval_k = int((body or {}).get('retrieval_k') or settings.locomo_default_retrieval_k)
     retrieval_k = max(1, retrieval_k)
     ingestion_mode = str((body or {}).get('ingestion_mode') or settings.locomo_ingest_mode_default).strip() or settings.locomo_ingest_mode_default
@@ -987,6 +998,7 @@ async def benchmark_run(request: Request):
         qa_limit=qa_limit,
         sample_ids=sample_ids,
         category_filter=category_filter,
+        qa_per_category=qa_per_category,
         retrieval_k=retrieval_k,
         ingestion_mode=ingestion_mode,
         answer_mode=answer_mode,
