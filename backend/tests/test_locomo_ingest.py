@@ -10,6 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "Core-Memory"))
 from unittest.mock import patch
 
 from app.benchmarks.locomo_ingest import _extract_locomo_claims, build_turn_bead, ingest_locomo_turns
+from core_memory.runtime.turn_archive import find_turn_record
 
 
 class TestLocomoIngest(unittest.TestCase):
@@ -101,6 +102,10 @@ class TestLocomoIngest(unittest.TestCase):
             self.assertEqual(["D1:1"], beads[0].get("source_turn_ids") or [])
             self.assertIn("sample_id=conv-1", beads[0].get("retrieval_facts") or [])
             self.assertTrue(any("Alice: Hello there" in fact for fact in (beads[0].get("retrieval_facts") or [])))
+            turn = find_turn_record(root=Path(td), session_id="locomo:conv-1", turn_id="locomo:conv-1:D1:1")
+            self.assertIsNotNone(turn)
+            self.assertEqual("Alice: Hello there", turn.get("assistant_final"))
+            self.assertEqual("D1:1", (turn.get("metadata") or {}).get("locomo_dia_id"))
 
 
 if __name__ == "__main__":
