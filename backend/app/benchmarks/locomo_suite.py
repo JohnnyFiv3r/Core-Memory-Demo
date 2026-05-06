@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app.benchmarks.locomo_ingest import ingest_locomo_turns
+from app.benchmarks.locomo_ingest import attach_locomo_claims, ingest_locomo_turns
 from app.benchmarks.locomo_loader import LocomoLoaderError, load_locomo_dataset
 from app.benchmarks.locomo_scoring import aggregate_case_scores
 from app.core.config import settings
@@ -82,6 +82,7 @@ def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], inge
     total_turns = 0
     ingested_turns = 0
     skipped_existing = 0
+    claims_written = 0
     ingest_path = str(ingest_path_override or settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
     replay_mode = str(settings.locomo_replay_mode or 'transcript_only').strip().lower() or 'transcript_only'
     flush_policy = str(settings.locomo_replay_flush_policy or 'per_session').strip().lower() or 'per_session'
@@ -89,12 +90,21 @@ def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], inge
         if ingest_path == 'canonical_replay':
             from app.benchmarks.locomo_replay import replay_locomo_sample
             out = replay_locomo_sample(root=base_root, sample=sample, mode=replay_mode, flush_policy=flush_policy)
+            claim_out = attach_locomo_claims(root=base_root, sample=sample, create_missing=True)
+            out["claims_written"] = int(claim_out.get("claims_written") or 0)
+            out["claim_evidence_beads_created"] = int(claim_out.get("created_beads") or 0)
+            out["claim_attachment"] = {
+                "ok": bool(claim_out.get("ok")),
+                "claims_written": int(claim_out.get("claims_written") or 0),
+                "created_beads": int(claim_out.get("created_beads") or 0),
+            }
         else:
             out = ingest_locomo_turns(root=base_root, sample=sample, mode=ingestion_mode)
         rows.append(out)
         total_turns += int(out.get("turns_total") or 0)
         ingested_turns += int(out.get("ingested_count") or 0)
         skipped_existing += int(out.get("skipped_existing_count") or 0)
+        claims_written += int(out.get("claims_written") or 0)
     return {
         "mode": ingestion_mode,
         "ingest_path": ingest_path,
@@ -104,6 +114,7 @@ def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], inge
         "turns_total": total_turns,
         "ingested_turns": ingested_turns,
         "skipped_existing_count": skipped_existing,
+        "claims_written": claims_written,
         "rows": rows,
     }
 

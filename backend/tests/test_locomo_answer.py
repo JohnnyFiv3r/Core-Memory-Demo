@@ -34,6 +34,24 @@ class TestLocomoAnswer(unittest.TestCase):
         self.assertIn("7 May 2023", out["answer"])
         self.assertEqual(["D1:3"], out["used_dia_ids"])
 
+    def test_extractive_mode_answers_from_claim_value(self):
+        out = generate_locomo_answer(
+            mode="extractive",
+            qa={"question": "What kind of car does Evan drive?"},
+            retrieved_context=[
+                {
+                    "source_surface": "claim_state",
+                    "claim_value": "Prius",
+                    "claim_slot_key": "Evan:car",
+                    "snippet": "Evan drives a Prius",
+                    "dia_ids": ["D1:2"],
+                    "score": 0.9,
+                }
+            ],
+        )
+        self.assertEqual("Prius", out["answer"])
+        self.assertEqual(["D1:2"], out["used_dia_ids"])
+
     def test_oracle_context_mode(self):
         out = generate_locomo_answer(
             mode="oracle_context",

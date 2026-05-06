@@ -25,7 +25,7 @@ def _support_strength(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]
     return {"supported": True, "reason": "top_hit_grounded"}
 
 
-def _extractive_answer(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
+def _extractive_answer(retrieved_context: list[dict[str, Any]], *, question: str = "") -> dict[str, Any]:
     support = _support_strength(retrieved_context)
     if not bool(support.get("supported")):
         return {
@@ -35,6 +35,42 @@ def _extractive_answer(retrieved_context: list[dict[str, Any]]) -> dict[str, Any
             "unsupported": True,
         }
     top = dict(retrieved_context[0] or {})
+    claim_value = top.get("claim_value")
+    if str(top.get("source_surface") or "") == "claim_state" and claim_value not in (None, ""):
+        q = str(question or "").strip().lower()
+        values: list[str] = []
+        used: list[str] = []
+        top_slot = str(top.get("claim_slot_key") or "")
+        for row in retrieved_context or []:
+            item = dict(row or {})
+            if str(item.get("source_surface") or "") != "claim_state":
+                continue
+            if top_slot and str(item.get("claim_slot_key") or "") != top_slot:
+                continue
+            value = str(item.get("claim_value") or "").strip()
+            if value and value not in values:
+                values.append(value)
+            used.extend(str(x).strip() for x in (item.get("dia_ids") or []) if str(x).strip())
+        if q.startswith("how many") and values:
+            # Collapse generic values when more specific variants are present
+            # ("Prius" plus "new Prius"/"old Prius" should count as two cars,
+            # not three).
+            count_values = list(values)
+            lowered = [v.lower() for v in count_values]
+            count_values = [
+                v for v in count_values
+                if not any(v.lower() != other and v.lower() in other for other in lowered)
+            ] or values
+            words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
+            answer = words.get(len(count_values), str(len(count_values)))
+        else:
+            answer = str(claim_value).strip()
+        return {
+            "answer": answer or "No information available",
+            "used_dia_ids": sorted(set(used))[:5],
+            "confidence": "high" if answer else "low",
+            "unsupported": not bool(answer),
+        }
     text = str(top.get("text") or top.get("snippet") or "").strip()
     return {
         "answer": text or "No information available",
@@ -174,7 +210,7 @@ def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str
             "unsupported": True,
         }
     if mode_name == "extractive":
-        return _extractive_answer(retrieved_context)
+        return _extractive_answer(retrieved_context, question=str(qa.get("question") or ""))
     if mode_name == "oracle_context":
         return _oracle_answer(qa=qa, gold_context=list(gold_context or []))
     if mode_name == "llm":
