@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import sys
 import tempfile
 import unittest
@@ -15,6 +16,54 @@ else:
 
 
 class TestLocomoComparisonMode(unittest.TestCase):
+    def test_snapshot_sanitize_removes_inherited_claims_and_prior_locomo_beads(self):
+        if runtime_mod is None:
+            self.skipTest('pydantic_settings unavailable')
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            idx_path = root / '.beads' / 'index.json'
+            idx_path.parent.mkdir(parents=True, exist_ok=True)
+            idx_path.write_text(
+                json.dumps(
+                    {
+                        'beads': {
+                            'live-1': {
+                                'id': 'live-1',
+                                'session_id': 'demo',
+                                'claims': [{'id': 'c1', 'subject': 'user', 'slot': 'identity', 'value': 'Sam: Hey Evan'}],
+                                'claim_updates': [{'id': 'u1'}],
+                            },
+                            'locomo-old': {
+                                'id': 'locomo-old',
+                                'session_id': 'locomo:conv-49',
+                                'source_turn_ids': ['locomo:conv-49:D1:1'],
+                                'tags': ['locomo'],
+                                'claims': [{'id': 'bad', 'subject': 'user', 'slot': 'identity', 'value': 'Sam: Hey Evan'}],
+                            },
+                            'live-2': {'id': 'live-2', 'session_id': 'demo', 'summary': ['ordinary noise']},
+                        },
+                        'associations': [{'source': 'locomo-old', 'target': 'live-2'}, {'source': 'live-1', 'target': 'live-2'}],
+                    }
+                ),
+                encoding='utf-8',
+            )
+            (root / 'live-1').mkdir()
+            (root / 'live-1' / 'claims.json').write_text('[]', encoding='utf-8')
+
+            stats = runtime_mod._sanitize_locomo_benchmark_snapshot(root)
+            idx = json.loads(idx_path.read_text(encoding='utf-8'))
+
+        self.assertEqual(1, stats['claim_payloads_stripped'])
+        self.assertEqual(1, stats['claim_update_payloads_stripped'])
+        self.assertEqual(1, stats['locomo_beads_removed'])
+        self.assertEqual(1, stats['associations_removed'])
+        self.assertIn('live-1', idx['beads'])
+        self.assertIn('live-2', idx['beads'])
+        self.assertNotIn('locomo-old', idx['beads'])
+        self.assertEqual([], idx['beads']['live-1'].get('claims'))
+        self.assertEqual([], idx['beads']['live-1'].get('claim_updates'))
+        self.assertEqual([{'source': 'live-1', 'target': 'live-2'}], idx['associations'])
+
     def test_compare_paths_writes_comparison(self):
         if runtime_mod is None:
             self.skipTest('pydantic_settings unavailable')

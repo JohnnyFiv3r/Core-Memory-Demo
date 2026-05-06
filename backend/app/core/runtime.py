@@ -2589,6 +2589,109 @@ def _copy_tree(src: Path, dst: Path) -> None:
             shutil.copy2(child, target)
 
 
+def _sanitize_locomo_benchmark_snapshot(root: Path) -> dict[str, Any]:
+    """Remove live/synthetic claim state from a copied benchmark snapshot.
+
+    LoCoMo benchmark runs may use ``root_mode=snapshot`` to keep ordinary live
+    memory noise in the retrieval corpus, but claim-state anchors are too strong
+    to inherit from the demo root.  Previous deployed smoke runs left a bad
+    ``user:identity`` claim backed by LoCoMo text in the live root; copying that
+    into a new snapshot hijacked one QA case before the freshly ingested claims
+    could answer it.
+
+    Policy for benchmark snapshots:
+    - keep non-LoCoMo live beads as retrieval noise;
+    - strip all inherited claim/claim_update payloads so only this run's
+      deterministic LoCoMo claims participate;
+    - remove prior LoCoMo synthetic beads entirely so sample ingestion is fresh.
+    """
+    idx_path = root / ".beads" / "index.json"
+    stats = {
+        "claim_payloads_stripped": 0,
+        "claim_update_payloads_stripped": 0,
+        "locomo_beads_removed": 0,
+        "legacy_claim_sidecars_removed": 0,
+        "associations_removed": 0,
+    }
+    if not idx_path.exists():
+        return stats
+
+    try:
+        idx = json.loads(idx_path.read_text(encoding="utf-8"))
+    except Exception:
+        return stats
+    if not isinstance(idx, dict):
+        return stats
+
+    beads = idx.get("beads")
+    if not isinstance(beads, dict):
+        return stats
+
+    remove_ids: set[str] = set()
+    for bead_id, row_raw in list(beads.items()):
+        row = dict(row_raw or {}) if isinstance(row_raw, dict) else {}
+        tags = {str(t).strip().lower() for t in (row.get("tags") or []) if str(t).strip()}
+        metadata = dict(row.get("metadata") or {}) if isinstance(row.get("metadata"), dict) else {}
+        source_turn_ids = [str(t).strip() for t in (row.get("source_turn_ids") or []) if str(t).strip()]
+        session_id = str(row.get("session_id") or "").strip()
+        is_locomo = (
+            "locomo" in tags
+            or str(metadata.get("source") or "").strip().lower() == "locomo"
+            or session_id.startswith("locomo:")
+            or any(t.startswith("locomo:") or re.match(r"^D\d+:\d+$", t) for t in source_turn_ids)
+        )
+        if is_locomo:
+            remove_ids.add(str(bead_id))
+            continue
+
+        claims = row.get("claims")
+        if isinstance(claims, list) and claims:
+            stats["claim_payloads_stripped"] += len(claims)
+            row["claims"] = []
+        updates = row.get("claim_updates")
+        if isinstance(updates, list) and updates:
+            stats["claim_update_payloads_stripped"] += len(updates)
+            row["claim_updates"] = []
+        beads[bead_id] = row
+
+    for bead_id in sorted(remove_ids):
+        if bead_id in beads:
+            beads.pop(bead_id, None)
+            stats["locomo_beads_removed"] += 1
+        sidecar = root / bead_id
+        if sidecar.is_dir():
+            shutil.rmtree(sidecar, ignore_errors=True)
+
+    associations = idx.get("associations")
+    if isinstance(associations, list) and remove_ids:
+        kept = []
+        for assoc in associations:
+            row = dict(assoc or {}) if isinstance(assoc, dict) else {}
+            values = {str(v) for v in row.values() if isinstance(v, str)}
+            if values & remove_ids:
+                stats["associations_removed"] += 1
+                continue
+            kept.append(assoc)
+        idx["associations"] = kept
+
+    idx_path.write_text(json.dumps(idx, indent=2), encoding="utf-8")
+
+    for path in root.rglob("claims.json"):
+        try:
+            path.unlink()
+            stats["legacy_claim_sidecars_removed"] += 1
+        except Exception:
+            pass
+    for path in root.rglob("claim_updates.json"):
+        try:
+            path.unlink()
+            stats["legacy_claim_sidecars_removed"] += 1
+        except Exception:
+            pass
+
+    return stats
+
+
 def _load_preload_turns_from_live(*, max_turns: int = 200) -> list[dict[str, str]]:
     rows: list[dict[str, Any]] = []
     cursor: str | None = None
@@ -2730,11 +2833,15 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         run_root.mkdir(parents=True, exist_ok=True)
         base_root = run_root / "base"
         base_root.mkdir(parents=True, exist_ok=True)
+        snapshot_sanitize_meta: dict[str, Any] = {}
         if str(root_mode or "snapshot") == "snapshot":
             _copy_tree(Path(settings.core_memory_root), base_root)
+            snapshot_sanitize_meta = _sanitize_locomo_benchmark_snapshot(base_root)
         ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
         ingest_path_active = str(settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
+        if snapshot_sanitize_meta:
+            ingestion_meta["snapshot_sanitize"] = dict(snapshot_sanitize_meta)
 
         resolved_answer_mode = str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm"))
         resolved_generator_model = str(generator_model or "").strip()
