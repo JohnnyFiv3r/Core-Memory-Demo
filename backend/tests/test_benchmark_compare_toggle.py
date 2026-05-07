@@ -74,6 +74,55 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertFalse(create_task.called)
         demo_routes.BENCHMARK_JOBS.pop(out['job_id'], None)
 
+    async def test_queue_mode_reuses_active_stored_job(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        req = _Req({'suite': 'locomo_mini', 'sample_limit': 1, 'qa_limit': 1})
+        old_mode = demo_routes.settings.benchmark_run_mode
+        demo_routes.settings.benchmark_run_mode = 'queue'
+        try:
+            with patch.object(demo_routes, '_prune_benchmark_jobs'), \
+                 patch.object(demo_routes.benchmark_store, 'read_active_job', return_value={'job_id': 'stored-active', 'status': 'running'}), \
+                 patch.object(demo_routes.benchmark_store, 'enqueue_job') as enqueue:
+                out = await demo_routes.benchmark_run(req)
+        finally:
+            demo_routes.settings.benchmark_run_mode = old_mode
+        self.assertTrue(out['ok'])
+        self.assertTrue(out['already_running'])
+        self.assertEqual('stored-active', out['job_id'])
+        self.assertFalse(enqueue.called)
+
+    def test_job_status_prefers_stored_completion_over_web_placeholder(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        job_id = 'stored-done'
+        demo_routes.BENCHMARK_JOBS[job_id] = {
+            'job_id': job_id,
+            'status': 'queued_external',
+            'stage': 'queued_external',
+            'done': True,
+            'result': {'queued': True},
+            'events': [],
+            'seq': 0,
+            'started_ms': 1,
+            'updated_ms': 1,
+        }
+        try:
+            with patch.object(demo_routes, '_prune_benchmark_jobs'), \
+                 patch.object(demo_routes.benchmark_store, 'read_job', return_value={
+                     'job_id': job_id,
+                     'status': 'completed',
+                     'result': {'ok': True, 'run_id': 'bench-1'},
+                     'error': None,
+                     'finished_at': '2026-05-07T16:00:00+00:00',
+                 }):
+                out = demo_routes.benchmark_job_status(job_id)
+        finally:
+            demo_routes.BENCHMARK_JOBS.pop(job_id, None)
+        self.assertEqual('completed', out['status'])
+        self.assertTrue(out['done'])
+        self.assertEqual('bench-1', out['result']['run_id'])
+
 
 if __name__ == '__main__':
     unittest.main()
