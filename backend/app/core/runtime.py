@@ -3011,12 +3011,13 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                         progress=None,
                         retrieval_pipeline=retrieval_compare_target,
                     )
+                compare_mode_cases = list(compare_mode_retrieval_report.get('cases') or [])
                 mode_report = {
                     'config': {**dict(report.get('config') or {}), 'retrieval_pipeline': retrieval_compare_target},
                     'dataset': dict(report.get('dataset') or {}),
                     'environment': dict(report.get('environment') or {}),
-                    'cases': list(compare_mode_retrieval_report.get('cases') or []),
-                    'scores': dict(aggregate_case_scores(list(compare_mode_retrieval_report.get('cases') or [])) or {}),
+                    'cases': compare_mode_cases,
+                    'scores': dict(aggregate_case_scores(compare_mode_cases) or {}),
                     'ingestion': dict(report.get('ingestion') or {}),
                     'semantic_build': dict(report.get('semantic_build') or {}),
                 }
@@ -3027,7 +3028,11 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     right_report=mode_report,
                 )
                 report['retrieval_mode_comparison'] = retrieval_mode_comparison
-                report['retrieval_mode_compare_report'] = mode_report
+                report['retrieval_mode_compare_report'] = {
+                    **mode_report,
+                    'cases': [],
+                    'cases_omitted': len(compare_mode_cases),
+                }
             except Exception as exc:
                 report['retrieval_mode_comparison_error'] = {'step': 'compare_retrieval_modes', 'error': str(exc)}
 
@@ -3069,6 +3074,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                         )
                 except Exception as exc:
                     raise RuntimeError(f'run_locomo_retrieval_suite: {exc}') from exc
+                compare_cases = list(compare_retrieval_report.get('cases') or [])
                 compare_report = {
                     'config': {
                         **dict(report.get('config') or {}),
@@ -3081,8 +3087,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     },
                     'dataset': dict(report.get('dataset') or {}),
                     'environment': dict(report.get('environment') or {}),
-                    'cases': list(compare_retrieval_report.get('cases') or []),
-                    'scores': dict(aggregate_case_scores(list(compare_retrieval_report.get('cases') or [])) or {}),
+                    'cases': compare_cases,
+                    'scores': dict(aggregate_case_scores(compare_cases) or {}),
                     'ingestion': dict(compare_ingestion_meta or {}),
                     'semantic_build': dict(compare_semantic_build or {}),
                 }
@@ -3095,6 +3101,11 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     )
                 except Exception as exc:
                     raise RuntimeError(f'build_locomo_comparison: {exc}') from exc
+                report['compare_report'] = {
+                    **compare_report,
+                    'cases': [],
+                    'cases_omitted': len(compare_cases),
+                }
             except Exception as exc:
                 text = str(exc)
                 step = text.split(':', 1)[0] if ':' in text else 'compare'

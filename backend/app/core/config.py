@@ -49,7 +49,7 @@ class Settings(BaseSettings):
     locomo_default_retrieval_k: int = 8
     locomo_max_qa_cases: int = 2500
     locomo_max_samples: int = 10
-    locomo_case_artifact_limit_inline: int = 100
+    locomo_case_artifact_limit_inline: int = 10
     locomo_answer_timeout_seconds: int = 60
     locomo_ingest_mode_default: str = 'turns'
     locomo_ingest_path: str = 'bead_direct'
