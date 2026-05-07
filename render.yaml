@@ -25,6 +25,12 @@ services:
         value: queue
       - key: BENCHMARK_DATABASE_URL
         sync: false
+      - key: CORE_MEMORY_VECTOR_BACKEND
+        value: pgvector
+      - key: CORE_MEMORY_CANONICAL_SEMANTIC_MODE
+        value: required
+      - key: CORE_MEMORY_EMBEDDINGS_PROVIDER
+        value: openai
       - key: DEMO_CONTEXT_BUDGET
         value: "128000"
       - key: OPENAI_API_KEY
@@ -55,6 +61,12 @@ services:
         value: /tmp/core-memory-artifacts
       - key: BENCHMARK_DATABASE_URL
         sync: false
+      - key: CORE_MEMORY_VECTOR_BACKEND
+        value: pgvector
+      - key: CORE_MEMORY_CANONICAL_SEMANTIC_MODE
+        value: required
+      - key: CORE_MEMORY_EMBEDDINGS_PROVIDER
+        value: openai
       - key: OPENAI_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY
