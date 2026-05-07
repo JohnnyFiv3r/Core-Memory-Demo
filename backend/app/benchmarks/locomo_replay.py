@@ -208,7 +208,7 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
                 add_assoc(
                     cur_bead,
                     prior_bead,
-                    'associated_with',
+                    'entity_overlap',
                     f"LoCoMo replay entity overlap: both turns mention {entity!r} within sample {sample_id} session {session_index}.",
                     0.82,
                     'locomo_entity_overlap',

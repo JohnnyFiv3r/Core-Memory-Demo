@@ -11,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'Core-Memory'))
 
 if importlib.util.find_spec('pydantic_settings') is not None:
+    from app.benchmarks import locomo_replay as locomo_replay_mod
     from app.benchmarks.locomo_replay import replay_locomo_sample
     from core_memory.runtime.turn_archive import find_turn_record, get_adjacent_turns
 else:
@@ -125,6 +126,37 @@ class TestLocomoReplay(unittest.TestCase):
         relationships = {str(row.get('relationship') or '') for row in list(index.get('associations') or [])}
         self.assertIn('follows', relationships)
         self.assertIn('precedes', relationships)
+
+    def test_synthesized_entity_overlap_relationship_counts_as_semantic(self):
+        if replay_locomo_sample is None:
+            self.skipTest('pydantic_settings unavailable')
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / '.beads').mkdir(parents=True)
+            (root / '.beads' / 'index.json').write_text(json.dumps({
+                'beads': {
+                    'b1': {'entities': ['Alice'], 'session_id': 'locomo:conv-26', 'source_turn_ids': ['locomo:conv-26:D1:1']},
+                    'b2': {'entities': ['Alice'], 'session_id': 'locomo:conv-26', 'source_turn_ids': ['locomo:conv-26:D1:2']},
+                },
+                'associations': [],
+            }), encoding='utf-8')
+            captured = {}
+
+            def fake_run_association_pass(**kwargs):
+                captured.update(kwargs)
+                return {'ok': True, 'associations_appended': len(kwargs['updates']['associations'])}
+
+            turns = [
+                {'bead_id': 'b1', 'dia_id': 'D1:1', 'turn_index': 1, 'speaker': 'Alice'},
+                {'bead_id': 'b2', 'dia_id': 'D1:2', 'turn_index': 2, 'speaker': 'Alice'},
+            ]
+            with patch.object(locomo_replay_mod, 'run_association_pass', side_effect=fake_run_association_pass):
+                out = locomo_replay_mod._synthesize_locomo_associations(root=str(root), sample_id='conv-26', session_index=1, turns=turns)
+
+        relationships = {row['relationship'] for row in captured['updates']['associations']}
+        self.assertIn('entity_overlap', relationships)
+        self.assertNotIn('associated_with', relationships)
+        self.assertGreaterEqual(out['associations_requested'], 3)
 
 
 if __name__ == '__main__':
