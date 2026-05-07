@@ -53,7 +53,7 @@ class Settings(BaseSettings):
     locomo_answer_timeout_seconds: int = 60
     locomo_ingest_mode_default: str = 'turns'
     locomo_ingest_path: str = 'bead_direct'
-    locomo_replay_mode: str = 'transcript_only'
+    locomo_replay_mode: str = 'canonical_turn'
     locomo_replay_flush_policy: str = 'per_session'
     locomo_compare_paths_enabled: bool = False
 

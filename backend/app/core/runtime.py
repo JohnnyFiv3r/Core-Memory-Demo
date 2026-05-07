@@ -2961,6 +2961,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "compare_retrieval_modes_executed": False,
                 "retrieval_compare_target": "",
                 "ingest_path_active": ingest_path_active,
+                "locomo_replay_mode": str(ingestion_meta.get("replay_mode") or ""),
+                "locomo_replay_flush_policy": str(ingestion_meta.get("flush_policy") or ""),
             },
             "dataset": dict((dataset_meta.get("dataset") or {})),
             "retrieval": {
@@ -3074,6 +3076,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                         'compare_paths_executed': True,
                         'compare_target': compare_target,
                         'ingest_path_active': compare_target,
+                        'locomo_replay_mode': str(compare_ingestion_meta.get('replay_mode') or ''),
+                        'locomo_replay_flush_policy': str(compare_ingestion_meta.get('flush_policy') or ''),
                     },
                     'dataset': dict(report.get('dataset') or {}),
                     'environment': dict(report.get('environment') or {}),
