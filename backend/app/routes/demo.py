@@ -104,6 +104,31 @@ def _prune_benchmark_jobs() -> None:
             ACTIVE_BENCHMARK_JOB_ID = None
 
 
+def _strip_benchmark_case_payloads(value: Any) -> Any:
+    """Return a copy of benchmark history data without heavyweight case arrays."""
+
+    if isinstance(value, list):
+        return [_strip_benchmark_case_payloads(item) for item in value]
+    if not isinstance(value, dict):
+        return value
+
+    out: dict[str, Any] = {}
+    for key, item in value.items():
+        if key == 'cases' and isinstance(item, list):
+            out[key] = []
+            out['cases_omitted'] = len(item)
+            continue
+        out[key] = _strip_benchmark_case_payloads(item)
+    return out
+
+
+def _slim_benchmark_history(history: list[Any]) -> list[Any]:
+    return [
+        _strip_benchmark_case_payloads(row) if isinstance(row, dict) else row
+        for row in list(history or [])
+    ]
+
+
 def _chat_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> None:
     events = list(row.get('events') or [])
     seq = int(row.get('seq') or 0) + 1
@@ -1016,10 +1041,16 @@ async def benchmark_run(request: Request):
     prior_job_id = ACTIVE_BENCHMARK_JOB_ID
     prior_row = BENCHMARK_JOBS.get(prior_job_id or '') if prior_job_id else None
     if isinstance(prior_row, dict) and not bool(prior_row.get('done')):
-        prior_row['abandoned'] = True
-        prior_row['superseded_by'] = None
         prior_row['updated_ms'] = _now_ms()
-        _benchmark_event(prior_row, 'abandoned', 'Superseded by a newer benchmark request')
+        _benchmark_event(prior_row, 'running', 'Benchmark request reused active job')
+        return {
+            'ok': True,
+            'job_id': prior_job_id,
+            'status': str(prior_row.get('status') or 'running'),
+            'active_job_id': prior_job_id,
+            'already_running': True,
+            'superseded_job_id': None,
+        }
 
     job_id = uuid.uuid4().hex[:12]
     row = {
@@ -1056,7 +1087,7 @@ def benchmark_job_status(job_id: str, cursor: int = 0):
 @router.get('/demo/benchmark/last')
 def benchmark_last():
     _prune_benchmark_jobs()
-    snapshot = get_last_benchmark_snapshot(history_limit=20)
+    snapshot = get_last_benchmark_snapshot(history_limit=5)
     history = list(snapshot.get('history') or [])
     latest_compare = None
     active_job = next((row for row in BENCHMARK_JOBS.values() if isinstance(row, dict) and not bool(row.get('done'))), None)
@@ -1080,6 +1111,7 @@ def benchmark_last():
                 latest_compare = None
     if isinstance(active_job, dict):
         history = history[:2]
+    history = _slim_benchmark_history(history)
     return {
         'ok': ok,
         'summary': summary,
