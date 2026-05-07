@@ -67,16 +67,42 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
     selected_by_category: dict[int, int] = {}
     if category_caps:
         selected_cases_stratified: list[dict[str, Any]] = []
-        used_by_category: dict[int, int] = {}
+        selected_sample_order = [str(sample.get("sample_id") or "") for sample in selected]
+        by_category_sample: dict[int, dict[str, list[dict[str, Any]]]] = {}
         for row in selected_cases:
             cat = int(row.get("category") or 0)
+            if cat not in category_caps:
+                continue
+            sid = str(row.get("sample_id") or "")
+            by_category_sample.setdefault(cat, {}).setdefault(sid, []).append(row)
+
+        used_by_category: dict[int, int] = {}
+        capped_categories = sorted(set(category_caps) & set(category_set or category_caps.keys()))
+        for cat in capped_categories:
             cap = int(category_caps.get(cat) or 0)
             if cap <= 0:
                 continue
-            if int(used_by_category.get(cat) or 0) >= cap:
-                continue
-            selected_cases_stratified.append(row)
-            used_by_category[cat] = int(used_by_category.get(cat) or 0) + 1
+            per_sample = by_category_sample.get(cat) or {}
+            used = 0
+            # Round-robin across samples instead of taking the first N rows in
+            # dataset order. The previous dataset-order cap could satisfy an
+            # entire category from conv-26 alone, producing a nominal 50-QA run
+            # that was really a single-conversation stress test.
+            while used < cap:
+                added = False
+                offset = used // max(1, len(selected_sample_order))
+                for sample_id in selected_sample_order:
+                    rows = per_sample.get(sample_id) or []
+                    if offset >= len(rows):
+                        continue
+                    selected_cases_stratified.append(rows[offset])
+                    used += 1
+                    added = True
+                    if used >= cap:
+                        break
+                if not added:
+                    break
+            used_by_category[cat] = used
         selected_cases = selected_cases_stratified
         selected_by_category = dict(sorted(used_by_category.items()))
     elif isinstance(qa_limit, int) and qa_limit > 0:
@@ -94,6 +120,10 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
             "selected_samples": len(selected),
             "selected_qa_cases": len(selected_cases),
             "selected_sample_ids": [str(s.get("sample_id") or "") for s in selected],
+            "selected_qa_by_sample": {
+                sample_id: sum(1 for row in selected_cases if str(row.get("sample_id") or "") == sample_id)
+                for sample_id in [str(s.get("sample_id") or "") for s in selected]
+            },
             "category_filter": sorted(category_set),
             "qa_limit": qa_limit,
             "qa_per_category": {str(k): int(v) for k, v in sorted(category_caps.items())},
@@ -225,7 +255,7 @@ def build_locomo_comparison(*, left_label: str, left_report: dict[str, Any], rig
     }
 
 
-def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: dict[str, Any], config: dict[str, Any], dataset_meta: dict[str, Any], ingestion_meta: dict[str, Any] | None = None, comparison: dict[str, Any] | None = None, comparison_error: dict[str, Any] | None = None) -> dict[str, str]:
+def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: dict[str, Any], config: dict[str, Any], dataset_meta: dict[str, Any], ingestion_meta: dict[str, Any] | None = None, comparison: dict[str, Any] | None = None, comparison_error: dict[str, Any] | None = None, cases: list[dict[str, Any]] | None = None) -> dict[str, str]:
     root = Path(settings.core_memory_demo_artifacts_root) / "locomo-runs" / run_id
     root.mkdir(parents=True, exist_ok=True)
 
@@ -249,12 +279,12 @@ def write_locomo_run_artifacts(*, run_id: str, summary: dict[str, Any], report: 
     if comparison_error is not None:
         comparison_error_path.write_text(json.dumps(dict(comparison_error or {}), ensure_ascii=False, indent=2), encoding="utf-8")
 
-    cases = list(report.get("cases") or [])
+    cases_rows = list(cases if cases is not None else (report.get("cases") or []))
     with cases_path.open("w", encoding="utf-8") as fh:
-        for row in cases:
+        for row in cases_rows:
             fh.write(json.dumps(row, ensure_ascii=False) + "\n")
     with failures_path.open("w", encoding="utf-8") as fh:
-        for row in cases:
+        for row in cases_rows:
             if row.get("status") == "error":
                 fh.write(json.dumps(row, ensure_ascii=False) + "\n")
 

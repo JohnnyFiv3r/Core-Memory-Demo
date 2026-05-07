@@ -31,7 +31,7 @@ def _sample(sample_id, categories):
 
 
 class TestLocomoSuiteSelection(unittest.TestCase):
-    def test_qa_per_category_selects_stratified_caps_in_dataset_order(self):
+    def test_qa_per_category_selects_stratified_caps_across_samples(self):
         samples = [
             _sample('conv-a', [1, 1, 2, 3, 4, 5]),
             _sample('conv-b', [1, 2, 2, 3, 4, 4, 5]),
@@ -45,13 +45,18 @@ class TestLocomoSuiteSelection(unittest.TestCase):
             )
 
         self.assertEqual(['conv-a', 'conv-b'], [s['sample_id'] for s in selected_samples])
-        self.assertEqual([1, 1, 2, 3, 4, 5, 2, 4], [c['category'] for c in cases])
+        self.assertEqual([1, 1, 2, 2, 3, 4, 4, 5], [c['category'] for c in cases])
+        self.assertEqual(
+            ['conv-a', 'conv-b', 'conv-a', 'conv-b', 'conv-a', 'conv-a', 'conv-b', 'conv-a'],
+            [c['sample_id'] for c in cases],
+        )
         self.assertEqual(
             {'1': 2, '2': 2, '3': 1, '4': 2, '5': 1},
             meta['dataset']['selected_qa_by_category'],
         )
         self.assertEqual('stratified_by_category', meta['dataset']['selection_strategy'])
         self.assertEqual(8, meta['dataset']['selected_qa_cases'])
+        self.assertEqual({'conv-a': 5, 'conv-b': 3}, meta['dataset']['selected_qa_by_sample'])
 
     def test_category_filter_limits_qa_per_category_scope(self):
         samples = [_sample('conv-a', [1, 2, 3, 4, 5])]

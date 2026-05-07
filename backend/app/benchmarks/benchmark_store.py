@@ -135,7 +135,7 @@ def save_run(*, history_row: dict[str, Any], artifacts: dict[str, str] | None = 
                 (run_id, filename, content_type, Jsonb(content) if content is not None else None, content_bytes, int(size)),
             )
 
-        cases = list(report.get('cases') or [])
+        cases = list((history_row or {}).get('cases') or report.get('cases') or [])
         for case in cases:
             if not isinstance(case, dict):
                 continue
