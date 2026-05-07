@@ -255,6 +255,29 @@ def read_job(job_id: str) -> dict[str, Any] | None:
     return out
 
 
+def read_active_job() -> dict[str, Any] | None:
+    if not enabled():
+        return None
+    ensure_schema()
+    with psycopg.connect(_database_url(), row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT job_id, status, request, kwargs, result, error, attempts, created_at, updated_at, started_at, finished_at
+            FROM benchmarks.jobs
+            WHERE status IN ('queued', 'running')
+            ORDER BY created_at ASC
+            LIMIT 1
+            """
+        ).fetchone()
+    if not row:
+        return None
+    out = dict(row)
+    for key in ('created_at', 'updated_at', 'started_at', 'finished_at'):
+        if out.get(key) is not None:
+            out[key] = out[key].isoformat()
+    return out
+
+
 def claim_next_job() -> dict[str, Any] | None:
     if not enabled():
         return None

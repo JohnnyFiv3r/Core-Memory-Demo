@@ -198,6 +198,29 @@ def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str,
     return out
 
 
+def _stored_benchmark_job_payload(stored: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
+    status = str((stored or {}).get('status') or '')
+    done = status in {'completed', 'failed'}
+    result = stored.get('result') if isinstance(stored.get('result'), dict) else None
+    out: dict[str, Any] = {
+        'ok': True,
+        'job_id': str((stored or {}).get('job_id') or ''),
+        'status': status,
+        'stage': status,
+        'done': done,
+        'error': (stored or {}).get('error'),
+        'result': result,
+        'events': [],
+        'cursor': int(cursor),
+        'cursor_next': int(cursor),
+    }
+    for key in ('created_at', 'updated_at', 'started_at', 'finished_at'):
+        value = (stored or {}).get(key)
+        if value:
+            out[key] = value
+    return out
+
+
 def _benchmark_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> None:
     events = list(row.get('events') or [])
     seq = int(row.get('seq') or 0) + 1
@@ -1097,6 +1120,18 @@ async def benchmark_run(request: Request):
             'already_running': True,
             'superseded_job_id': None,
         }
+    stored_active = benchmark_store.read_active_job()
+    if isinstance(stored_active, dict):
+        active_job_id = str(stored_active.get('job_id') or '').strip()
+        if active_job_id:
+            return {
+                'ok': True,
+                'job_id': active_job_id,
+                'status': str(stored_active.get('status') or 'running'),
+                'active_job_id': active_job_id,
+                'already_running': True,
+                'superseded_job_id': None,
+            }
 
     job_id = uuid.uuid4().hex[:12]
     row = {
@@ -1169,24 +1204,28 @@ async def benchmark_run(request: Request):
 @router.get('/demo/benchmark/job/{job_id}')
 def benchmark_job_status(job_id: str, cursor: int = 0):
     _prune_benchmark_jobs()
-    row = BENCHMARK_JOBS.get(str(job_id or '').strip())
+    job_id_s = str(job_id or '').strip()
+    stored = benchmark_store.read_job(job_id_s)
+    row = BENCHMARK_JOBS.get(job_id_s)
+    if isinstance(stored, dict):
+        stored_status = str(stored.get('status') or '')
+        stored_done = stored_status in {'completed', 'failed'}
+        # Queue/cron mode leaves a short-lived in-memory row in the web
+        # process. The cron worker owns the durable job status in Postgres, so
+        # prefer it whenever it has advanced beyond the initial web-only
+        # placeholder. Otherwise /job/{id} can keep reporting queued_external
+        # forever even after the worker completed.
+        if stored_done or stored_status in {'queued', 'running'} or not isinstance(row, dict):
+            if isinstance(row, dict) and stored_done:
+                row['status'] = stored_status
+                row['stage'] = stored_status
+                row['done'] = True
+                row['error'] = stored.get('error')
+                if isinstance(stored.get('result'), dict):
+                    row['result'] = dict(stored.get('result') or {})
+                row['updated_ms'] = _now_ms()
+            return _stored_benchmark_job_payload(stored, cursor=max(0, int(cursor)))
     if not isinstance(row, dict):
-        stored = benchmark_store.read_job(str(job_id or '').strip())
-        if isinstance(stored, dict):
-            status = str(stored.get('status') or '')
-            done = status in {'completed', 'failed'}
-            result = stored.get('result') if isinstance(stored.get('result'), dict) else None
-            return {
-                'ok': True,
-                'job_id': str(stored.get('job_id') or job_id),
-                'status': status,
-                'stage': status,
-                'done': done,
-                'error': stored.get('error'),
-                'result': result,
-                'events': [],
-                'cursor': 0,
-            }
         return JSONResponse({'ok': False, 'error': 'benchmark_job_not_found'}, status_code=404)
     return _benchmark_job_payload(row, cursor=max(0, int(cursor)))
 
