@@ -18,6 +18,22 @@ CREATE TABLE IF NOT EXISTS benchmarks.runs (
 CREATE INDEX IF NOT EXISTS benchmarks_runs_started_at_idx ON benchmarks.runs (started_at DESC);
 CREATE INDEX IF NOT EXISTS benchmarks_runs_status_idx ON benchmarks.runs (status) WHERE status IN ('queued', 'running');
 
+CREATE TABLE IF NOT EXISTS benchmarks.jobs (
+    job_id TEXT PRIMARY KEY,
+    status TEXT NOT NULL DEFAULT 'queued',
+    request JSONB NOT NULL DEFAULT '{}'::jsonb,
+    kwargs JSONB NOT NULL DEFAULT '{}'::jsonb,
+    result JSONB,
+    error TEXT,
+    attempts INTEGER NOT NULL DEFAULT 0,
+    claimed_at TIMESTAMPTZ,
+    started_at TIMESTAMPTZ,
+    finished_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS benchmarks_jobs_status_created_idx ON benchmarks.jobs (status, created_at);
+
 CREATE TABLE IF NOT EXISTS benchmarks.artifacts (
     run_id TEXT NOT NULL REFERENCES benchmarks.runs(run_id) ON DELETE CASCADE,
     filename TEXT NOT NULL,

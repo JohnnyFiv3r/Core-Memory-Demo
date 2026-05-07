@@ -175,29 +175,126 @@ def save_run(*, history_row: dict[str, Any], artifacts: dict[str, str] | None = 
     return True
 
 
-def read_history(limit: int = 20) -> list[dict[str, Any]]:
+def read_history(limit: int = 20, *, include_report: bool = True) -> list[dict[str, Any]]:
     if not enabled():
         return []
     ensure_schema()
     with psycopg.connect(_database_url(), row_factory=dict_row) as conn:
-        rows = conn.execute(
-            """
-            SELECT run_id, finished_at, created_at, summary, report
-            FROM benchmarks.runs
-            ORDER BY COALESCE(finished_at, created_at) DESC
-            LIMIT %s
-            """,
-            (max(1, int(limit)),),
-        ).fetchall()
+        if include_report:
+            rows = conn.execute(
+                """
+                SELECT run_id, finished_at, created_at, summary, report
+                FROM benchmarks.runs
+                ORDER BY COALESCE(finished_at, created_at) DESC
+                LIMIT %s
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
+        else:
+            rows = conn.execute(
+                """
+                SELECT run_id, finished_at, created_at, summary
+                FROM benchmarks.runs
+                ORDER BY COALESCE(finished_at, created_at) DESC
+                LIMIT %s
+                """,
+                (max(1, int(limit)),),
+            ).fetchall()
     out: list[dict[str, Any]] = []
     for row in rows:
         out.append({
             'run_id': row.get('run_id'),
             'created_at': (row.get('finished_at') or row.get('created_at')).isoformat() if row.get('finished_at') or row.get('created_at') else '',
             'summary': dict(row.get('summary') or {}),
-            'report': dict(row.get('report') or {}),
+            'report': dict(row.get('report') or {}) if include_report else {},
         })
     return out
+
+
+def enqueue_job(*, job_id: str, request: dict[str, Any], kwargs: dict[str, Any]) -> bool:
+    if not enabled():
+        return False
+    ensure_schema()
+    with psycopg.connect(_database_url(), autocommit=True) as conn:
+        conn.execute(
+            """
+            INSERT INTO benchmarks.jobs (job_id, status, request, kwargs, updated_at)
+            VALUES (%s, 'queued', %s, %s, now())
+            ON CONFLICT (job_id) DO UPDATE SET
+                request = EXCLUDED.request,
+                kwargs = EXCLUDED.kwargs,
+                status = 'queued',
+                error = NULL,
+                result = NULL,
+                updated_at = now()
+            """,
+            (str(job_id), Jsonb(dict(request or {})), Jsonb(dict(kwargs or {}))),
+        )
+    return True
+
+
+def read_job(job_id: str) -> dict[str, Any] | None:
+    if not enabled():
+        return None
+    ensure_schema()
+    with psycopg.connect(_database_url(), row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT job_id, status, request, kwargs, result, error, attempts, created_at, updated_at, started_at, finished_at
+            FROM benchmarks.jobs
+            WHERE job_id = %s
+            """,
+            (str(job_id),),
+        ).fetchone()
+    if not row:
+        return None
+    out = dict(row)
+    for key in ('created_at', 'updated_at', 'started_at', 'finished_at'):
+        if out.get(key) is not None:
+            out[key] = out[key].isoformat()
+    return out
+
+
+def claim_next_job() -> dict[str, Any] | None:
+    if not enabled():
+        return None
+    ensure_schema()
+    with psycopg.connect(_database_url(), autocommit=True, row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            WITH picked AS (
+                SELECT job_id
+                FROM benchmarks.jobs
+                WHERE status = 'queued'
+                ORDER BY created_at ASC
+                LIMIT 1
+                FOR UPDATE SKIP LOCKED
+            )
+            UPDATE benchmarks.jobs j
+            SET status = 'running', attempts = attempts + 1, claimed_at = now(), started_at = COALESCE(started_at, now()), updated_at = now()
+            FROM picked
+            WHERE j.job_id = picked.job_id
+            RETURNING j.job_id, j.request, j.kwargs, j.attempts
+            """
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def finish_job(job_id: str, *, result: dict[str, Any] | None = None, error: str | None = None) -> bool:
+    if not enabled():
+        return False
+    ensure_schema()
+    status = 'failed' if error else 'completed'
+    with psycopg.connect(_database_url(), autocommit=True) as conn:
+        conn.execute(
+            """
+            UPDATE benchmarks.jobs
+            SET status = %s, result = %s, error = %s, finished_at = now(), updated_at = now()
+            WHERE job_id = %s
+            """,
+            (status, Jsonb(dict(result or {})) if result is not None else None, error, str(job_id)),
+        )
+    return True
 
 
 def read_artifact(run_id: str, filename: str) -> dict[str, Any] | None:

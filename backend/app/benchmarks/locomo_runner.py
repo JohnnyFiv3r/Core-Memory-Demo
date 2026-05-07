@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import gc
 import json
 import re
 from pathlib import Path
@@ -435,11 +436,14 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
     try:
         result = memory_tools.execute(req, root=root, explain=False)
         raw_results = list(result.get("results") or [])
-        if not raw_results:
+        if not raw_results and str(result.get("backend") or "").lower() != "lexical":
             # Some local/compare benchmark roots can have a usable lexical path
-            # even when typed facets select an unavailable semantic backend.
-            # Retry once without facets before falling back to the turn archive.
-            retry_req = {k: v for k, v in req.items() if k != "facets"}
+            # even when high-signal must_terms over-constrain typed filtering.
+            # Retry once with sample/session metadata intact, but without
+            # required lexical terms, before falling back to the turn archive.
+            retry_facets = dict(req.get("facets") or {})
+            retry_facets["must_terms"] = []
+            retry_req = {**req, "facets": retry_facets}
             retry_result = memory_tools.execute(retry_req, root=root, explain=False)
             retry_rows = list(retry_result.get("results") or [])
             if retry_rows:
@@ -584,6 +588,50 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         }
 
 
+def _slim_locomo_row(row: dict[str, Any], *, max_text_chars: int = 600) -> dict[str, Any]:
+    text = str(row.get("text") or row.get("snippet") or "")
+    projection = dict(row.get("projection") or {})
+    return {
+        "rank": int(row.get("rank") or 0),
+        "bead_id": str(row.get("bead_id") or ""),
+        "dia_ids": list(row.get("dia_ids") or []),
+        "score": float(row.get("score") or 0.0),
+        "locomo_score": float(row.get("locomo_score") or 0.0),
+        "source_surface": str(row.get("source_surface") or ""),
+        "text": text[:max_text_chars],
+        "projection": {
+            key: projection.get(key)
+            for key in (
+                "bead_id_source",
+                "inspect_bead_found",
+                "metadata_source",
+                "dia_id_source",
+            )
+            if key in projection
+        },
+    }
+
+
+def _slim_locomo_case_result(result: dict[str, Any], *, retrieved_limit: int = 10) -> dict[str, Any]:
+    """Keep suite results bounded so 50-case benchmarks do not retain huge payloads."""
+    row = dict(result or {})
+    retrieved = list(row.get("retrieved") or [])
+    row["retrieved"] = [_slim_locomo_row(dict(r or {})) for r in retrieved[: max(0, int(retrieved_limit))]]
+    row["retrieved_omitted"] = max(0, len(retrieved) - len(row["retrieved"]))
+
+    trace = dict(row.get("trace") or {})
+    if trace:
+        row["trace"] = {
+            "used": bool(trace.get("used")),
+            "reason": str(trace.get("reason") or ""),
+            "anchor_ids": list(trace.get("anchor_ids") or [])[:10],
+            "result_count": int(trace.get("result_count") or 0),
+            "result_ids": list(trace.get("result_ids") or [])[:20],
+            "archive_fallback_used": bool(trace.get("archive_fallback_used")),
+        }
+    return row
+
+
 def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, gold_context_map: dict[str, dict[str, Any]] | None = None, progress: Any | None = None, retrieval_pipeline: str = "execute_trace") -> dict[str, Any]:
     cases = []
     qa_rows = qa_cases or []
@@ -600,12 +648,15 @@ def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], ret
             gold_context_map=gold_context_map,
             retrieval_pipeline=retrieval_pipeline,
         )
-        cases.append(result)
+        slim_result = _slim_locomo_case_result(result, retrieved_limit=max(int(retrieval_k or 8), 10))
+        cases.append(slim_result)
         if callable(progress):
             try:
-                progress(idx, total, dict(case or {}), dict(result or {}))
+                progress(idx, total, dict(case or {}), dict(slim_result or {}))
             except Exception:
                 pass
+        if idx % 10 == 0:
+            gc.collect()
     return {
         "cases": cases,
         "completed": sum(1 for c in cases if c.get("status") == "ok"),

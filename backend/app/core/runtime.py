@@ -2510,9 +2510,9 @@ def _prune_benchmark_run_dirs() -> None:
         pass
 
 
-def read_benchmark_history(limit: int = 20) -> list[dict[str, Any]]:
+def read_benchmark_history(limit: int = 20, *, include_report: bool = True) -> list[dict[str, Any]]:
     try:
-        db_rows = benchmark_store.read_history(limit=max(1, int(limit)))
+        db_rows = benchmark_store.read_history(limit=max(1, int(limit)), include_report=include_report)
         if db_rows:
             return db_rows[: max(1, int(limit))]
     except Exception:
@@ -2531,10 +2531,27 @@ def read_benchmark_history(limit: int = 20) -> list[dict[str, Any]]:
             except Exception:
                 continue
             if isinstance(rec, dict):
+                if not include_report:
+                    rec = {
+                        "run_id": str((rec.get("summary") or {}).get("run_id") or rec.get("run_id") or ""),
+                        "created_at": str(rec.get("created_at") or ""),
+                        "summary": dict(rec.get("summary") or {}),
+                        "report": {},
+                    }
                 file_rows.append(rec)
 
     file_rows = list(reversed(file_rows))
     in_memory_rows = [dict(x or {}) for x in list(LAST_BENCHMARK_HISTORY or [])]
+    if not include_report:
+        in_memory_rows = [
+            {
+                "run_id": str((x.get("summary") or {}).get("run_id") or x.get("run_id") or ""),
+                "created_at": str(x.get("created_at") or ""),
+                "summary": dict(x.get("summary") or {}),
+                "report": {},
+            }
+            for x in in_memory_rows
+        ]
     combined = in_memory_rows + file_rows
 
     seen: set[str] = set()
@@ -2568,8 +2585,9 @@ def _set_last_benchmark_cache(*, summary: dict[str, Any], report: dict[str, Any]
 
 
 def get_last_benchmark_snapshot(*, history_limit: int = 20) -> dict[str, Any]:
-    rows = read_benchmark_history(limit=max(1, int(history_limit)))
-    latest = dict(rows[0] or {}) if rows else {}
+    latest_rows = read_benchmark_history(limit=1, include_report=True)
+    rows = read_benchmark_history(limit=max(1, int(history_limit)), include_report=False)
+    latest = dict(latest_rows[0] or {}) if latest_rows else {}
 
     summary = dict(LAST_BENCHMARK_SUMMARY or {})
     report = dict(LAST_BENCHMARK_REPORT or {})
@@ -2943,6 +2961,10 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             for c in cases_inline
         ]
         compare_requested = bool(compare_paths or settings.locomo_compare_paths_enabled)
+        compare_paths_skipped_reason = ""
+        compare_paths_max_cases = max(0, int(settings.locomo_compare_paths_max_qa_cases))
+        if compare_requested and compare_paths_max_cases > 0 and selected_qa_total > compare_paths_max_cases:
+            compare_paths_skipped_reason = f"qa_cases_exceeds_compare_limit:{selected_qa_total}>{compare_paths_max_cases}"
         compare_executed = False
         compare_target = ''
         comparison_error: dict[str, Any] | None = None
@@ -2965,6 +2987,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "retrieval_pipeline": retrieval_pipeline_name,
                 "compare_paths_requested": compare_requested,
                 "compare_paths_executed": False,
+                "compare_paths_skipped_reason": compare_paths_skipped_reason,
                 "compare_target": "",
                 "compare_retrieval_modes_requested": bool(compare_retrieval_modes),
                 "compare_retrieval_modes_executed": False,
@@ -3046,7 +3069,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 report['retrieval_mode_comparison_error'] = {'step': 'compare_retrieval_modes', 'error': str(exc)}
 
         comparison = None
-        if compare_requested:
+        if compare_requested and not compare_paths_skipped_reason:
             compare_target = 'canonical_replay' if ingest_path_active == 'bead_direct' else 'bead_direct'
             report['config']['compare_target'] = compare_target
             compare_root = run_root / compare_target
@@ -3316,7 +3339,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
 
 
 def compare_benchmark_runs(left_run_id: str, right_run_id: str) -> dict[str, Any]:
-    rows = read_benchmark_history(limit=400)
+    rows = read_benchmark_history(limit=400, include_report=False)
     by_id = {str((r.get("summary") or {}).get("run_id") or r.get("run_id") or ""): r for r in rows}
     left = dict(by_id.get(str(left_run_id)) or {})
     right = dict(by_id.get(str(right_run_id)) or {})
