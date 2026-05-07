@@ -4,6 +4,10 @@ import argparse
 import sys
 from typing import Any
 
+from app.core.semantic_env import configure_shared_semantic_backend_env
+
+configure_shared_semantic_backend_env()
+
 from app.benchmarks import benchmark_store
 from app.core.runtime import run_benchmark
 

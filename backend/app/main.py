@@ -5,9 +5,13 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.requests import Request
 from fastapi.responses import JSONResponse
-from core_memory.runtime.jobs import run_async_jobs
 
 from app.core.config import settings
+from app.core.semantic_env import configure_shared_semantic_backend_env
+
+configure_shared_semantic_backend_env()
+
+from core_memory.runtime.jobs import run_async_jobs
 from app.core.state_fallback import safe_state_fallback
 from app.routes.health import router as health_router
 from app.routes.demo import public_router as demo_public_router
