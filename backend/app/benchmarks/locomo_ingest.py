@@ -46,6 +46,10 @@ def _claim_id(*, sample_id: str, dia_id: str, subject: str, slot: str, value: st
     return str(uuid.uuid5(uuid.NAMESPACE_URL, f"core-memory-demo:locomo-claim:{basis}"))
 
 
+def _turn_scope_key(*, sample_id: str, dia_id: str) -> str:
+    return f"{str(sample_id or '').strip()}::{str(dia_id or '').strip()}"
+
+
 def _claim_row(*, sample_id: str, dia_id: str, subject: str, slot: str, value: str, reason: str, confidence: float = 0.82) -> dict[str, Any]:
     now = datetime.now(timezone.utc).isoformat()
     return {
@@ -293,9 +297,15 @@ def ingest_locomo_turns(*, root: str, sample: dict[str, Any], mode: str = "turns
         try:
             idx = json.loads(idx_path.read_text(encoding="utf-8"))
             for row in (idx.get("beads") or {}).values():
+                meta = dict(dict(row or {}).get("metadata") or {})
+                row_sample_id = str(meta.get("sample_id") or "").strip()
+                row_session_id = str(dict(row or {}).get("session_id") or "").strip()
+                if not row_sample_id and row_session_id.startswith("locomo:"):
+                    row_sample_id = row_session_id.split(":", 1)[1]
                 for tid in (dict(row or {}).get("source_turn_ids") or []):
-                    if str(tid).strip():
-                        existing_ids.add(str(tid).strip())
+                    tid_s = str(tid).strip()
+                    if tid_s and row_sample_id:
+                        existing_ids.add(_turn_scope_key(sample_id=row_sample_id, dia_id=tid_s))
         except Exception:
             existing_ids = set()
 
@@ -303,7 +313,8 @@ def ingest_locomo_turns(*, root: str, sample: dict[str, Any], mode: str = "turns
         for turn in list((session or {}).get("turns") or []):
             bead = build_turn_bead(dict(turn or {}))
             dia_id = str((bead.get("source_turn_ids") or [""])[0] or "").strip()
-            if dia_id and dia_id in existing_ids:
+            turn_key = _turn_scope_key(sample_id=sample_id, dia_id=dia_id)
+            if dia_id and turn_key in existing_ids:
                 ingested.append(
                     {
                         "dia_id": dia_id,
@@ -322,7 +333,7 @@ def ingest_locomo_turns(*, root: str, sample: dict[str, Any], mode: str = "turns
             claims = _extract_locomo_claims(dict(turn or {}))
             if claims and write_claims_to_bead is not None:
                 write_claims_to_bead(root, bead_id, claims)
-            existing_ids.add(dia_id)
+            existing_ids.add(turn_key)
             ingested.append(
                 {
                     "dia_id": dia_id,
@@ -366,10 +377,16 @@ def attach_locomo_claims(*, root: str, sample: dict[str, Any], create_missing: b
         try:
             idx = json.loads(idx_path.read_text(encoding="utf-8"))
             for bead_id, row in (idx.get("beads") or {}).items():
+                meta = dict(dict(row or {}).get("metadata") or {})
+                row_sample_id = str(meta.get("sample_id") or "").strip()
+                row_session_id = str(dict(row or {}).get("session_id") or "").strip()
+                if not row_sample_id and row_session_id.startswith("locomo:"):
+                    row_sample_id = row_session_id.split(":", 1)[1]
                 for tid in (dict(row or {}).get("source_turn_ids") or []):
                     tid_s = str(tid or "").strip()
-                    if tid_s and tid_s not in dia_to_bead:
-                        dia_to_bead[tid_s] = str(bead_id)
+                    key = _turn_scope_key(sample_id=row_sample_id, dia_id=tid_s)
+                    if tid_s and row_sample_id and key not in dia_to_bead:
+                        dia_to_bead[key] = str(bead_id)
         except Exception:
             dia_to_bead = {}
 
@@ -380,17 +397,19 @@ def attach_locomo_claims(*, root: str, sample: dict[str, Any], create_missing: b
         for turn in list((session or {}).get("turns") or []):
             turn_d = dict(turn or {})
             dia_id = str(turn_d.get("dia_id") or "").strip()
+            sample_id = str(turn_d.get("sample_id") or sample.get("sample_id") or "").strip()
             claims = _extract_locomo_claims(turn_d)
             if not dia_id or not claims:
                 continue
-            bead_id = dia_to_bead.get(dia_id, "")
+            key = _turn_scope_key(sample_id=sample_id, dia_id=dia_id)
+            bead_id = dia_to_bead.get(key, "")
             status = "attached"
             if not bead_id and create_missing:
                 bead = build_turn_bead(turn_d)
                 bead["title"] = f"Claim evidence for {bead.get('title') or dia_id}".strip()
                 bead["tags"] = list(bead.get("tags") or []) + ["claim_evidence"]
                 bead_id = store.add_bead(**bead)
-                dia_to_bead[dia_id] = bead_id
+                dia_to_bead[key] = bead_id
                 created_beads += 1
                 status = "created_claim_evidence"
             if not bead_id:
