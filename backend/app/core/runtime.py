@@ -3156,6 +3156,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             ingestion_meta=dict(report.get("ingestion") or {}),
             comparison=comparison,
             comparison_error=comparison_error,
+            cases=list(retrieval_report.get("cases") or []),
         )
         summary["artifact_path"] = artifacts.get("root")
         summary["artifact_download_url"] = f"/api/demo/benchmark/artifact/{run_id}/report.json"
@@ -3167,6 +3168,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "created_at": summary["finished_at"],
             "summary": dict(summary),
             "report": dict(report),
+            "cases": list(retrieval_report.get("cases") or []),
         }
         _set_last_benchmark_cache(summary=summary, report=report, history_row=history_row)
         try:
