@@ -95,11 +95,10 @@ def locomo_crawler_callable(payload: dict[str, Any]) -> dict[str, Any]:
         if dia_id and dia_id in ids:
             current = row
             break
-    if current is None and rows:
-        current = rows[-1]
-    current_id = _row_id(current or {})
-    if not current_id:
-        return {}
+    # The turn crawler is invoked before Core-Memory persists the current turn
+    # creation row, so the current bead id usually is not known yet. Core-Memory
+    # resolves this alias to the bead created by this same update batch.
+    current_id = _row_id(current or {}) or '__current_turn__'
 
     associations: list[dict[str, Any]] = []
     prior_rows = [r for r in rows if _row_id(r) and _row_id(r) != current_id]
@@ -108,8 +107,8 @@ def locomo_crawler_callable(payload: dict[str, Any]) -> dict[str, Any]:
         associations.append({
             'source_bead_id': current_id,
             'target_bead_id': _row_id(prev),
-            'relationship': 'topic_continuation',
-            'reason_text': 'LoCoMo replay turn follows prior visible turn in the same conversation window.',
+            'relationship': 'supports',
+            'reason_text': 'LoCoMo replay turn has same-session continuity with the prior visible turn.',
             'confidence': 0.72,
             'provenance': 'agent_callable',
             'reason_code': 'locomo_turn_adjacency',
@@ -124,7 +123,7 @@ def locomo_crawler_callable(payload: dict[str, Any]) -> dict[str, Any]:
         associations.append({
             'source_bead_id': current_id,
             'target_bead_id': _row_id(prior),
-            'relationship': 'entity_overlap',
+            'relationship': 'supports',
             'reason_text': 'LoCoMo replay turn shares concrete entity/topic mentions with a prior visible turn.',
             'confidence': 0.82,
             'provenance': 'agent_callable',

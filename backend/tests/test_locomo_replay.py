@@ -116,7 +116,7 @@ class TestLocomoReplay(unittest.TestCase):
         sample = self._sample()
         sample['sessions'][0]['turns'][0]['text'] = 'Alice and Bob discuss hiking plans.'
         sample['sessions'][0]['turns'][1]['text'] = 'Bob confirms the hiking plan with Alice.'
-        with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, {'CORE_MEMORY_ENRICHMENT_QUEUE': '0'}):
+        with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, {'CORE_MEMORY_ENRICHMENT_QUEUE': 'off'}):
             out = replay_locomo_sample(root=td, sample=sample, mode='canonical_turn', flush_policy='end_only')
             index = json.loads((Path(td) / '.beads' / 'index.json').read_text())
 
