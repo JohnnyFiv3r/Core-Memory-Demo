@@ -1,4 +1,6 @@
 import importlib.util
+import json
+import os
 import sys
 import tempfile
 import unittest
@@ -106,6 +108,23 @@ class TestLocomoReplay(unittest.TestCase):
             'locomo_dia_id': 'D1:1',
         }
         self.assertEqual(['D1:1'], _project_dia_ids(metadata, []))
+
+    def test_canonical_replay_synthesizes_locomo_associations(self):
+        if replay_locomo_sample is None:
+            self.skipTest('pydantic_settings unavailable')
+        sample = self._sample()
+        sample['sessions'][0]['turns'][0]['text'] = 'Alice and Bob discuss hiking plans.'
+        sample['sessions'][0]['turns'][1]['text'] = 'Bob confirms the hiking plan with Alice.'
+        with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, {'CORE_MEMORY_ENRICHMENT_QUEUE': '0'}):
+            out = replay_locomo_sample(root=td, sample=sample, mode='canonical_turn', flush_policy='end_only')
+            index = json.loads((Path(td) / '.beads' / 'index.json').read_text())
+
+        self.assertTrue(out['association_synthesis']['enabled'])
+        self.assertGreaterEqual(out['association_synthesis']['associations_requested'], 2)
+        self.assertGreaterEqual(out['association_synthesis']['associations_appended'], 2)
+        relationships = {str(row.get('relationship') or '') for row in list(index.get('associations') or [])}
+        self.assertIn('follows', relationships)
+        self.assertIn('precedes', relationships)
 
 
 if __name__ == '__main__':
