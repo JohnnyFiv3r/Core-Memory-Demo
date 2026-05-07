@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import Any
 
@@ -8,6 +9,9 @@ from core_memory.integrations.openclaw_runtime import finalize_and_process_turn
 from core_memory.runtime.engine import emit_turn_finalized, process_flush
 from core_memory.runtime.association_pass import run_association_pass
 from core_memory.runtime.worker import process_memory_event
+
+
+_LOCOMO_CRAWLER_CALLABLE = 'app.benchmarks.locomo_turn_crawler:locomo_crawler_callable'
 
 
 _LOCOMO_ENTITY_STOP = {
@@ -316,7 +320,21 @@ def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'tran
         for turn in session_turns:
             env = _turn_envelope(sample_id=sample_id, session_index=session_index, turn=dict(turn or {}))
             if str(mode or 'transcript_only') == 'canonical_turn':
-                out = finalize_and_process_turn(root=root, policy=None, **env)
+                previous_callable = os.environ.get('CORE_MEMORY_AGENT_CRAWLER_CALLABLE')
+                previous_invoke = os.environ.get('CORE_MEMORY_AGENT_CRAWLER_INVOKE')
+                os.environ['CORE_MEMORY_AGENT_CRAWLER_CALLABLE'] = previous_callable or _LOCOMO_CRAWLER_CALLABLE
+                os.environ['CORE_MEMORY_AGENT_CRAWLER_INVOKE'] = previous_invoke or '1'
+                try:
+                    out = finalize_and_process_turn(root=root, policy=None, **env)
+                finally:
+                    if previous_callable is None:
+                        os.environ.pop('CORE_MEMORY_AGENT_CRAWLER_CALLABLE', None)
+                    else:
+                        os.environ['CORE_MEMORY_AGENT_CRAWLER_CALLABLE'] = previous_callable
+                    if previous_invoke is None:
+                        os.environ.pop('CORE_MEMORY_AGENT_CRAWLER_INVOKE', None)
+                    else:
+                        os.environ['CORE_MEMORY_AGENT_CRAWLER_INVOKE'] = previous_invoke
                 emitted_flag = bool((out or {}).get('processed') or (out or {}).get('ok'))
                 emitted_row = (out or {}).get('emitted') or {}
                 if emitted_row and not bool(emitted_row.get('emitted', True)):
