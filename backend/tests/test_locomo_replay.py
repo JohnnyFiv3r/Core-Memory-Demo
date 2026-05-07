@@ -185,6 +185,28 @@ class TestLocomoReplay(unittest.TestCase):
         self.assertEqual('b-other', miss['same_session_examples'][0]['bead_id'])
         self.assertEqual(['unexpected'], miss['same_session_examples'][0]['source_turn_ids'])
 
+    def test_canonical_replay_sets_locomo_crawler_callable_for_turns(self):
+        if replay_locomo_sample is None:
+            self.skipTest('pydantic_settings unavailable')
+        sample = self._sample()
+        seen = []
+
+        def fake_finalize(**kwargs):
+            seen.append(os.environ.get('CORE_MEMORY_AGENT_CRAWLER_CALLABLE'))
+            return {'ok': True, 'processed': 1, 'emitted': {'emitted': True}}
+
+        with tempfile.TemporaryDirectory() as td, \
+             patch.object(locomo_replay_mod, 'finalize_and_process_turn', side_effect=fake_finalize), \
+             patch.object(locomo_replay_mod, '_synthesize_locomo_associations', return_value={'ok': True, 'enabled': True, 'beads_considered': 0, 'associations_requested': 0, 'associations_appended': 0}), \
+             patch.object(locomo_replay_mod, 'process_flush', return_value={'ok': True}), \
+             patch.dict(os.environ, {}, clear=False):
+            os.environ.pop('CORE_MEMORY_AGENT_CRAWLER_CALLABLE', None)
+            os.environ.pop('CORE_MEMORY_AGENT_CRAWLER_INVOKE', None)
+            replay_locomo_sample(root=td, sample=sample, mode='canonical_turn', flush_policy='per_session')
+
+        self.assertTrue(seen)
+        self.assertTrue(all(value == 'app.benchmarks.locomo_turn_crawler:locomo_crawler_callable' for value in seen))
+
 
 if __name__ == '__main__':
     unittest.main()
