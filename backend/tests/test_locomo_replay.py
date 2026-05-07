@@ -158,6 +158,33 @@ class TestLocomoReplay(unittest.TestCase):
         self.assertNotIn('associated_with', relationships)
         self.assertGreaterEqual(out['associations_requested'], 3)
 
+    def test_synthesis_reports_lookup_miss_examples(self):
+        if replay_locomo_sample is None:
+            self.skipTest('pydantic_settings unavailable')
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            (root / '.beads').mkdir(parents=True)
+            (root / '.beads' / 'index.json').write_text(json.dumps({
+                'beads': {
+                    'b-other': {'type': 'context', 'session_id': 'locomo:conv-26', 'source_turn_ids': ['unexpected']},
+                },
+                'associations': [],
+            }), encoding='utf-8')
+            out = locomo_replay_mod._synthesize_locomo_associations(
+                root=str(root),
+                sample_id='conv-26',
+                session_index=1,
+                turns=[{'dia_id': 'D1:1', 'turn_index': 1, 'speaker': 'Alice'}],
+            )
+
+        miss = out['lookup_misses'][0]
+        self.assertEqual('locomo:conv-26:D1:1', miss['searched_turn_id'])
+        self.assertEqual('D1:1', miss['searched_dia_id'])
+        self.assertEqual('locomo:conv-26', miss['searched_session_id'])
+        self.assertEqual(1, miss['index_session_beads'])
+        self.assertEqual('b-other', miss['same_session_examples'][0]['bead_id'])
+        self.assertEqual(['unexpected'], miss['same_session_examples'][0]['source_turn_ids'])
+
 
 if __name__ == '__main__':
     unittest.main()
