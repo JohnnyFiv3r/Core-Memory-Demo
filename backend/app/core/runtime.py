@@ -51,6 +51,7 @@ from core_memory.association.crawler_contract import merge_crawler_updates
 from core_memory.write_pipeline.continuity_injection import load_continuity_injection
 
 from app.benchmarks.fixture_smoke import load_fixture_smoke_cases
+from app.benchmarks import benchmark_store
 from app.benchmarks.locomo_loader import LocomoLoaderError
 from app.benchmarks.locomo_runner import run_locomo_retrieval_suite
 from app.benchmarks.locomo_scoring import aggregate_case_scores
@@ -2510,6 +2511,14 @@ def _prune_benchmark_run_dirs() -> None:
 
 
 def read_benchmark_history(limit: int = 20) -> list[dict[str, Any]]:
+    try:
+        db_rows = benchmark_store.read_history(limit=max(1, int(limit)))
+        if db_rows:
+            return db_rows[: max(1, int(limit))]
+    except Exception:
+        # Filesystem history remains the fallback for local/dev and DB outages.
+        pass
+
     file_rows: list[dict[str, Any]] = []
     f = _benchmark_history_file()
     if f.exists():
@@ -3137,6 +3146,11 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "report": dict(report),
         }
         _set_last_benchmark_cache(summary=summary, report=report, history_row=history_row)
+        try:
+            benchmark_store.save_run(history_row=history_row, artifacts=artifacts)
+        except Exception:
+            # Benchmark persistence to Postgres is best-effort; keep file artifacts usable.
+            pass
         _append_history(history_row)
         _prune_benchmark_run_dirs()
         return {"ok": True, "suite": suite_name, "summary": summary, "report": report}

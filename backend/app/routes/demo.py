@@ -7,10 +7,12 @@ from datetime import datetime, timezone
 from typing import Any
 
 from pathlib import Path
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
+from app.benchmarks import benchmark_store
 from app.benchmarks.locomo_loader import LocomoLoaderError
 from app.benchmarks.locomo_suite import build_locomo_suite_metadata
 from app.core.abuse import heavy_operation_slot, rate_limit_chat, rate_limit_general, rate_limit_heavy
@@ -1133,7 +1135,18 @@ def benchmark_artifact_download(run_id: str, filename: str):
     root = Path(settings.core_memory_demo_artifacts_root) / 'locomo-runs' / safe_run_id
     path = root / name
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail='artifact_not_found')
+        try:
+            db_artifact = benchmark_store.read_artifact(safe_run_id, name)
+        except Exception:
+            db_artifact = None
+        if not db_artifact:
+            raise HTTPException(status_code=404, detail='artifact_not_found')
+        media_type = str(db_artifact.get('content_type') or ('application/json' if name.endswith('.json') else 'application/x-ndjson'))
+        return StreamingResponse(
+            BytesIO(bytes(db_artifact.get('body') or b'')),
+            media_type=media_type,
+            headers={'Content-Disposition': f'attachment; filename="{safe_run_id}-{name}"'},
+        )
     media_type = 'application/json' if name.endswith('.json') else 'application/x-ndjson'
     return FileResponse(path=str(path), filename=f'{safe_run_id}-{name}', media_type=media_type)
 
