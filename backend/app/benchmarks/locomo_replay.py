@@ -82,15 +82,40 @@ def _read_index(root: str) -> dict[str, Any]:
         return {'beads': {}, 'associations': []}
 
 
-def _bead_for_turn(*, index: dict[str, Any], session_id: str, turn_id: str, dia_id: str = '') -> str:
+def _bead_lookup_example(*, bead_id: str, bead: dict[str, Any]) -> dict[str, Any]:
+    metadata = dict(bead.get('metadata') or {})
+    return {
+        'bead_id': str(bead_id or ''),
+        'session_id': str(bead.get('session_id') or ''),
+        'type': str(bead.get('type') or ''),
+        'source_turn_ids': [str(x) for x in list(bead.get('source_turn_ids') or [])[:5]],
+        'metadata_turn_id': str(metadata.get('turn_id') or ''),
+        'metadata_dia_id': str(metadata.get('dia_id') or ''),
+        'metadata_locomo_dia_id': str(metadata.get('locomo_dia_id') or ''),
+        'metadata_dia_ids': [str(x) for x in list(metadata.get('dia_ids') or [])[:5]],
+        'metadata_locomo_dia_ids': [str(x) for x in list(metadata.get('locomo_dia_ids') or [])[:5]],
+    }
+
+
+def _bead_for_turn(*, index: dict[str, Any], session_id: str, turn_id: str, dia_id: str = '', debug_misses: list[dict[str, Any]] | None = None) -> str:
     wanted = {str(turn_id or '').strip(), str(dia_id or '').strip()}
     wanted = {x for x in wanted if x}
     candidates: list[tuple[str, str]] = []
+    same_session_examples: list[dict[str, Any]] = []
+    any_session_examples: list[dict[str, Any]] = []
+    session_bead_count = 0
+    total_bead_count = 0
     for bead_id, bead in dict(index.get('beads') or {}).items():
         if not isinstance(bead, dict):
             continue
+        total_bead_count += 1
+        if len(any_session_examples) < 3:
+            any_session_examples.append(_bead_lookup_example(bead_id=str(bead_id), bead=bead))
         if str(bead.get('session_id') or '') != str(session_id):
             continue
+        session_bead_count += 1
+        if len(same_session_examples) < 5:
+            same_session_examples.append(_bead_lookup_example(bead_id=str(bead_id), bead=bead))
         if str(bead.get('type') or '') == 'process_flush':
             continue
         source_turn_ids = [str(x) for x in list(bead.get('source_turn_ids') or [])]
@@ -107,7 +132,20 @@ def _bead_for_turn(*, index: dict[str, Any], session_id: str, turn_id: str, dia_
             continue
         candidates.append((str(bead.get('created_at') or ''), str(bead_id)))
     candidates.sort()
-    return candidates[0][1] if candidates else ''
+    if candidates:
+        return candidates[0][1]
+    if debug_misses is not None and len(debug_misses) < 5:
+        debug_misses.append({
+            'searched_turn_id': str(turn_id or ''),
+            'searched_dia_id': str(dia_id or ''),
+            'searched_session_id': str(session_id or ''),
+            'wanted': sorted(wanted),
+            'index_total_beads': total_bead_count,
+            'index_session_beads': session_bead_count,
+            'same_session_examples': same_session_examples,
+            'any_session_examples': any_session_examples,
+        })
+    return ''
 
 
 def _entity_key(value: str) -> str:
@@ -142,10 +180,11 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
     session_id = f'locomo:{sample_id}'
     index = _read_index(root)
     ordered: list[dict[str, Any]] = []
+    lookup_misses: list[dict[str, Any]] = []
     for turn in sorted(list(turns or []), key=lambda t: int((t or {}).get('turn_index') or 0)):
         dia_id = str((turn or {}).get('dia_id') or '').strip()
         turn_id = f'locomo:{sample_id}:{dia_id}' if dia_id else f"locomo:{sample_id}:turn-{int((turn or {}).get('turn_index') or 0)}"
-        bead_id = _bead_for_turn(index=index, session_id=session_id, turn_id=turn_id, dia_id=dia_id)
+        bead_id = _bead_for_turn(index=index, session_id=session_id, turn_id=turn_id, dia_id=dia_id, debug_misses=lookup_misses)
         if not bead_id:
             continue
         ordered.append(
@@ -232,7 +271,15 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
             latest_by_entity[_entity_key(entity)] = cur_bead
 
     if not associations:
-        return {'ok': True, 'enabled': True, 'associations_requested': 0, 'associations_appended': 0, 'beads_considered': len(ordered)}
+        return {
+            'ok': True,
+            'enabled': True,
+            'associations_requested': 0,
+            'associations_appended': 0,
+            'beads_considered': len(ordered),
+            'lookup_misses': lookup_misses,
+            'lookup_misses_omitted': max(0, len(list(turns or [])) - len(ordered) - len(lookup_misses)),
+        }
 
     out = run_association_pass(
         root=root,
@@ -251,6 +298,8 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
         'associations_appended': int((out or {}).get('associations_appended') or 0),
         'associations_quarantined': int((out or {}).get('associations_quarantined') or 0),
         'authority_path': str((out or {}).get('authority_path') or ''),
+        'lookup_misses': lookup_misses,
+        'lookup_misses_omitted': max(0, len(list(turns or [])) - len(ordered) - len(lookup_misses)),
     }
 
 
