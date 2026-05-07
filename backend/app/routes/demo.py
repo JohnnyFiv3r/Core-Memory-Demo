@@ -766,9 +766,9 @@ def demo_control_state():
     _prune_benchmark_jobs()
     active_job = BENCHMARK_JOBS.get(str(ACTIVE_BENCHMARK_JOB_ID or '').strip()) if ACTIVE_BENCHMARK_JOB_ID else None
     benchmark_job = _benchmark_job_payload(active_job, cursor=0) if isinstance(active_job, dict) else None
-    snapshot = get_last_benchmark_snapshot(history_limit=5)
+    snapshot = get_last_benchmark_snapshot(history_limit=3)
     benchmark_summary = dict(snapshot.get('summary') or {})
-    benchmark_report = dict(snapshot.get('report') or {})
+    benchmark_report = _strip_benchmark_case_payloads(dict(snapshot.get('report') or {}))
     benchmark_history = list(snapshot.get('history') or [])
     if isinstance(active_job, dict):
         benchmark_summary, benchmark_report = _active_benchmark_state(active_job, snapshot)
@@ -782,7 +782,7 @@ def demo_control_state():
             'job': benchmark_job,
             'summary': benchmark_summary,
             'report': benchmark_report,
-            'history': benchmark_history,
+            'history': _slim_benchmark_history(benchmark_history),
             'qa_completed': int(((benchmark_job or {}).get('events') or [{}])[-1].get('qa_completed') or 0) if benchmark_job else 0,
             'qa_total': int(((benchmark_job or {}).get('events') or [{}])[-1].get('qa_total') or 0) if benchmark_job else 0,
         },
@@ -1117,13 +1117,17 @@ async def benchmark_run(request: Request):
         prior_row['superseded_by'] = job_id
     run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
     if run_mode in {'queue', 'queued', 'cron'}:
-        queued = benchmark_store.enqueue_job(job_id=job_id, request=dict(body or {}), kwargs=kwargs)
+        try:
+            queued = benchmark_store.enqueue_job(job_id=job_id, request=dict(body or {}), kwargs=kwargs)
+        except Exception as exc:
+            queued = False
+            row['queue_error_detail'] = str(exc)
         if not queued:
             row['status'] = 'failed'
             row['done'] = True
             row['error'] = 'benchmark_queue_unavailable'
-            _benchmark_event(row, 'failed', 'Benchmark queue unavailable')
-            return JSONResponse({'ok': False, 'job_id': job_id, 'status': 'failed', 'error': row['error']}, status_code=503)
+            _benchmark_event(row, 'failed', 'Benchmark queue unavailable', detail=str(row.get('queue_error_detail') or ''))
+            return JSONResponse({'ok': False, 'job_id': job_id, 'status': 'failed', 'error': row['error'], 'detail': str(row.get('queue_error_detail') or '')}, status_code=503)
         row['status'] = 'queued_external'
         row['done'] = True
         row['result'] = {'queued': True}
