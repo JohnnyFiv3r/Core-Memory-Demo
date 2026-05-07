@@ -118,10 +118,11 @@ def _strip_benchmark_case_payloads(value: Any) -> Any:
         return value
 
     out: dict[str, Any] = {}
+    heavy_lists = {'cases', 'rows', 'benchmark_table'}
     for key, item in value.items():
-        if key == 'cases' and isinstance(item, list):
+        if key in heavy_lists and isinstance(item, list):
             out[key] = []
-            out['cases_omitted'] = len(item)
+            out[f'{key}_omitted'] = len(item)
             continue
         out[key] = _strip_benchmark_case_payloads(item)
     return out
