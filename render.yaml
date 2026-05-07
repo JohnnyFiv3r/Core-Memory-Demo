@@ -16,13 +16,45 @@ services:
       - key: ALLOWED_ORIGIN
         sync: false
       - key: CORE_MEMORY_ROOT
+        value: /tmp/core-memory
+      - key: CORE_MEMORY_DEMO_BENCHMARK_ROOT
+        value: /tmp/core-memory-bench
+      - key: CORE_MEMORY_DEMO_ARTIFACTS_ROOT
+        value: /tmp/core-memory-artifacts
+      - key: BENCHMARK_RUN_MODE
+        value: queue
+      - key: BENCHMARK_DATABASE_URL
+        sync: false
+      - key: DEMO_CONTEXT_BUDGET
+        value: "128000"
+      - key: OPENAI_API_KEY
+        sync: false
+      - key: ANTHROPIC_API_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+
+  - type: cron
+    name: core-memory-demo-benchmark-worker
+    env: python
+    rootDir: backend
+    plan: starter
+    region: oregon
+    branch: main
+    schedule: "*/1 * * * *"
+    buildCommand: pip install -r requirements.txt
+    startCommand: python -m app.benchmarks.benchmark_worker --once
+    envVars:
+      - key: APP_ENV
+        value: production
+      - key: CORE_MEMORY_ROOT
         value: /var/data/core-memory
       - key: CORE_MEMORY_DEMO_BENCHMARK_ROOT
         value: /var/data/core-memory-bench
       - key: CORE_MEMORY_DEMO_ARTIFACTS_ROOT
         value: /var/data/core-memory-artifacts
-      - key: DEMO_CONTEXT_BUDGET
-        value: "128000"
+      - key: BENCHMARK_DATABASE_URL
+        sync: false
       - key: OPENAI_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY

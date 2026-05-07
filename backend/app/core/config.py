@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     benchmark_preload_turns_max: int = 400
     benchmark_history_max_rows: int = 300
     benchmark_runs_max_keep: int = 80
+    benchmark_run_mode: str = 'inline'
+    benchmark_dispatch_url: str = ''
+    benchmark_dispatch_token: str = ''
+    benchmark_dispatch_timeout_seconds: int = 15
 
     locomo_data_file: str = ''
     locomo_repo_root: str = ''
@@ -56,6 +60,7 @@ class Settings(BaseSettings):
     locomo_replay_mode: str = 'canonical_turn'
     locomo_replay_flush_policy: str = 'per_session'
     locomo_compare_paths_enabled: bool = False
+    locomo_compare_paths_max_qa_cases: int = 12
 
     async_jobs_tick_enabled: bool = True
     async_jobs_tick_interval_seconds: int = 60

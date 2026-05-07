@@ -232,6 +232,63 @@ class TestLocomoComparisonMode(unittest.TestCase):
         self.assertEqual('ingest_locomo_samples', out['report']['comparison_error']['step'])
         self.assertIn('flush failed', out['report']['comparison_error']['error'])
 
+    def test_compare_paths_skips_large_runs_to_avoid_memory_spike(self):
+        if runtime_mod is None:
+            self.skipTest('pydantic_settings unavailable')
+        fake_dataset_meta = {'dataset': {'selected_samples': 1, 'selected_qa_cases': 50, 'dataset_path': 'locomo.json'}}
+        fake_cases = [
+            {'qa_id': f'q{i}', 'sample_id': 'conv-1', 'category': 2, 'question': 'Q?', 'answer': 'A', 'evidence': ['D1:1']}
+            for i in range(50)
+        ]
+        fake_samples = [{'sample_id': 'conv-1', 'sessions': []}]
+        fake_gold = {'D1:1': {'dia_ids': ['D1:1']}}
+        main_report = {
+            'cases': [
+                {'qa_id': f'q{i}', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 1.0, 'evidence_recall': {'recall@5': 1.0, 'hit_any': True, 'mrr': 1.0}, 'status': 'ok'}
+                for i in range(50)
+            ],
+            'completed': 50,
+            'failed': 0,
+        }
+
+        with tempfile.TemporaryDirectory() as td:
+            old_bench_root = runtime_mod.settings.core_memory_demo_benchmark_root
+            old_art_root = runtime_mod.settings.core_memory_demo_artifacts_root
+            old_compare_limit = runtime_mod.settings.locomo_compare_paths_max_qa_cases
+            runtime_mod.settings.core_memory_demo_benchmark_root = td
+            runtime_mod.settings.core_memory_demo_artifacts_root = td
+            runtime_mod.settings.locomo_compare_paths_max_qa_cases = 12
+            try:
+                with patch.object(runtime_mod, 'build_locomo_suite_metadata', return_value=(fake_dataset_meta, fake_cases, fake_samples, fake_gold)), \
+                     patch.object(runtime_mod, 'ingest_locomo_samples', return_value={'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0}) as ingest_mock, \
+                     patch.object(runtime_mod, 'run_locomo_retrieval_suite', return_value=main_report), \
+                     patch.object(runtime_mod, 'build_semantic_index', return_value={'ok': True, 'backend': 'hash', 'entries': 1}):
+                    out = runtime_mod.run_benchmark(
+                        semantic_mode_name='required',
+                        root_mode='clean',
+                        preload_from_demo=False,
+                        preload_turns_max=5,
+                        suite='locomo_retrieval',
+                        qa_per_category={'1': 10, '2': 10, '3': 10, '4': 10, '5': 10},
+                        retrieval_k=8,
+                        ingestion_mode='turns',
+                        answer_mode='none',
+                        evidence_recall_k=[1, 5],
+                        persist_case_artifacts=True,
+                        embeddings_provider='hash',
+                        compare_paths=True,
+                    )
+            finally:
+                runtime_mod.settings.core_memory_demo_benchmark_root = old_bench_root
+                runtime_mod.settings.core_memory_demo_artifacts_root = old_art_root
+                runtime_mod.settings.locomo_compare_paths_max_qa_cases = old_compare_limit
+
+        self.assertTrue(out['ok'])
+        self.assertTrue(out['report']['config']['compare_paths_requested'])
+        self.assertFalse(out['report']['config']['compare_paths_executed'])
+        self.assertIn('qa_cases_exceeds_compare_limit:50>12', out['report']['config']['compare_paths_skipped_reason'])
+        self.assertEqual(1, ingest_mock.call_count)
+
 
 if __name__ == '__main__':
     unittest.main()

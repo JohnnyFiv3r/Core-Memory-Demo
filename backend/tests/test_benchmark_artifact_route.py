@@ -38,6 +38,25 @@ class TestBenchmarkArtifactRoute(unittest.TestCase):
         with self.assertRaises(HTTPException):
             demo_routes.benchmark_artifact_download('bench-test123', 'not-allowed.json')
 
+    def test_artifact_falls_back_to_benchmark_store(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        with tempfile.TemporaryDirectory() as td:
+            old_root = demo_routes.settings.core_memory_demo_artifacts_root
+            old_read = demo_routes.benchmark_store.read_artifact
+            demo_routes.settings.core_memory_demo_artifacts_root = td
+            demo_routes.benchmark_store.read_artifact = lambda run_id, filename: {
+                'content_type': 'application/json',
+                'body': b'{"ok": true}',
+                'size_bytes': 12,
+            }
+            try:
+                resp = demo_routes.benchmark_artifact_download('bench-test123', 'report.json')
+            finally:
+                demo_routes.settings.core_memory_demo_artifacts_root = old_root
+                demo_routes.benchmark_store.read_artifact = old_read
+        self.assertEqual(resp.media_type, 'application/json')
+
 
 if __name__ == '__main__':
     unittest.main()

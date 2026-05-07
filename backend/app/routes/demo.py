@@ -1,16 +1,21 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 import uuid
+import urllib.error
+import urllib.request
 from datetime import datetime, timezone
 from typing import Any
 
 from pathlib import Path
+from io import BytesIO
 
 from fastapi import APIRouter, Depends, HTTPException, Request
-from fastapi.responses import FileResponse, JSONResponse
+from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
+from app.benchmarks import benchmark_store
 from app.benchmarks.locomo_loader import LocomoLoaderError
 from app.benchmarks.locomo_suite import build_locomo_suite_metadata
 from app.core.abuse import heavy_operation_slot, rate_limit_chat, rate_limit_general, rate_limit_heavy
@@ -124,7 +129,11 @@ def _strip_benchmark_case_payloads(value: Any) -> Any:
 
 def _slim_benchmark_history(history: list[Any]) -> list[Any]:
     return [
-        _strip_benchmark_case_payloads(row) if isinstance(row, dict) else row
+        {
+            'run_id': str(((row.get('summary') or {}).get('run_id') or row.get('run_id') or '')),
+            'created_at': str(row.get('created_at') or ''),
+            'summary': dict(row.get('summary') or {}),
+        } if isinstance(row, dict) else row
         for row in list(history or [])
     ]
 
@@ -208,6 +217,42 @@ def _benchmark_event(row: dict[str, Any], stage: str, message: str, **extra: Any
     row['seq'] = seq
     row['stage'] = str(stage or '')
     row['updated_ms'] = _now_ms()
+
+
+def _dispatch_benchmark_job(job_id: str, body: dict[str, Any], kwargs: dict[str, Any]) -> dict[str, Any]:
+    url = str(settings.benchmark_dispatch_url or '').strip()
+    if not url:
+        return {'ok': False, 'error': 'benchmark_dispatch_not_configured'}
+
+    payload = {
+        'job_id': str(job_id or ''),
+        'request': dict(body or {}),
+        'kwargs': dict(kwargs or {}),
+    }
+    headers = {'Content-Type': 'application/json'}
+    token = str(settings.benchmark_dispatch_token or '').strip()
+    if token:
+        headers['Authorization'] = f'Bearer {token}'
+    req = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode('utf-8'),
+        headers=headers,
+        method='POST',
+    )
+    timeout = max(1, int(settings.benchmark_dispatch_timeout_seconds))
+    try:
+        with urllib.request.urlopen(req, timeout=timeout) as resp:
+            raw = resp.read().decode('utf-8', 'replace')
+            try:
+                data = json.loads(raw) if raw.strip() else {}
+            except Exception:
+                data = {'raw': raw[:1000]}
+            return {'ok': 200 <= int(resp.status) < 300, 'status_code': int(resp.status), **dict(data or {})}
+    except urllib.error.HTTPError as exc:
+        detail = exc.read().decode('utf-8', 'replace')[:1000]
+        return {'ok': False, 'status_code': int(exc.code), 'error': f'benchmark_dispatch_http_{exc.code}', 'detail': detail}
+    except Exception as exc:
+        return {'ok': False, 'error': f'benchmark_dispatch_failed:{exc}'}
 
 
 def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
@@ -1069,6 +1114,47 @@ async def benchmark_run(request: Request):
     BENCHMARK_JOBS[job_id] = row
     if isinstance(prior_row, dict) and not bool(prior_row.get('done')):
         prior_row['superseded_by'] = job_id
+    run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
+    if run_mode in {'queue', 'queued', 'cron'}:
+        queued = benchmark_store.enqueue_job(job_id=job_id, request=dict(body or {}), kwargs=kwargs)
+        if not queued:
+            row['status'] = 'failed'
+            row['done'] = True
+            row['error'] = 'benchmark_queue_unavailable'
+            _benchmark_event(row, 'failed', 'Benchmark queue unavailable')
+            return JSONResponse({'ok': False, 'job_id': job_id, 'status': 'failed', 'error': row['error']}, status_code=503)
+        row['status'] = 'queued_external'
+        row['done'] = True
+        row['result'] = {'queued': True}
+        _benchmark_event(row, 'queued_external', 'Benchmark queued for external worker', supersedes=prior_job_id or '')
+        return {'ok': True, 'job_id': job_id, 'status': 'queued_external', 'superseded_job_id': prior_job_id}
+    if run_mode in {'external', 'dispatch'}:
+        _benchmark_event(row, 'queued', 'Benchmark dispatch queued', supersedes=prior_job_id or '')
+        dispatched = _dispatch_benchmark_job(job_id, dict(body or {}), kwargs)
+        if not bool(dispatched.get('ok')):
+            row['status'] = 'failed'
+            row['done'] = True
+            row['error'] = str(dispatched.get('error') or 'benchmark_dispatch_failed')
+            _benchmark_event(row, 'failed', 'Benchmark dispatch failed', error=row['error'])
+            return JSONResponse({'ok': False, 'job_id': job_id, 'status': 'failed', 'error': row['error'], 'dispatch': dispatched}, status_code=503)
+        row['status'] = 'external_dispatched'
+        row['done'] = True
+        row['external_job_id'] = str(dispatched.get('job_id') or dispatched.get('id') or '')
+        row['result'] = {'external': True, 'dispatch': dispatched}
+        _benchmark_event(row, 'external_dispatched', 'Benchmark dispatched to external runner', external_job_id=row['external_job_id'])
+        return {
+            'ok': True,
+            'job_id': job_id,
+            'status': 'external_dispatched',
+            'external_job_id': row['external_job_id'],
+            'superseded_job_id': prior_job_id,
+        }
+    if run_mode in {'disabled', 'off'}:
+        row['status'] = 'failed'
+        row['done'] = True
+        row['error'] = 'benchmark_run_disabled'
+        _benchmark_event(row, 'failed', 'Benchmark run disabled')
+        return JSONResponse({'ok': False, 'job_id': job_id, 'status': 'failed', 'error': row['error']}, status_code=503)
     task = asyncio.create_task(_run_benchmark_job(job_id, kwargs))
     row['task'] = task
     _benchmark_event(row, 'queued', 'Benchmark queued', supersedes=prior_job_id or '')
@@ -1080,6 +1166,22 @@ def benchmark_job_status(job_id: str, cursor: int = 0):
     _prune_benchmark_jobs()
     row = BENCHMARK_JOBS.get(str(job_id or '').strip())
     if not isinstance(row, dict):
+        stored = benchmark_store.read_job(str(job_id or '').strip())
+        if isinstance(stored, dict):
+            status = str(stored.get('status') or '')
+            done = status in {'completed', 'failed'}
+            result = stored.get('result') if isinstance(stored.get('result'), dict) else None
+            return {
+                'ok': True,
+                'job_id': str(stored.get('job_id') or job_id),
+                'status': status,
+                'stage': status,
+                'done': done,
+                'error': stored.get('error'),
+                'result': result,
+                'events': [],
+                'cursor': 0,
+            }
         return JSONResponse({'ok': False, 'error': 'benchmark_job_not_found'}, status_code=404)
     return _benchmark_job_payload(row, cursor=max(0, int(cursor)))
 
@@ -1087,7 +1189,7 @@ def benchmark_job_status(job_id: str, cursor: int = 0):
 @router.get('/demo/benchmark/last')
 def benchmark_last():
     _prune_benchmark_jobs()
-    snapshot = get_last_benchmark_snapshot(history_limit=5)
+    snapshot = get_last_benchmark_snapshot(history_limit=3)
     history = list(snapshot.get('history') or [])
     latest_compare = None
     active_job = next((row for row in BENCHMARK_JOBS.values() if isinstance(row, dict) and not bool(row.get('done'))), None)
@@ -1112,6 +1214,7 @@ def benchmark_last():
     if isinstance(active_job, dict):
         history = history[:2]
     history = _slim_benchmark_history(history)
+    report = _strip_benchmark_case_payloads(report) if isinstance(report, dict) else report
     return {
         'ok': ok,
         'summary': summary,
@@ -1133,7 +1236,18 @@ def benchmark_artifact_download(run_id: str, filename: str):
     root = Path(settings.core_memory_demo_artifacts_root) / 'locomo-runs' / safe_run_id
     path = root / name
     if not path.exists() or not path.is_file():
-        raise HTTPException(status_code=404, detail='artifact_not_found')
+        try:
+            db_artifact = benchmark_store.read_artifact(safe_run_id, name)
+        except Exception:
+            db_artifact = None
+        if not db_artifact:
+            raise HTTPException(status_code=404, detail='artifact_not_found')
+        media_type = str(db_artifact.get('content_type') or ('application/json' if name.endswith('.json') else 'application/x-ndjson'))
+        return StreamingResponse(
+            BytesIO(bytes(db_artifact.get('body') or b'')),
+            media_type=media_type,
+            headers={'Content-Disposition': f'attachment; filename="{safe_run_id}-{name}"'},
+        )
     media_type = 'application/json' if name.endswith('.json') else 'application/x-ndjson'
     return FileResponse(path=str(path), filename=f'{safe_run_id}-{name}', media_type=media_type)
 
