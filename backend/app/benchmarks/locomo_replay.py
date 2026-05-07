@@ -82,7 +82,9 @@ def _read_index(root: str) -> dict[str, Any]:
         return {'beads': {}, 'associations': []}
 
 
-def _bead_for_turn(*, index: dict[str, Any], session_id: str, turn_id: str) -> str:
+def _bead_for_turn(*, index: dict[str, Any], session_id: str, turn_id: str, dia_id: str = '') -> str:
+    wanted = {str(turn_id or '').strip(), str(dia_id or '').strip()}
+    wanted = {x for x in wanted if x}
     candidates: list[tuple[str, str]] = []
     for bead_id, bead in dict(index.get('beads') or {}).items():
         if not isinstance(bead, dict):
@@ -92,7 +94,16 @@ def _bead_for_turn(*, index: dict[str, Any], session_id: str, turn_id: str) -> s
         if str(bead.get('type') or '') == 'process_flush':
             continue
         source_turn_ids = [str(x) for x in list(bead.get('source_turn_ids') or [])]
-        if str(turn_id) not in source_turn_ids:
+        metadata = dict(bead.get('metadata') or {})
+        metadata_turn_ids = [
+            str(metadata.get('turn_id') or ''),
+            str(metadata.get('dia_id') or ''),
+            str(metadata.get('locomo_dia_id') or ''),
+        ]
+        for value in list(metadata.get('dia_ids') or []) + list(metadata.get('locomo_dia_ids') or []):
+            metadata_turn_ids.append(str(value or ''))
+        bead_turn_ids = {str(x).strip() for x in source_turn_ids + metadata_turn_ids if str(x).strip()}
+        if wanted.isdisjoint(bead_turn_ids):
             continue
         candidates.append((str(bead.get('created_at') or ''), str(bead_id)))
     candidates.sort()
@@ -134,7 +145,7 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
     for turn in sorted(list(turns or []), key=lambda t: int((t or {}).get('turn_index') or 0)):
         dia_id = str((turn or {}).get('dia_id') or '').strip()
         turn_id = f'locomo:{sample_id}:{dia_id}' if dia_id else f"locomo:{sample_id}:turn-{int((turn or {}).get('turn_index') or 0)}"
-        bead_id = _bead_for_turn(index=index, session_id=session_id, turn_id=turn_id)
+        bead_id = _bead_for_turn(index=index, session_id=session_id, turn_id=turn_id, dia_id=dia_id)
         if not bead_id:
             continue
         ordered.append(

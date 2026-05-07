@@ -135,8 +135,8 @@ class TestLocomoReplay(unittest.TestCase):
             (root / '.beads').mkdir(parents=True)
             (root / '.beads' / 'index.json').write_text(json.dumps({
                 'beads': {
-                    'b1': {'entities': ['Alice'], 'session_id': 'locomo:conv-26', 'source_turn_ids': ['locomo:conv-26:D1:1']},
-                    'b2': {'entities': ['Alice'], 'session_id': 'locomo:conv-26', 'source_turn_ids': ['locomo:conv-26:D1:2']},
+                    'b1': {'entities': ['Alice'], 'session_id': 'locomo:conv-26', 'source_turn_ids': ['D1:1']},
+                    'b2': {'entities': ['Alice'], 'session_id': 'locomo:conv-26', 'metadata': {'locomo_dia_id': 'D1:2'}},
                 },
                 'associations': [],
             }), encoding='utf-8')
