@@ -353,6 +353,16 @@ function App(): React.JSX.Element {
   const [meta, setMeta] = useState<string>('')
 
   const closeGraphView = useCallback(async () => {
+    const isOverlay = new URLSearchParams(window.location.search).get('overlay') === '1'
+    if (isOverlay && window.parent && window.parent !== window) {
+      try {
+        window.parent.postMessage({ type: 'core-memory:close-graph-overlay' }, window.location.origin)
+        return
+      } catch {
+        // fall through to standalone navigation handling
+      }
+    }
+
     try {
       await apiFetchJson<{ ok?: boolean }>('/api/session/reset', { method: 'POST' })
     } catch {

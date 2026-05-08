@@ -774,9 +774,18 @@ function openReagraphArchive() {
 
 function closeGraphOverlay() {
   const overlay = document.getElementById('graph-overlay');
+  const frame = document.getElementById('graph-overlay-frame');
   if (overlay) overlay.classList.remove('open');
+  if (frame) frame.setAttribute('src', 'about:blank');
   document.body.style.overflow = '';
 }
+
+window.addEventListener('message', (event) => {
+  if (event.origin !== window.location.origin) return;
+  const data = event.data || {};
+  if (!data || data.type !== 'core-memory:close-graph-overlay') return;
+  closeGraphOverlay();
+});
 
 document.addEventListener('keydown', (evt) => {
   if (evt.key !== 'Escape') return;
