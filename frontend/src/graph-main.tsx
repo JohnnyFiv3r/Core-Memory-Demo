@@ -134,22 +134,6 @@ class ApiHttpError extends Error {
   }
 }
 
-function canCreateWebGlContext(): boolean {
-  try {
-    const canvas = document.createElement('canvas')
-    const gl = (canvas.getContext('webgl2') || canvas.getContext('webgl') || canvas.getContext('experimental-webgl')) as
-      | WebGLRenderingContext
-      | WebGL2RenderingContext
-      | null
-    if (!gl) return false
-    const ext = gl.getExtension('WEBGL_lose_context')
-    if (ext) ext.loseContext()
-    return true
-  } catch {
-    return false
-  }
-}
-
 function isAuthRequiredError(err: unknown): err is AuthRequiredError {
   return err instanceof AuthRequiredError || (err instanceof Error && err.name === 'AuthRequiredError')
 }
@@ -357,66 +341,6 @@ function typeColor(type: string | undefined): string {
   return '#7ca0ab'
 }
 
-function SvgGraphFallback({
-  nodes,
-  edges,
-  onNodeClick,
-  onEdgeClick,
-}: {
-  nodes: GraphNode[]
-  edges: GraphEdge[]
-  onNodeClick: (node: { id?: string; data?: { bead_id?: string } }) => void
-  onEdgeClick: (edge: GraphEdge) => void
-}): React.JSX.Element {
-  const width = 920
-  const height = 620
-  const cx = width / 2
-  const cy = height / 2
-  const radius = Math.max(120, Math.min(260, 70 + nodes.length * 10))
-  const positions = useMemo(() => {
-    const m = new Map<string, { x: number; y: number }>()
-    nodes.forEach((node, idx) => {
-      const angle = nodes.length <= 1 ? -Math.PI / 2 : (idx / nodes.length) * Math.PI * 2 - Math.PI / 2
-      m.set(node.id, { x: cx + Math.cos(angle) * radius, y: cy + Math.sin(angle) * radius })
-    })
-    return m
-  }, [nodes, radius])
-
-  if (!nodes.length) return <div className="graph-fallback-empty">No graph nodes yet. Add memories, associations, or claims, then refresh.</div>
-
-  return (
-    <div className="graph-fallback">
-      <div className="graph-fallback-banner">WebGL is unavailable here, so this demo is showing a static graph fallback.</div>
-      <svg className="graph-fallback-svg" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="Causal graph fallback">
-        {edges.map((edge, idx) => {
-          const s = edge.source ? positions.get(edge.source) : null
-          const t = edge.target ? positions.get(edge.target) : null
-          if (!s || !t) return null
-          return (
-            <g key={edge.id || `${edge.source}-${edge.target}-${idx}`}>
-              <line x1={s.x} y1={s.y} x2={t.x} y2={t.y} className="graph-fallback-edge" onClick={() => onEdgeClick(edge)} />
-              <text x={(s.x + t.x) / 2} y={(s.y + t.y) / 2} className="graph-fallback-edge-label" onClick={() => onEdgeClick(edge)}>
-                {String(edge.label || edge.data?.relationship || '').slice(0, 18)}
-              </text>
-            </g>
-          )
-        })}
-        {nodes.map((node) => {
-          const p = positions.get(node.id) || { x: cx, y: cy }
-          return (
-            <g key={node.id} className="graph-fallback-node" onClick={() => onNodeClick(node)}>
-              <circle cx={p.x} cy={p.y} r={Math.max(9, Math.min(18, node.size))} fill={node.fill} />
-              <text x={p.x} y={p.y + 30} textAnchor="middle">
-                {String(node.label || node.id).slice(0, 24)}
-              </text>
-            </g>
-          )
-        })}
-      </svg>
-    </div>
-  )
-}
-
 function App(): React.JSX.Element {
   const graphRef = useRef<any>(null)
   const [beads, setBeads] = useState<BeadRow[]>([])
@@ -427,7 +351,6 @@ function App(): React.JSX.Element {
   const [auto, setAuto] = useState<boolean>(true)
   const [detail, setDetail] = useState<string>('')
   const [meta, setMeta] = useState<string>('')
-  const [webglAvailable] = useState<boolean>(() => canCreateWebGlContext())
 
   const closeGraphView = useCallback(async () => {
     try {
@@ -727,48 +650,44 @@ function App(): React.JSX.Element {
       <div className="graph-layout">
         <div className="graph-panel">
           <div className="graph-host">
-            {webglAvailable ? (
-              <GraphCanvas
-                ref={(r: unknown) => {
-                  graphRef.current = r
-                }}
-                nodes={graphData.nodes}
-                edges={graphData.edges}
-                layoutType="forceDirected3d"
-                cameraMode="rotate"
-                draggable
-                animated={false}
-                labelType="all"
-                edgeLabelPosition="inline"
-                theme={{
-                  canvas: { background: '#05070c' },
-                  arrow: { fill: '#5b6a8a', activeFill: '#6ae276' },
-                  node: {
-                    fill: '#7ca0ab',
-                    activeFill: '#6ae276',
-                    opacity: 0.95,
-                    selectedOpacity: 1,
-                    inactiveOpacity: 0.2,
-                    label: { color: '#e1e4ed', stroke: '#05070c', activeColor: '#ffffff' },
-                    subLabel: { color: '#8b8fa3', stroke: 'transparent', activeColor: '#e1e4ed' },
-                  },
-                  edge: {
-                    fill: '#5b6a8a',
-                    activeFill: '#6ae276',
-                    opacity: 0.7,
-                    selectedOpacity: 1,
-                    inactiveOpacity: 0.2,
-                    label: { color: '#b8c0d8', stroke: '#05070c', activeColor: '#ffffff' },
-                  },
-                  lasso: { border: '1px solid #6ae276', background: 'rgba(106,226,118,0.18)' },
-                  ring: { fill: '#1f2838', activeFill: '#6ae276' },
-                }}
-                onNodeClick={onNodeClick}
-                onEdgeClick={onEdgeClick}
-              />
-            ) : (
-              <SvgGraphFallback nodes={graphData.nodes} edges={graphData.edges} onNodeClick={onNodeClick} onEdgeClick={onEdgeClick} />
-            )}
+            <GraphCanvas
+              ref={(r: unknown) => {
+                graphRef.current = r
+              }}
+              nodes={graphData.nodes}
+              edges={graphData.edges}
+              layoutType="forceDirected3d"
+              cameraMode="rotate"
+              draggable
+              animated={false}
+              labelType="all"
+              edgeLabelPosition="inline"
+              theme={{
+                canvas: { background: '#05070c' },
+                arrow: { fill: '#5b6a8a', activeFill: '#6ae276' },
+                node: {
+                  fill: '#7ca0ab',
+                  activeFill: '#6ae276',
+                  opacity: 0.95,
+                  selectedOpacity: 1,
+                  inactiveOpacity: 0.2,
+                  label: { color: '#e1e4ed', stroke: '#05070c', activeColor: '#ffffff' },
+                  subLabel: { color: '#8b8fa3', stroke: 'transparent', activeColor: '#e1e4ed' },
+                },
+                edge: {
+                  fill: '#5b6a8a',
+                  activeFill: '#6ae276',
+                  opacity: 0.7,
+                  selectedOpacity: 1,
+                  inactiveOpacity: 0.2,
+                  label: { color: '#b8c0d8', stroke: '#05070c', activeColor: '#ffffff' },
+                },
+                lasso: { border: '1px solid #6ae276', background: 'rgba(106,226,118,0.18)' },
+                ring: { fill: '#1f2838', activeFill: '#6ae276' },
+              }}
+              onNodeClick={onNodeClick}
+              onEdgeClick={onEdgeClick}
+            />
           </div>
         </div>
 
