@@ -40,7 +40,7 @@ from core_memory.integrations.pydanticai.run import run_with_memory
 
 from app.core.agent_runtime import create_agent_for_root
 from core_memory.retrieval.tools import memory as memory_tools
-from core_memory.retrieval.semantic_index import build_semantic_index
+from core_memory.retrieval.semantic_index import build_semantic_index, semantic_lookup
 from core_memory.retrieval.normalize import classify_intent
 from core_memory.persistence.store import MemoryStore
 from core_memory.persistence.store_claim_ops import write_claim_updates_to_bead, write_claims_to_bead
@@ -49,6 +49,11 @@ from core_memory.runtime.jobs import async_jobs_status, run_async_jobs
 from core_memory.runtime.association_pass import run_association_pass
 from core_memory.association.crawler_contract import merge_crawler_updates
 from core_memory.write_pipeline.continuity_injection import load_continuity_injection
+
+try:
+    from core_memory.claim.registry import RELATION_LABEL_DEFINITIONS
+except Exception:  # pragma: no cover - compatibility with older core-memory versions
+    RELATION_LABEL_DEFINITIONS = {}
 
 from app.benchmarks.fixture_smoke import load_fixture_smoke_cases
 from app.benchmarks import benchmark_store
@@ -790,49 +795,70 @@ _ASSOC_SPECIFIC_RELATIONS: set[str] = {
     "contradicts",
 }
 
-ASSOC_JUDGE_INSTRUCTION_BLOCK = """
-Use the strongest honest fit for every label.
-Prefer specific, grounded meaning over vague defaults.
+FALLBACK_RELATION_GUIDANCE: dict[str, str] = {
+    "caused_by": "source happened because target directly created the condition/mechanism",
+    "led_to": "source contributed forward into target as downstream consequence",
+    "blocked_by": "source could not proceed because target obstructed it",
+    "unblocks": "source removes the blocker on target",
+    "enables": "source makes target possible or practical",
+    "supports": "source gives meaningful support to target",
+    "reinforces": "source strengthens confidence in target through repeated or independent agreement",
+    "contradicts": "source and target cannot both stand as written",
+    "invalidates": "source makes target no longer valid",
+    "supersedes": "source replaces target as newer/current version",
+    "superseded_by": "source has been replaced by target",
+    "resolves": "source settles or fixes the issue/open state in target",
+    "diagnoses": "source identifies the underlying mechanism behind target",
+    "derived_from": "source was built or inferred from target",
+    "follows": "source comes after target in a meaningful sequence",
+    "precedes": "source comes before target in a meaningful sequence",
+    "similar_pattern": "shared reusable pattern, but no stronger transfer/structure claim",
+    "mirrors": "notably parallel dynamics",
+    "structural_symmetry": "matching internal role structure",
+    "applies_pattern_of": "source deliberately reuses target's pattern",
+    "violates_pattern_of": "source breaks the pattern target suggests",
+    "generalizes": "source is a broader abstraction of target",
+    "specializes": "source is a narrower instance of target",
+    "refines": "source sharpens target without replacing it",
+    "transferable_lesson": "lesson from source should be reused in target context",
+    "reveals_bias": "source exposes a blind spot or recurrent reasoning error in target",
+    "constraint_transformed_into": "former limit became a reusable rule/pattern elsewhere",
+    "solves_same_mechanism": "source and target address the same underlying mechanism",
+    "associated_with": "meaningful relation exists, but no stronger relation is justified",
+}
 
-Read every edge as: source RELATION target.
-Use follows only for meaningful sequence adjacency.
-Use derived_from only when no stronger semantic relation is justified.
 
-Allowed relationships and intent:
-- caused_by: source happened because target directly created the condition/mechanism
-- led_to: source contributed forward into target as downstream consequence
-- blocked_by: source could not proceed because target obstructed it
-- unblocks: source removes the blocker on target
-- enables: source makes target possible or practical
-- supports: source gives meaningful support to target
-- reinforces: source strengthens confidence in target through repeated/independent agreement
-- contradicts: source and target cannot both stand as written
-- invalidates: source makes target no longer valid
-- supersedes: source replaces target as newer/current version
-- superseded_by: source has been replaced by target
-- resolves: source settles or fixes the issue/open state in target
-- diagnoses: source identifies the underlying mechanism behind target
-- derived_from: source was built or inferred from target
-- follows: source comes after target in a meaningful sequence
-- precedes: source comes before target in a meaningful sequence
-- similar_pattern: shared reusable pattern, but no stronger transfer/structure claim
-- mirrors: notably parallel dynamics
-- structural_symmetry: matching internal role structure
-- applies_pattern_of: source deliberately reuses target's pattern
-- violates_pattern_of: source breaks the pattern target suggests
-- generalizes: source is a broader abstraction of target
-- specializes: source is a narrower instance of target
-- refines: source sharpens target without replacing it
-- transferable_lesson: lesson from source should be reused in target context
-- reveals_bias: source exposes a blind spot or recurrent reasoning error in target
-- constraint_transformed_into: former limit became a reusable rule/pattern elsewhere
-- solves_same_mechanism: source and target address the same underlying mechanism
-- associated_with: meaningful relation exists, but no stronger relation is justified
+def _association_relation_guidance() -> dict[str, str]:
+    registry_defs = {str(k): str(v) for k, v in dict(RELATION_LABEL_DEFINITIONS or {}).items() if str(k) in ALLOWED_ASSOC_RELATIONS}
+    out: dict[str, str] = {}
+    for rel in ALLOWED_ASSOC_RELATIONS:
+        out[rel] = registry_defs.get(rel) or FALLBACK_RELATION_GUIDANCE.get(rel) or f"Canonical semantic relation `{rel}`. Use only when evidence supports this specific edge semantics."
+    return out
 
-Never invent facts or ids.
-Do not use weak fallback labels as convenience defaults.
-If unsure, omit the edge.
-""".strip()
+
+def _association_instruction_block() -> str:
+    lines = [
+        "Use the strongest honest fit for every label.",
+        "Prefer specific, grounded meaning over vague defaults.",
+        "",
+        "Read every edge as: source RELATION target.",
+        "Use follows only for meaningful sequence adjacency.",
+        "Use derived_from only when no stronger semantic relation is justified.",
+        "",
+        "Allowed relationships and intent:",
+    ]
+    for rel, desc in _association_relation_guidance().items():
+        lines.append(f"- {rel}: {desc}")
+    lines.extend([
+        "",
+        "Never invent facts or ids.",
+        "Do not use weak fallback labels as convenience defaults.",
+        "If unsure, omit the edge.",
+    ])
+    return "\n".join(lines).strip()
+
+
+ASSOC_JUDGE_INSTRUCTION_BLOCK = _association_instruction_block()
 
 
 def set_demo_model_override(model_id: str | None) -> dict[str, Any]:
@@ -1229,8 +1255,45 @@ async def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str
     current_entities = _bead_entities(current)
     current_tokens = _bead_tokens(current)
 
-    candidates: list[dict[str, Any]] = []
-    for target_id in prior_ids[:60]:
+    prior_id_set = {str(x) for x in prior_ids}
+    candidates_by_id: dict[str, dict[str, Any]] = {}
+
+    def add_candidate(target_id: str, *, shared_entities: list[str] | None = None, shared_terms: list[str] | None = None, evidence_score: float = 0.0, semantic_score: float | None = None, source: str = "lexical") -> None:
+        tid = str(target_id or "").strip()
+        if not tid or tid not in prior_id_set:
+            return
+        target = dict(beads.get(tid) or {})
+        if not target:
+            return
+        existing = candidates_by_id.get(tid)
+        sources = set(list((existing or {}).get("candidate_sources") or []))
+        sources.add(str(source or "candidate"))
+        row = existing or {
+            "target_bead_id": tid,
+            "target_title": str(target.get("title") or "")[:140],
+            "target_type": str(target.get("type") or ""),
+            "target_summary": " ".join(str(x or "") for x in list(target.get("summary") or [])[:2])[:220],
+            "target_excerpt": _bead_text(target)[:360],
+            "shared_entities": [],
+            "shared_terms": [],
+            "evidence_score": 0,
+            "semantic_score": None,
+            "candidate_sources": [],
+        }
+        if shared_entities:
+            row["shared_entities"] = sorted(set(list(row.get("shared_entities") or []) + list(shared_entities)))[:5]
+        if shared_terms:
+            row["shared_terms"] = sorted(set(list(row.get("shared_terms") or []) + list(shared_terms)))[:8]
+        row["evidence_score"] = max(float(row.get("evidence_score") or 0.0), float(evidence_score or 0.0))
+        if semantic_score is not None:
+            try:
+                row["semantic_score"] = max(float(row.get("semantic_score") or 0.0), float(semantic_score))
+            except Exception:
+                row["semantic_score"] = float(semantic_score or 0.0)
+        row["candidate_sources"] = sorted(sources)
+        candidates_by_id[tid] = row
+
+    for target_id in prior_ids[:80]:
         target = dict(beads.get(str(target_id)) or {})
         if not target:
             continue
@@ -1239,36 +1302,43 @@ async def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str
         score = (5 * len(shared_entities)) + min(6, len(shared_terms))
         if score <= 0:
             continue
-        candidates.append(
-            {
-                "target_bead_id": str(target_id),
-                "target_title": str(target.get("title") or "")[:140],
-                "target_type": str(target.get("type") or ""),
-                "target_summary": " ".join(str(x or "") for x in list(target.get("summary") or [])[:2])[:220],
-                "target_excerpt": _bead_text(target)[:360],
-                "shared_entities": shared_entities[:5],
-                "shared_terms": shared_terms[:8],
-                "evidence_score": int(score),
-            }
-        )
+        add_candidate(str(target_id), shared_entities=shared_entities[:5], shared_terms=shared_terms[:8], evidence_score=float(score), source="entity_token_overlap")
 
-    if prior_ids and not any(str(c.get("target_bead_id") or "") == str(prior_ids[0]) for c in candidates):
-        prev = dict(beads.get(str(prior_ids[0])) or {})
-        candidates.append(
-            {
-                "target_bead_id": str(prior_ids[0]),
-                "target_title": str(prev.get("title") or "")[:140],
-                "target_type": str(prev.get("type") or ""),
-                "target_summary": " ".join(str(x or "") for x in list(prev.get("summary") or [])[:2])[:220],
-                "target_excerpt": _bead_text(prev)[:360],
-                "shared_entities": [],
-                "shared_terms": [],
-                "evidence_score": 1,
-            }
-        )
+    # Semantic candidates matter for the demo graph: the best association target often does not share exact words.
+    # Use the existing semantic index when available, but never block association authoring if it is stale/missing.
+    semantic_warnings: list[str] = []
+    try:
+        semantic_query = "\n".join(
+            x
+            for x in [
+                str(current.get("title") or ""),
+                " ".join(str(v or "") for v in list(current.get("summary") or [])[:3]),
+                _bead_text(current)[:700],
+            ]
+            if str(x or "").strip()
+        )[:1200]
+        if semantic_query:
+            sem = semantic_lookup(Path(settings.core_memory_root), semantic_query, k=36, mode=os.environ.get("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE") or "degraded_allowed")
+            semantic_warnings = [str(x) for x in list((sem or {}).get("warnings") or [])[:6]]
+            for rank, item in enumerate(list((sem or {}).get("results") or []), start=1):
+                sid = str((item or {}).get("bead_id") or "").strip()
+                if not sid or sid == str(current_id) or sid not in prior_id_set:
+                    continue
+                try:
+                    sem_score = float((item or {}).get("score") or 0.0)
+                except Exception:
+                    sem_score = 0.0
+                # Keep semantic-only matches visible to the judge even with no lexical overlap.
+                add_candidate(sid, evidence_score=max(2.0, 10.0 - min(rank, 20) * 0.25), semantic_score=sem_score, source="semantic_neighbor")
+    except Exception as exc:
+        semantic_warnings = [f"semantic_candidate_lookup_failed:{str(exc)[:80]}"]
 
-    candidates.sort(key=lambda x: int(x.get("evidence_score") or 0), reverse=True)
-    candidates = candidates[:18]
+    if prior_ids and str(prior_ids[0]) not in candidates_by_id:
+        add_candidate(str(prior_ids[0]), evidence_score=1.0, source="temporal_adjacent")
+
+    candidates = list(candidates_by_id.values())
+    candidates.sort(key=lambda x: (float(x.get("evidence_score") or 0.0), float(x.get("semantic_score") or 0.0)), reverse=True)
+    candidates = candidates[:24]
     candidate_ids = {str(c.get("target_bead_id") or "") for c in candidates}
 
     prompt = {
@@ -1285,36 +1355,11 @@ async def _agent_judged_links_for_turn(*, current_id: str, ordered_ids: list[str
             "Do not emit follows for non-adjacent targets unless sequence evidence is explicit.",
         ],
         "allowed_relationships": list(ALLOWED_ASSOC_RELATIONS),
-        "relation_guidance": {
-            "caused_by": "source happened because target directly created the condition/mechanism",
-            "led_to": "source contributed forward into target as downstream consequence",
-            "blocked_by": "source could not proceed because target obstructed it",
-            "unblocks": "source removes the blocker on target",
-            "enables": "source makes target possible or practical",
-            "supports": "source gives meaningful support to target",
-            "reinforces": "source strengthens confidence in target through repeated or independent agreement",
-            "contradicts": "source and target cannot both stand as written",
-            "invalidates": "source makes target no longer valid",
-            "supersedes": "source replaces target as newer/current version",
-            "superseded_by": "source has been replaced by target",
-            "resolves": "source settles or fixes the issue/open state in target",
-            "diagnoses": "source identifies the underlying mechanism behind target",
-            "derived_from": "source was built or inferred from target",
-            "follows": "source comes after target in a meaningful sequence",
-            "precedes": "source comes before target in a meaningful sequence",
-            "similar_pattern": "shared reusable pattern, but no stronger transfer/structure claim",
-            "mirrors": "notably parallel dynamics",
-            "structural_symmetry": "matching internal role structure",
-            "applies_pattern_of": "source deliberately reuses target's pattern",
-            "violates_pattern_of": "source breaks the pattern target suggests",
-            "generalizes": "source is a broader abstraction of target",
-            "specializes": "source is a narrower instance of target",
-            "refines": "source sharpens target without replacing it",
-            "transferable_lesson": "lesson from source should be reused in target context",
-            "reveals_bias": "source exposes a blind spot or recurrent reasoning error in target",
-            "constraint_transformed_into": "former limit became a reusable rule/pattern elsewhere",
-            "solves_same_mechanism": "source and target address the same underlying mechanism",
-            "associated_with": "meaningful relation exists, but no stronger relation is justified",
+        "relation_guidance": _association_relation_guidance(),
+        "candidate_policy": {
+            "sources": ["temporal_adjacent", "entity_token_overlap", "semantic_neighbor"],
+            "semantic_lookup_warnings": semantic_warnings,
+            "note": "Semantic neighbors are candidates only; emit edges only when visible bead evidence supports the relation.",
         },
         "current": {
             "bead_id": str(current_id),
