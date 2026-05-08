@@ -31,6 +31,12 @@ services:
         value: required
       - key: CORE_MEMORY_EMBEDDINGS_PROVIDER
         value: openai
+      - key: CORE_MEMORY_CLAIM_LAYER
+        value: "1"
+      - key: CORE_MEMORY_CLAIM_EXTRACTION_MODE
+        value: heuristic
+      - key: CORE_MEMORY_CLAIM_RESOLUTION
+        value: "1"
       - key: DEMO_CONTEXT_BUDGET
         value: "128000"
       - key: OPENAI_API_KEY
@@ -67,6 +73,12 @@ services:
         value: required
       - key: CORE_MEMORY_EMBEDDINGS_PROVIDER
         value: openai
+      - key: CORE_MEMORY_CLAIM_LAYER
+        value: "1"
+      - key: CORE_MEMORY_CLAIM_EXTRACTION_MODE
+        value: heuristic
+      - key: CORE_MEMORY_CLAIM_RESOLUTION
+        value: "1"
       - key: OPENAI_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY

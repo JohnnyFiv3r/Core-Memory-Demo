@@ -98,13 +98,12 @@ DEFAULT_SEED_USER_MESSAGES: list[str] = [
     "Why FastAPI?",
 ]
 
-# Demo defaults to keep claim/association surfaces active unless explicitly overridden.
-# Claim layer defaults are disabled here because heuristic claim extraction can pollute
-# claim_state with assistant/meta chatter and degrade grounded retrieval quality.
-# Keep this agent-driven by grounding on bead/association evidence.
-os.environ.setdefault("CORE_MEMORY_CLAIM_LAYER", "0")
-os.environ.setdefault("CORE_MEMORY_CLAIM_EXTRACTION_MODE", "off")
-os.environ.setdefault("CORE_MEMORY_CLAIM_RESOLUTION", "0")
+# Demo defaults keep claim/entity/association surfaces active unless explicitly overridden.
+# Claims are useful in the live demo because they expose resolved current-state facts
+# separately from raw beads and graph associations.
+os.environ.setdefault("CORE_MEMORY_CLAIM_LAYER", "1")
+os.environ.setdefault("CORE_MEMORY_CLAIM_EXTRACTION_MODE", "heuristic")
+os.environ.setdefault("CORE_MEMORY_CLAIM_RESOLUTION", "1")
 os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_PROMOTION", "1")
 os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_ALLOW_SHARED_TAG", "1")
 os.environ.setdefault("CORE_MEMORY_SEMANTIC_BUILD_ON_READ", "0")
