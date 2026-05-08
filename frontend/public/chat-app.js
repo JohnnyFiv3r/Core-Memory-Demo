@@ -3925,11 +3925,7 @@ async function seedMemory() {
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload),
       });
-      data = await res.json();
-      if (!res.ok || !data.ok) {
-        const err = firstPayloadError(data) || data.error || ('HTTP ' + res.status);
-        throw new Error(String(err));
-      }
+      data = await parseApiJsonResponse(res, 'locomo replay');
       const seeded = Number(data.seeded || data.seeded_turns || 0);
       const queueIdle = !!data.queue_idle;
       const range = data.turn_range || {};
@@ -3982,11 +3978,7 @@ async function seedMemory() {
           idle_poll_ms: 250,
         }),
       });
-      data = await res.json();
-      if (!res.ok || !data.ok) {
-        const err = firstPayloadError(data) || data.error || ('HTTP ' + res.status);
-        throw new Error(String(err));
-      }
+      data = await parseApiJsonResponse(res, 'story-pack replay');
 
       const seededTotal = Number(data.seeded || data.seeded_turns || 0);
       const queueIdle = !!data.queue_idle;
@@ -4020,11 +4012,7 @@ async function seedMemory() {
           flush_threshold_ratio: AUTO_FLUSH_THRESHOLD_PCT / 100,
         }),
       });
-      data = await res.json();
-      if (!res.ok || !data.ok) {
-        const err = firstPayloadError(data) || data.error || ('HTTP ' + res.status);
-        throw new Error(String(err));
-      }
+      data = await parseApiJsonResponse(res, 'demo seed');
       const seeded = Number(data.seeded || data.seeded_turns || 0);
       progress.textContent =
         'Seeded ' + seeded + ' turn(s) via chat replay' +
