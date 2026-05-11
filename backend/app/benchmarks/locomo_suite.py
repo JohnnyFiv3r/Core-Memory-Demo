@@ -7,7 +7,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from app.benchmarks.locomo_ingest import attach_locomo_claims, ingest_locomo_turns
+from app.benchmarks.locomo_ingest import ingest_locomo_turns
 from app.benchmarks.locomo_loader import LocomoLoaderError, load_locomo_dataset
 from app.benchmarks.locomo_scoring import aggregate_case_scores
 from app.core.config import settings
@@ -26,7 +26,7 @@ def _normalize_qa_per_category(raw: dict[int | str, int] | None) -> dict[int, in
     return out
 
 
-def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
+def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
     samples, meta = load_locomo_dataset()
     selected = list(samples)
 
@@ -134,24 +134,11 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
         }
     )
 
-    gold_context_map: dict[str, dict[str, Any]] = {}
-    for sample in selected:
-        for session in list(sample.get("sessions") or []):
-            for turn in list((session or {}).get("turns") or []):
-                dia_id = str((turn or {}).get("dia_id") or "").strip()
-                if dia_id:
-                    gold_context_map[dia_id] = {
-                        "dia_ids": [dia_id],
-                        "speaker": str((turn or {}).get("speaker") or "").strip(),
-                        "session_date_time": str((turn or {}).get("session_date_time") or "").strip(),
-                        "text": str((turn or {}).get("text") or "").strip(),
-                    }
-
     return {
         "suite": suite,
         "source": "locomo_dataset",
         "dataset": dataset_meta,
-    }, selected_cases, selected, gold_context_map
+    }, selected_cases, selected
 
 
 def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], ingestion_mode: str = "turns", ingest_path_override: str | None = None) -> dict[str, Any]:
@@ -167,14 +154,7 @@ def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], inge
         if ingest_path == 'canonical_replay':
             from app.benchmarks.locomo_replay import replay_locomo_sample
             out = replay_locomo_sample(root=base_root, sample=sample, mode=replay_mode, flush_policy=flush_policy)
-            claim_out = attach_locomo_claims(root=base_root, sample=sample, create_missing=True)
-            out["claims_written"] = int(claim_out.get("claims_written") or 0)
-            out["claim_evidence_beads_created"] = int(claim_out.get("created_beads") or 0)
-            out["claim_attachment"] = {
-                "ok": bool(claim_out.get("ok")),
-                "claims_written": int(claim_out.get("claims_written") or 0),
-                "created_beads": int(claim_out.get("created_beads") or 0),
-            }
+            out["claims_written"] = 0
         else:
             out = ingest_locomo_turns(root=base_root, sample=sample, mode=ingestion_mode)
         rows.append(out)

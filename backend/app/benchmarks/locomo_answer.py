@@ -71,23 +71,6 @@ def _extractive_answer(retrieved_context: list[dict[str, Any]], *, question: str
     }
 
 
-def _oracle_answer(*, qa: dict[str, Any], gold_context: list[dict[str, Any]]) -> dict[str, Any]:
-    used = []
-    parts = []
-    for row in gold_context:
-        used.extend([str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip()])
-        text = str(row.get("text") or "").strip()
-        if text:
-            parts.append(text)
-    answer = " ".join(parts).strip() or "No information available"
-    return {
-        "answer": answer,
-        "used_dia_ids": sorted(set(used)),
-        "confidence": "high" if parts else "low",
-        "unsupported": not bool(parts),
-    }
-
-
 _JSON_FENCE_RE = re.compile(r"^```(?:json)?\s*|\s*```$", re.IGNORECASE)
 
 
@@ -124,11 +107,10 @@ def _normalize_answer_payload(raw: str) -> dict[str, Any]:
     }
 
 
-def _reconcile_used_dia_ids(*, used_dia_ids: list[str], retrieved_context: list[dict[str, Any]], gold_context: list[dict[str, Any]] | None = None) -> list[str]:
+def _reconcile_used_dia_ids(*, used_dia_ids: list[str], retrieved_context: list[dict[str, Any]]) -> list[str]:
     allowed = set()
-    for source in (retrieved_context or [], gold_context or []):
-        for row in source:
-            allowed.update(str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip())
+    for row in retrieved_context or []:
+        allowed.update(str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip())
     used = [str(x).strip() for x in (used_dia_ids or []) if str(x).strip()]
     normalized = [x for x in used if x in allowed]
     if normalized:
@@ -191,7 +173,7 @@ async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_i
     return _normalize_answer_payload(raw)
 
 
-def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str | None = None, qa: dict[str, Any], retrieved_context: list[dict[str, Any]], generator_model: str | None = None, gold_context: list[dict[str, Any]] | None = None) -> dict[str, Any]:
+def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str | None = None, qa: dict[str, Any], retrieved_context: list[dict[str, Any]], generator_model: str | None = None) -> dict[str, Any]:
     mode_name = str(mode or "none").strip().lower() or "none"
     if mode_name == "none":
         return {
@@ -203,7 +185,7 @@ def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str
     if mode_name == "extractive":
         return _extractive_answer(retrieved_context, question=str(qa.get("question") or ""))
     if mode_name == "oracle_context":
-        return _oracle_answer(qa=qa, gold_context=list(gold_context or []))
+        raise ValueError("oracle_context_answer_mode_disabled_for_scored_benchmarks")
     if mode_name == "llm":
         model_id = str(generator_model or "").strip()
         if not model_id:
@@ -226,7 +208,6 @@ def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str
         out["used_dia_ids"] = _reconcile_used_dia_ids(
             used_dia_ids=list(out.get("used_dia_ids") or []),
             retrieved_context=retrieved_context,
-            gold_context=gold_context,
         )
         return out
     raise ValueError(f"unsupported_locomo_answer_mode:{mode_name}")

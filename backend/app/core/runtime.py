@@ -2877,7 +2877,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
         try:
-            dataset_meta, selected_cases, selected_samples, gold_context_map = build_locomo_suite_metadata(
+            dataset_meta, selected_cases, selected_samples = build_locomo_suite_metadata(
                 suite=suite_name,
                 sample_limit=sample_limit,
                 qa_limit=qa_limit,
@@ -2931,7 +2931,6 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
                 answer_mode=resolved_answer_mode,
                 generator_model=resolved_generator_model,
-                gold_context_map=gold_context_map,
                 progress=progress,
                 retrieval_pipeline=retrieval_pipeline_name,
             )
@@ -3083,8 +3082,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                         evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
                         answer_mode=resolved_answer_mode,
                         generator_model=resolved_generator_model,
-                        gold_context_map=gold_context_map,
-                        progress=None,
+                                progress=None,
                         retrieval_pipeline=retrieval_compare_target,
                     )
                 compare_mode_cases = list(compare_mode_retrieval_report.get('cases') or [])
@@ -3144,8 +3142,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                             evidence_recall_k=list(evidence_recall_k or [1, 3, 5, 8, 10]),
                             answer_mode=resolved_answer_mode,
                             generator_model=resolved_generator_model,
-                            gold_context_map=gold_context_map,
-                            progress=None,
+                                        progress=None,
                             retrieval_pipeline=retrieval_pipeline_name,
                         )
                 except Exception as exc:

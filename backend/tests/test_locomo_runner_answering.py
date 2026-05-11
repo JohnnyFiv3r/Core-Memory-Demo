@@ -9,7 +9,7 @@ from app.benchmarks.locomo_runner import run_locomo_retrieval_case
 
 
 class TestLocomoRunnerAnswering(unittest.TestCase):
-    def test_oracle_context_scores_answer_f1(self):
+    def test_oracle_context_is_not_available_as_scored_answer_mode(self):
         qa = {
             "qa_id": "conv-1:q0001",
             "question": "When did Caroline go to the support group?",
@@ -43,14 +43,6 @@ class TestLocomoRunnerAnswering(unittest.TestCase):
                 "dia_id": "D1:3",
             },
         }
-        gold_context_map = {
-            "D1:3": {
-                "dia_ids": ["D1:3"],
-                "speaker": "Alice",
-                "session_date_time": "7 May 2023",
-                "text": "Caroline went to the support group on 7 May 2023",
-            }
-        }
 
         with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib:
             mt.execute.return_value = fake_execute
@@ -61,13 +53,12 @@ class TestLocomoRunnerAnswering(unittest.TestCase):
                 qa=qa,
                 retrieval_k=8,
                 answer_mode="oracle_context",
-                gold_context_map=gold_context_map,
             )
 
-        self.assertEqual("ok", out["status"])
-        self.assertIn("7 May 2023", out["prediction"])
-        self.assertGreater(out["answer_f1"], 0.0)
-        self.assertEqual(["D1:3"], out["used_dia_ids"])
+        self.assertEqual("error", out["status"])
+        self.assertIn("oracle_context_answer_mode_disabled", out["error"])
+        self.assertEqual("", out["prediction"])
+        self.assertEqual(0.0, out["answer_f1"])
 
 
 if __name__ == "__main__":

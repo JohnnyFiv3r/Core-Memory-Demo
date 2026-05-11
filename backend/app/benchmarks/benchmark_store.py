@@ -6,9 +6,14 @@ from functools import lru_cache
 from pathlib import Path
 from typing import Any
 
-import psycopg
-from psycopg.rows import dict_row
-from psycopg.types.json import Jsonb
+try:
+    import psycopg
+    from psycopg.rows import dict_row
+    from psycopg.types.json import Jsonb
+except Exception:  # pragma: no cover - benchmark DB persistence is optional
+    psycopg = None  # type: ignore
+    dict_row = None  # type: ignore
+    Jsonb = None  # type: ignore
 
 
 _ALLOWED_ARTIFACTS = {
@@ -29,7 +34,7 @@ def _database_url() -> str:
 
 
 def enabled() -> bool:
-    return bool(_database_url())
+    return bool(_database_url()) and psycopg is not None
 
 
 def _migration_path() -> Path:
@@ -39,7 +44,7 @@ def _migration_path() -> Path:
 @lru_cache(maxsize=1)
 def ensure_schema() -> bool:
     url = _database_url()
-    if not url:
+    if not url or psycopg is None:
         return False
     sql = _migration_path().read_text(encoding='utf-8')
     with psycopg.connect(url, autocommit=True) as conn:

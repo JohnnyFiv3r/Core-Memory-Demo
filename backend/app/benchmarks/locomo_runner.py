@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import gc
-import json
 import re
 from pathlib import Path
 from typing import Any
@@ -61,7 +60,7 @@ def _locomo_facets(*, sample_id: str, question: str) -> dict[str, Any]:
 
     Keep sample/session anchoring in metadata filters instead of hard lexical
     terms.  The question text itself already drives semantic search; making every
-    entity/token a required term can filter out the gold turn before reranking.
+    entity/token a required term can filter out the relevant turn before reranking.
     """
     q = str(question or "")
     sample = str(sample_id or "").strip()
@@ -118,91 +117,6 @@ def _locomo_score(row: dict[str, Any], *, sample_id: str, question: str) -> floa
     if str(metadata.get("inspect_bead_found") or "").lower() == "false":
         score -= 0.3
     return score
-
-
-def _question_terms(question: str) -> set[str]:
-    return {
-        t.lower()
-        for t in re.findall(r"[a-zA-Z][a-zA-Z0-9_-]{2,}", str(question or ""))
-        if t.lower() not in _STOP_TERMS
-    }
-
-
-def _turn_archive_results(*, root: str, sample_id: str, question: str, limit: int) -> list[dict[str, Any]]:
-    """Project canonical replay transcript records into LoCoMo retrieval rows.
-
-    The canonical replay path stores LoCoMo turns in the turn archive first; it
-    may not create one retrieval-eligible bead per dialogue turn. Compare mode
-    still needs an equivalent evidence surface, so benchmark retrieval can fall
-    back to the canonical turn archive and score those records with the same
-    LoCoMo dia_id projection used for bead rows.
-    """
-    sample = str(sample_id or "").strip()
-    if not sample:
-        return []
-    path = Path(root) / ".turns" / f"session-locomo:{sample}.jsonl"
-    if not path.exists():
-        return []
-    terms = _question_terms(question)
-    rows: list[dict[str, Any]] = []
-    try:
-        with path.open("r", encoding="utf-8") as fh:
-            for line in fh:
-                if not line.strip():
-                    continue
-                try:
-                    rec = json.loads(line)
-                except Exception:
-                    continue
-                md = dict((rec or {}).get("metadata") or {})
-                rec_sample = str(md.get("locomo_sample_id") or md.get("sample_id") or "").strip()
-                if rec_sample and rec_sample != sample:
-                    continue
-                dia_id = str(md.get("locomo_dia_id") or "").strip()
-                dia_ids = [str(x).strip() for x in (md.get("locomo_dia_ids") or []) if str(x).strip()]
-                if dia_id and dia_id not in dia_ids:
-                    dia_ids.append(dia_id)
-                speaker = str(md.get("locomo_speaker") or "").strip()
-                text = str(md.get("locomo_display_text") or rec.get("assistant_final") or "").strip()
-                if not text:
-                    continue
-                haystack = " ".join([
-                    text,
-                    str(md.get("locomo_session_date_time") or ""),
-                    str(md.get("locomo_blip_caption") or md.get("blip_caption") or ""),
-                    str(rec.get("user_query") or ""),
-                ]).lower()
-                lexical = len([t for t in terms if t in haystack])
-                score = 0.01 + (0.1 * lexical)
-                rows.append({
-                    "rank": 0,
-                    "bead_id": f"turn:{rec.get('turn_id') or dia_id}",
-                    "title": f"{speaker} at session {int(md.get('locomo_session_index') or 0)}, turn {int(md.get('locomo_turn_index') or 0)}".strip(),
-                    "snippet": text,
-                    "score": score,
-                    "source_surface": "canonical_turn_archive",
-                    "dia_ids": dia_ids,
-                    "sample_id": sample,
-                    "session_index": int(md.get("locomo_session_index") or 0),
-                    "speaker": speaker,
-                    "session_date_time": str(md.get("locomo_session_date_time") or "").strip(),
-                    "text": text,
-                    "projection": {
-                        "bead_id_source": "turn_archive.turn_id",
-                        "metadata_source": "turn_archive.metadata",
-                        "dia_id_source": "metadata.locomo_dia_ids",
-                        "inspect_bead_found": True,
-                        "row_keys": sorted(str(k) for k in (rec or {}).keys()),
-                        "metadata_keys": sorted(str(k) for k in md.keys()),
-                        "source_turn_ids": [str(rec.get("turn_id") or "").strip()],
-                    },
-                })
-    except Exception:
-        return []
-    rows.sort(key=lambda r: _locomo_score(r, sample_id=sample, question=question), reverse=True)
-    for idx, row in enumerate(rows[: max(1, int(limit or 8))], start=1):
-        row["rank"] = idx
-    return rows[: max(1, int(limit or 8))]
 
 
 def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
@@ -407,7 +321,7 @@ def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[st
     }
 
 
-def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, gold_context_map: dict[str, dict[str, Any]] | None = None, retrieval_pipeline: str = "execute_trace") -> dict[str, Any]:
+def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, retrieval_pipeline: str = "execute_trace") -> dict[str, Any]:
     if memory_tools is None:
         return {
             "qa_id": str(qa.get("qa_id") or ""),
@@ -450,18 +364,9 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
                 result = retry_result
                 raw_results = retry_rows
         retrieved = [_extract_result_row(root=root, rank=idx, row=dict(row or {})) for idx, row in enumerate(raw_results, start=1)]
-        archive_fallback_used = False
-        if not retrieved:
-            retrieved = _turn_archive_results(
-                root=root,
-                sample_id=sample_id,
-                question=str(qa.get("question") or ""),
-                limit=max(1, int(retrieval_k or 8)),
-            )
-            archive_fallback_used = bool(retrieved)
         pipeline_name = str(retrieval_pipeline or "execute_trace").strip().lower() or "execute_trace"
         force_three_phase = pipeline_name in {"execute_trace_hydrate", "forced_three_phase", "three_phase"}
-        trace_meta = {"used": False, "reason": "trace_disabled", "anchor_ids": [], "chains": [], "grounding": {}, "archive_fallback_used": archive_fallback_used}
+        trace_meta = {"used": False, "reason": "trace_disabled", "anchor_ids": [], "chains": [], "grounding": {}}
         hydrate_meta = {"used": False, "reason": "not_requested", "hydrated_rows": 0}
         trace_warning = None
         try:
@@ -489,16 +394,15 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
                     "chains": list((trace or {}).get("chains") or []),
                     "grounding": dict((trace or {}).get("grounding") or {}),
                     "diagnostics": dict((trace or {}).get("trace_diagnostics") or {}),
-                    "archive_fallback_used": archive_fallback_used,
                 }
             else:
-                trace_meta = {"used": False, "reason": "no_anchor_ids", "anchor_ids": [], "chains": [], "grounding": {}, "archive_fallback_used": archive_fallback_used}
+                trace_meta = {"used": False, "reason": "no_anchor_ids", "anchor_ids": [], "chains": [], "grounding": {}}
         except TypeError as exc:
             trace_warning = f"trace_request_type_error:{exc}"
-            trace_meta = {"used": False, "reason": "trace_type_error", "anchor_ids": [], "chains": [], "grounding": {}, "archive_fallback_used": archive_fallback_used}
+            trace_meta = {"used": False, "reason": "trace_type_error", "anchor_ids": [], "chains": [], "grounding": {}}
         except Exception as exc:
             trace_warning = f"trace_request_failed:{exc}"
-            trace_meta = {"used": False, "reason": "trace_failed", "anchor_ids": [], "chains": [], "grounding": {}, "archive_fallback_used": archive_fallback_used}
+            trace_meta = {"used": False, "reason": "trace_failed", "anchor_ids": [], "chains": [], "grounding": {}}
         if force_three_phase:
             retrieved, hydrate_meta = _hydrate_locomo_rows(root=root, rows=retrieved, sample_id=sample_id, limit=max(int(retrieval_k or 8), 8))
         for row in retrieved:
@@ -511,10 +415,6 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             retrieved=retrieved,
             ks=evidence_recall_k or [1, 3, 5, 8, 10],
         )
-        gold_context = []
-        if str(answer_mode or "").strip().lower() == "oracle_context":
-            lookup = dict(gold_context_map or {})
-            gold_context = [dict(lookup.get(did) or {}) for did in list(qa.get("evidence") or []) if dict(lookup.get(did) or {})]
         answer = generate_locomo_answer(
             mode=answer_mode,
             root=root,
@@ -522,7 +422,6 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             qa=qa,
             retrieved_context=retrieved,
             generator_model=generator_model,
-            gold_context=gold_context,
         )
         prediction = str(answer.get("answer") or "")
         answer_f1 = float(score_answer(category=int(qa.get("category") or 0), prediction=prediction, answer=str(qa.get("answer") or "")))
@@ -627,12 +526,11 @@ def _slim_locomo_case_result(result: dict[str, Any], *, retrieved_limit: int = 1
             "anchor_ids": list(trace.get("anchor_ids") or [])[:10],
             "result_count": int(trace.get("result_count") or 0),
             "result_ids": list(trace.get("result_ids") or [])[:20],
-            "archive_fallback_used": bool(trace.get("archive_fallback_used")),
         }
     return row
 
 
-def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, gold_context_map: dict[str, dict[str, Any]] | None = None, progress: Any | None = None, retrieval_pipeline: str = "execute_trace") -> dict[str, Any]:
+def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, progress: Any | None = None, retrieval_pipeline: str = "execute_trace") -> dict[str, Any]:
     cases = []
     qa_rows = qa_cases or []
     total = len(qa_rows)
@@ -645,7 +543,6 @@ def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], ret
             evidence_recall_k=evidence_recall_k,
             answer_mode=answer_mode,
             generator_model=generator_model,
-            gold_context_map=gold_context_map,
             retrieval_pipeline=retrieval_pipeline,
         )
         slim_result = _slim_locomo_case_result(result, retrieved_limit=max(int(retrieval_k or 8), 10))
