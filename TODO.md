@@ -237,6 +237,36 @@ users. Do Option A when item #1 ships — it solves this permanently across all 
 
 ---
 
+## Cross-repo dependencies / references
+
+Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the main
+`Core-Memory` engine work it depends on. The paired engine TODO lives at
+`Core-Memory/demo/TODO.md`.
+
+- **#2 `capture` / `recall` aliases** depends on Core-Memory semantic lifecycle ergonomics
+  (`Core-Memory/demo/TODO.md` #7). `capture(...)` should not just write a bead; it should
+  reliably mark semantic state dirty/enqueue deltas so the memory is recallable without
+  manual rebuild rituals.
+- **#3 async transcript ingestion** reuses the LoCoMo replay loop, so it should inherit
+  Core-Memory association correctness work (`Core-Memory/demo/TODO.md` #3) and semantic
+  lifecycle work (#7). Generic transcript edges must use canonical relationship types
+  (`associated_with`, `supports`, `follows`, `precedes`, etc.), with heuristic details in
+  `reason_text`/`reason_code`, not invented relationship labels.
+- **#5 `POST /api/recall` / `recall(query, budget=...)`** depends on Core-Memory goal
+  lifecycle (#2), grounding hashes for judged validation (#5), and monotonic claim
+  sequencing (#6). Those engine fixes make the single recall verb stable enough to expose
+  across REST, CLI, MCP, and direct-library surfaces.
+- **#6 reproducible LoCoMo / LongMemEval scoring** depends on Core-Memory causal-quality
+  fixes: extracted `because` reasoning (#1), canonical association relationship types (#3),
+  grounding hashes (#5), and monotonic claim supersede ordering (#6). Benchmark runs should
+  stay on full Core Memory recall/trace paths rather than flat-search-only shortcuts.
+- **#7 agent instructions in live integrations** should reference Core-Memory behavior
+  guardrails from #1/#3/#4: do not echo user text as `because`, treat user questions as
+  retrieval/context rather than declarative memory, and use only canonical relationship
+  types.
+
+---
+
 ## Priority order for the week
 
 | # | Task | Effort | Adoption Impact |
