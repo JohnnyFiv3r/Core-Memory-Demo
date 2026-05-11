@@ -37,7 +37,7 @@ class TestLocomoIngest(unittest.TestCase):
         self.assertTrue(any("Alice: Hello there" in fact for fact in bead["retrieval_facts"]))
         self.assertTrue(str(bead["detail"]).startswith("Session date: 1 Jan 2024"))
 
-    def test_extracts_deterministic_attribute_claims_without_qa_access(self):
+    def test_extract_locomo_claims_does_not_inject_dataset_specific_answers(self):
         claims = _extract_locomo_claims(
             {
                 "sample_id": "conv-49",
@@ -45,14 +45,11 @@ class TestLocomoIngest(unittest.TestCase):
                 "turn_index": 2,
                 "dia_id": "D1:2",
                 "speaker": "Evan",
-                "text": "I just got back from a trip with my family in my new Prius.",
+                "text": "I just got back from a trip with my family in my blue bicycle.",
                 "session_date_time": "6:11 pm on 12 May, 2023",
             }
         )
-        slots = {(c.get("subject"), c.get("slot"), c.get("value")) for c in claims}
-        self.assertIn(("Evan", "car", "new Prius"), slots)
-        self.assertIn(("Evan", "owned_car", "new Prius"), slots)
-        self.assertTrue(all("conv-49" not in str(c.get("value")) for c in claims))
+        self.assertEqual([], claims)
 
     def test_ingest_is_idempotent_within_root(self):
         sample = {

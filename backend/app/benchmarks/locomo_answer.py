@@ -52,17 +52,8 @@ def _extractive_answer(retrieved_context: list[dict[str, Any]], *, question: str
                 values.append(value)
             used.extend(str(x).strip() for x in (item.get("dia_ids") or []) if str(x).strip())
         if q.startswith("how many") and values:
-            # Collapse generic values when more specific variants are present
-            # ("Prius" plus "new Prius"/"old Prius" should count as two cars,
-            # not three).
-            count_values = list(values)
-            lowered = [v.lower() for v in count_values]
-            count_values = [
-                v for v in count_values
-                if not any(v.lower() != other and v.lower() in other for other in lowered)
-            ] or values
             words = {1: "one", 2: "two", 3: "three", 4: "four", 5: "five"}
-            answer = words.get(len(count_values), str(len(count_values)))
+            answer = words.get(len(values), str(len(values)))
         else:
             answer = str(claim_value).strip()
         return {

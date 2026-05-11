@@ -41,15 +41,15 @@ class TestLocomoAnswer(unittest.TestCase):
             retrieved_context=[
                 {
                     "source_surface": "claim_state",
-                    "claim_value": "Prius",
-                    "claim_slot_key": "Evan:car",
-                    "snippet": "Evan drives a Prius",
+                    "claim_value": "blue bicycle",
+                    "claim_slot_key": "Evan:vehicle",
+                    "snippet": "Evan rides a blue bicycle",
                     "dia_ids": ["D1:2"],
                     "score": 0.9,
                 }
             ],
         )
-        self.assertEqual("Prius", out["answer"])
+        self.assertEqual("blue bicycle", out["answer"])
         self.assertEqual(["D1:2"], out["used_dia_ids"])
 
     def test_oracle_context_mode(self):

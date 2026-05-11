@@ -65,84 +65,19 @@ def _claim_row(*, sample_id: str, dia_id: str, subject: str, slot: str, value: s
 
 
 def _extract_locomo_claims(turn: dict[str, Any]) -> list[dict[str, Any]]:
-    """Deterministic, benchmark-safe attribute extraction for LoCoMo turns.
+    """Return no benchmark-injected claims for LoCoMo turns.
 
-    This intentionally avoids gold-answer/QA access.  It records ordinary
-    subject-slot-value facts present in the dialogue so retrieval can use the
-    claim layer for entity/attribute questions instead of relying only on raw
-    turn semantic similarity.
+    The benchmark must not create dataset-specific subject/slot/value claims
+    from LoCoMo transcript literals. Doing so turns the benchmark ingestion path
+    into a hand-written answer-key adapter instead of an evaluation of the
+    production memory/retrieval system.
+
+    Keep this compatibility shim so older call sites remain harmless while the
+    benchmark relies on raw ingested turns, generic production extraction, or
+    explicitly separate non-scoring diagnostics.
     """
-    sample_id = str(turn.get("sample_id") or "").strip()
-    dia_id = str(turn.get("dia_id") or "").strip()
-    speaker = str(turn.get("speaker") or "").strip()
-    text = re.sub(r"\s+", " ", str(turn.get("text") or "").strip())
-    if not sample_id or not dia_id or not speaker or not text:
-        return []
-
-    lower = text.lower()
-    claims: list[dict[str, Any]] = []
-
-    def add(slot: str, value: str, confidence: float = 0.82) -> None:
-        value_s = re.sub(r"\s+", " ", str(value or "").strip(" .,!?:;\"'"))
-        if not value_s:
-            return
-        row = _claim_row(
-            sample_id=sample_id,
-            dia_id=dia_id,
-            subject=speaker,
-            slot=slot,
-            value=value_s[:180],
-            reason=f"LoCoMo {dia_id} ({str(turn.get('session_date_time') or '').strip()}): {speaker}: {text[:180]}",
-            confidence=confidence,
-        )
-        key = (row["subject"].lower(), row["slot"].lower(), str(row["value"]).lower())
-        if key not in {(c.get("subject", "").lower(), c.get("slot", "").lower(), str(c.get("value", "")).lower()) for c in claims}:
-            claims.append(row)
-
-    if "prius" in lower:
-        if "new prius" in lower:
-            add("car", "new Prius", 0.88)
-            add("owned_car", "new Prius", 0.86)
-        elif "old prius" in lower:
-            add("car", "old Prius", 0.88)
-            add("owned_car", "old Prius", 0.86)
-        else:
-            add("car", "Prius", 0.84)
-            add("owned_car", "Prius", 0.80)
-    elif re.search(r"\b(my|the|a)\s+(trusty\s+)?car\b", lower):
-        add("car", "car", 0.62)
-
-    if re.search(r"\bpaint(?:ing|ed)?\b", lower):
-        if re.search(r"\b(took up|started|taking|class|classes|hobby|enjoy|love|made|make)\b", lower):
-            add("hobby", "painting", 0.82)
-        if speaker.lower() == "sam" and "may" in lower:
-            add("hobby", "painting", 0.86)
-
-    destinations = []
-    for name in ("Rockies", "Jasper", "Banff"):
-        if re.search(rf"\b{re.escape(name.lower())}\b", lower):
-            destinations.append(name)
-    if destinations and re.search(r"\b(road\s*trip|roadtrip|roadtripping|trip|visited|been|went)\b", lower):
-        add("roadtrip_destination", ", ".join(destinations), 0.84)
-
-    if "transgender woman" in lower:
-        add("identity", "transgender woman", 0.9)
-    if re.search(r"\bsingle\b", lower):
-        add("relationship_status", "single", 0.82)
-
-    m = re.search(r"\bresearch(?:ed|ing)?\s+([^.!?]{3,80})", text, flags=re.IGNORECASE)
-    if m:
-        add("researched_topic", m.group(1), 0.78)
-
-    fields = []
-    if "psychology" in lower:
-        fields.append("psychology")
-    if "counsel" in lower:
-        fields.append("counseling")
-    if fields:
-        add("education_field", ", ".join(fields), 0.78)
-
-    return claims[:8]
+    _ = turn
+    return []
 
 
 def _build_retrieval_facts(*, sample_id: str, session_index: int, turn_index: int, dia_id: str, speaker: str, text: str, session_date_time: str, blip_caption: str, img_url: str) -> list[str]:
