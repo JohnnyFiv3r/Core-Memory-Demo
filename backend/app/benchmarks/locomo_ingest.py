@@ -44,20 +44,6 @@ def _turn_scope_key(*, sample_id: str, dia_id: str) -> str:
     return f"{str(sample_id or '').strip()}::{str(dia_id or '').strip()}"
 
 
-def _claim_row(*, sample_id: str, dia_id: str, subject: str, slot: str, value: str, reason: str, confidence: float = 0.82) -> dict[str, Any]:
-    now = datetime.now(timezone.utc).isoformat()
-    return {
-        "id": _claim_id(sample_id=sample_id, dia_id=dia_id, subject=subject, slot=slot, value=value),
-        "claim_kind": "custom",
-        "subject": subject,
-        "slot": slot,
-        "value": value,
-        "reason_text": reason[:240],
-        "confidence": confidence,
-        "recorded_at": now,
-    }
-
-
 def _extract_locomo_claims(turn: dict[str, Any]) -> list[dict[str, Any]]:
     """Return no benchmark-injected claims for LoCoMo turns.
 
