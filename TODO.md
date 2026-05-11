@@ -197,6 +197,46 @@ Memory's differentiators (causal traversal, multi-hop chains). Stay on
 
 ---
 
+## 7. Wire agent instructions into every live integration path
+
+**The problem:** `docs/integrations/openclaw/core-memory-skill-instructions.md` is 296 lines
+of agent-facing behavioral spec — authority boundaries, canonical verb rules, when to
+abstain, how to handle degraded retrieval. Nine other `.md` files in that folder add
+~1,420 more lines. None of it is loaded at runtime. `grep -rn "core-memory-skill-instructions"`
+across every `.py`, `.js`, `.json`, `.toml`, `.yaml` in the repo returns zero hits.
+
+The OpenClaw plugin (`plugins/openclaw-core-memory-bridge/index.js`) is a pure event
+bridge — spawns Python subprocesses, parses JSON, reads no `.md` files. The manifest
+(`openclaw.plugin.json`) has no `skillInstructions`, no `systemPromptAddendum`, no docs
+reference. Any OpenClaw user installing the plugin gets the wiring but not the behavior
+spec. The model has no idea the rules in that doc exist.
+
+**Fix path — in order of preference:**
+
+- [ ] **Option A — MCP prompt resource (right answer, do alongside item #1):**
+      When the `/mcp` server ships, register the skill instructions as a named MCP prompt
+      resource (`core_memory_skill`). MCP has first-class support for prompts and resources;
+      every MCP client gets injection-by-default with zero per-client wiring. The `.md`
+      becomes a first-class resource instead of a stranded doc, and the problem is solved
+      for all future clients in one shot.
+
+- [ ] **Option B — OpenClaw manifest (cheapest short-term fix):**
+      Check whether `openclaw.plugin.json` supports an `instructions` or
+      `systemPromptAddendum` field per the OpenClaw plugin spec. If yes, add
+      `"instructions": "@docs/integrations/openclaw/core-memory-skill-instructions.md"`
+      (or inline the text). One-line fix. If OpenClaw exposes no such field, file an
+      upstream issue and fall back to Option C.
+
+- [ ] **Option C — bridge injection at register time:**
+      Add a `bridge.get_skill_instructions()` Python entry that returns the `.md` contents
+      as a string. Have `index.js` call it once at plugin registration and pass the text
+      to whatever system-prompt addendum API OpenClaw exposes.
+
+**Recommended:** Do Option B now (30 minutes) to stop the bleeding for existing OpenClaw
+users. Do Option A when item #1 ships — it solves this permanently across all clients.
+
+---
+
 ## Priority order for the week
 
 | # | Task | Effort | Adoption Impact |
@@ -207,11 +247,15 @@ Memory's differentiators (causal traversal, multi-hop chains). Stay on
 | 4 | Shared `RecallResult` output contract | S | Medium-High |
 | 5 | `POST /api/recall` (single-verb recall) | M | Very High |
 | 6 | LoCoMo / LongMemEval scoring harness | M | High (competitive lever) |
+| 7a | Agent instructions → OpenClaw manifest (Option B) | XS | High |
+| 7b | Agent instructions → MCP prompt resource (Option A) | XS | Very High |
 
-**Week plan:** #2 is hours — ship it first. #1 unlocks Claude Code / Cursor integrations
-and is the biggest adoption surface. #3 is mostly assembly work given the benchmark
-harness already provides the job queue, worker, turn loop, flush policy, and association
-synthesis; the real work is the normalizer and the pairing step.
+**Week plan:** #2 and #7a are hours each — ship them first. #7a stops the behavioral
+spec from being a stranded doc for existing OpenClaw users. #1 unlocks Claude Code /
+Cursor integrations and is the biggest adoption surface; fold #7b in when #1 ships
+(they're the same PR). #3 is assembly work — the benchmark harness already provides
+the job queue, worker, turn loop, flush policy, and association synthesis; the real
+work is the normalizer and the pairing step.
 
 **Sequence after the original three (#1–#3):** #4 ships the shared contract that #5
 depends on. #5 ships `/api/recall` and the single-verb orchestrator (paired with the
