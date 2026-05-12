@@ -1797,8 +1797,21 @@ def _recall_effort_for_query(message: str, requested: str | None = None) -> str:
 
 def _recall_result_to_payload(result: RecallResult, *, ok: bool | None = None) -> dict[str, Any]:
     payload = result.to_dict()
+    payload.setdefault("metadata", {})
+    if isinstance(payload["metadata"], dict):
+        payload["metadata"].setdefault("source_surface", "recall_orchestrator")
     payload.setdefault("ok", bool(result.status != "failed") if ok is None else bool(ok))
     return payload
+
+
+def _public_recall_contract(payload: dict[str, Any] | None) -> dict[str, Any]:
+    out = {k: v for k, v in dict(payload or {}).items() if k != "raw"}
+    out.setdefault("contract", "recall_result")
+    out.setdefault("schema_version", "recall_result.v1")
+    out.setdefault("metadata", {})
+    if isinstance(out["metadata"], dict):
+        out["metadata"].setdefault("source_surface", "recall_orchestrator")
+    return out
 
 
 def run_recall(
@@ -1928,9 +1941,10 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
 
     _emit_chat_progress(progress, "diagnostics", "Collecting recall diagnostics", recall_effort=recall_effort)
     recall_payload = run_recall(message, effort=recall_effort, include_raw=True)
+    recall_contract = _public_recall_contract(recall_payload)
     retrieval = dict(recall_payload.get("raw") or {})
 
-    evidence = list(recall_payload.get("evidence") or [])
+    evidence = list(recall_contract.get("evidence") or [])
     top_evidence = dict(evidence[0] or {}) if evidence else {}
     top_result = (retrieval.get("results") or [{}])[0] if (retrieval.get("results") or []) else {}
     retrieval_mode = str(
@@ -1961,10 +1975,10 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
             "result_count": int(len(evidence)),
             "top_bead_ids": [str(r.get("bead_id") or "") for r in evidence[:5] if isinstance(r, dict)],
             "chain_count": int(len(list(retrieval.get("chains") or []))),
-            "recall_status": str(recall_payload.get("status") or ""),
+            "recall_status": str(recall_contract.get("status") or ""),
             "recall_effort": str(recall_effort),
-            "recall_tier_path": list(recall_payload.get("tier_path") or []),
-            "recall_result": {k: v for k, v in recall_payload.items() if k != "raw"},
+            "recall_tier_path": list(recall_contract.get("tier_path") or []),
+            "recall_result": recall_contract,
             "grounding_level": str(grounding.get("level") or "none"),
             "grounding_required": bool(grounding.get("required")),
             "grounding_achieved": bool(grounding.get("achieved")),
@@ -2004,6 +2018,10 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
         "turn_id": turn_id,
         "model_id": model_id,
         "assistant": answer,
+        "recall_result": recall_contract,
+        "evidence": list(recall_contract.get("evidence") or []),
+        "sources": list(recall_contract.get("sources") or []),
+        "tier_path": list(recall_contract.get("tier_path") or []),
         "last_answer": dict(LAST_TURN_DIAGNOSTICS),
     }
 

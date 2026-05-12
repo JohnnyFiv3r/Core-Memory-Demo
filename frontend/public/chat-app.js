@@ -1085,14 +1085,19 @@ async function hydrateChatFromTurns(sessionId) {
   }
 }
 
-function addMsg(role, text, turnId) {
+function addMsg(role, text, turnId, extra) {
   if (firstMessage && role !== 'init') {
     messagesEl.textContent = '';
     firstMessage = false;
   }
   const div = document.createElement('div');
   div.className = 'msg msg-' + role;
-  div.textContent = text;
+  const body = document.createElement('div');
+  body.textContent = text;
+  div.appendChild(body);
+  if (extra && extra.recallResult) {
+    renderRecallEvidence(div, extra.recallResult);
+  }
   if (turnId) {
     const meta = document.createElement('div');
     meta.className = 'msg-meta';
@@ -1102,6 +1107,55 @@ function addMsg(role, text, turnId) {
   messagesEl.appendChild(div);
   messagesEl.scrollTop = messagesEl.scrollHeight;
   return div;
+}
+
+function recallContractFromChatPayload(data) {
+  const direct = data && data.recall_result;
+  if (direct && typeof direct === 'object') return direct;
+  const diag = data && data.last_answer && (data.last_answer.diagnostics || data.last_answer);
+  const nested = diag && diag.recall_result;
+  return (nested && typeof nested === 'object') ? nested : null;
+}
+
+function renderRecallEvidence(container, recallResult) {
+  const evidence = arrayOrEmpty(recallResult && recallResult.evidence).filter((x) => x && typeof x === 'object').slice(0, 3);
+  const sources = arrayOrEmpty(recallResult && recallResult.sources).filter((x) => x && typeof x === 'object').slice(0, 3);
+  const tierPath = arrayOrEmpty(recallResult && recallResult.tier_path).map((x) => String(x || '').trim()).filter(Boolean);
+  if (!evidence.length && !sources.length && !tierPath.length) return;
+
+  const panel = document.createElement('div');
+  panel.className = 'recall-evidence-panel';
+
+  const title = document.createElement('div');
+  title.className = 'recall-evidence-title';
+  title.textContent = 'Grounded recall evidence';
+  panel.appendChild(title);
+
+  if (tierPath.length) {
+    const path = document.createElement('div');
+    path.className = 'recall-evidence-meta';
+    path.textContent = 'tier path: ' + tierPath.join(' → ');
+    panel.appendChild(path);
+  }
+
+  for (const item of evidence) {
+    const row = document.createElement('div');
+    row.className = 'recall-evidence-item';
+    const label = String(item.bead_id || item.id || 'evidence').trim();
+    const score = Number(item.score || item.confidence || 0);
+    const text = String(item.text || item.summary || item.reason || '').trim();
+    row.textContent = label + (score ? ' · ' + score.toFixed(2) : '') + (text ? ' — ' + text.slice(0, 180) : '');
+    panel.appendChild(row);
+  }
+
+  if (sources.length) {
+    const src = document.createElement('div');
+    src.className = 'recall-evidence-meta';
+    src.textContent = 'sources: ' + sources.map((s) => String(s.turn_id || s.session_id || s.bead_id || s.id || '').trim()).filter(Boolean).join(', ');
+    panel.appendChild(src);
+  }
+
+  container.appendChild(panel);
 }
 
 async function parseApiJsonResponse(res, label) {
@@ -1197,7 +1251,8 @@ async function sendMessage() {
     }
 
     progressMsg.remove();
-    addMsg('assistant', (data.assistant || data.response || ''), data.turn_id);
+    const recallResult = recallContractFromChatPayload(data);
+    addMsg('assistant', (data.assistant || data.response || ''), data.turn_id, {recallResult});
     if (data.last_answer) {
       const d = (data.last_answer && data.last_answer.diagnostics) ? data.last_answer.diagnostics : data.last_answer;
       const gLevel = String(d.grounding_level || 'n/a');

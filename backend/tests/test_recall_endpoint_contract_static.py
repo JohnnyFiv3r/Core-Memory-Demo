@@ -28,6 +28,9 @@ class TestRecallEndpointContractStatic(unittest.TestCase):
         self.assertIn("run_recall", calls)
         self.assertIn('"source_surface": "recall_orchestrator"', source)
         self.assertIn('"recall_result"', source)
+        self.assertIn('"evidence": list(recall_contract.get("evidence") or [])', source)
+        self.assertIn('"sources": list(recall_contract.get("sources") or [])', source)
+        self.assertIn('"tier_path": list(recall_contract.get("tier_path") or [])', source)
 
     def test_run_recall_returns_recall_result_contract(self):
         source = (ROOT / "app" / "core" / "runtime.py").read_text()
@@ -37,6 +40,14 @@ class TestRecallEndpointContractStatic(unittest.TestCase):
         self.assertIn("core_recall", calls)
         self.assertIn("_recall_result_to_payload", calls)
         self.assertIn("validate_recall_effort", calls)
+
+    def test_frontend_renders_recall_evidence_panel(self):
+        js = (ROOT.parent / "frontend" / "public" / "chat-app.js").read_text()
+        html = (ROOT.parent / "frontend" / "public" / "chat.html").read_text()
+        self.assertIn("function recallContractFromChatPayload", js)
+        self.assertIn("function renderRecallEvidence", js)
+        self.assertIn("recall-evidence-panel", js)
+        self.assertIn("recall-evidence-panel", html)
 
 
 if __name__ == "__main__":
