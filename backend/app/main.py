@@ -25,6 +25,7 @@ from app.routes.inspect import router as inspect_router
 logger = logging.getLogger(__name__)
 _async_jobs_stop = threading.Event()
 _async_jobs_thread: threading.Thread | None = None
+_mcp_lifespan_cm = None
 
 
 def ensure_roots_writable() -> None:
@@ -74,7 +75,8 @@ app.include_router(demo_public_router)
 app.include_router(demo_router)
 app.include_router(ingest_router)
 app.include_router(inspect_router)
-app.mount(MCP_HTTP_PATH, build_mcp_app(root=str(settings.core_memory_root)))
+mcp_app = build_mcp_app(root=str(settings.core_memory_root))
+app.mount(MCP_HTTP_PATH, mcp_app)
 
 STATE_PATHS = {'/api/demo/state', '/v1/memory/inspect/state'}
 # Deploy tick: keep backend commits observable for Render auto-deploy health.
@@ -96,6 +98,16 @@ async def state_error_fallback_middleware(request: Request, call_next):
 
 
 @app.on_event('startup')
+async def on_mcp_startup():
+    global _mcp_lifespan_cm
+    # Mounted FastAPI sub-app lifespans are not entered by the parent app,
+    # but the MCP streamable-HTTP endpoint requires its session manager task
+    # group to be active before protocol POSTs arrive.
+    _mcp_lifespan_cm = mcp_app.state.mcp_session_manager.run()
+    await _mcp_lifespan_cm.__aenter__()
+
+
+@app.on_event('startup')
 def on_startup():
     global _async_jobs_thread
     ensure_roots_writable()
@@ -104,6 +116,15 @@ def on_startup():
         t = threading.Thread(target=_async_jobs_tick_loop, name='core-memory-async-jobs-tick', daemon=True)
         t.start()
         _async_jobs_thread = t
+
+
+@app.on_event('shutdown')
+async def on_mcp_shutdown():
+    global _mcp_lifespan_cm
+    cm = _mcp_lifespan_cm
+    _mcp_lifespan_cm = None
+    if cm is not None:
+        await cm.__aexit__(None, None, None)
 
 
 @app.on_event('shutdown')
