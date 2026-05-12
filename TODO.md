@@ -145,11 +145,18 @@ single verb. The demo's headline feature can't be wired without it.
 **Tasks:**
 - [ ] Build the orchestrator in the main Core-Memory repo (see Core-Memory item #5 /
       `core_memory/retrieval/agent.py`) — public entrypoint
-      `recall(query, root, *, budget="default", speaker=None) -> RecallResult`.
-      Internal three-tier escalation (flat semantic → causal trace → transcript lookup);
-      tier choice is INTERNAL, not exposed as separate verbs.
-- [ ] `budget` knob is the only public control: `"cheap"` (flat search, no LLM),
-      `"default"` (5-step / 8k token cap), `"full"` (10-step / 16k for benchmark sweeps).
+      `recall(query, root, *, effort="medium", speaker=None) -> RecallResult`.
+      Public effort modes are `"low" | "medium" | "high"`; internal tier choice is
+      reported via `tier_path` but not exposed as separate verbs.
+- [ ] Effort semantics for the first implementation:
+  - `low`: direct lookup only (`memory_execute` with `grounding_mode="search_only"`,
+        small `k`, no required causal expansion); intended for low-latency UI/preview use.
+  - `medium`: default grounded recall (`prefer_grounded`, modest `k`, source hydration);
+        use causal expansion when query intent or wording suggests why/how/decision/history.
+  - `high`: deeper grounded recall (`prefer_grounded`, larger `k`, broader hydration);
+        benchmark/audit/thorough mode, but still bounded and deterministic.
+- [ ] Keep `effort="dynamic"` out of the first orchestrator behavior except as a documented
+      future mode; do not let MVP adoption depend on opaque LLM-chosen effort.
 - [ ] Add `POST /api/recall` to the demo backend wired to the orchestrator.
 - [ ] Return the `RecallResult` shape from item #4.
 - [ ] Update `/api/chat` to call the same orchestrator internally so demo and CLI
