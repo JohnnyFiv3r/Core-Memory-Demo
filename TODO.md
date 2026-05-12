@@ -20,14 +20,19 @@ MCP config block.
 
 **Gap:** Core Memory has the logic; it just hasn't been surfaced as a proper MCP transport.
 
+**Status:** Closed in Core-Memory PR #136 (`feb08489f05074c315007d83e55881b1f79b3041`)
+and included in this demo backend pin. The shipped MCP v1 surface mirrors the public
+verbs (`capture`, `recall`, `ingest`, `status`) rather than the older REST-only typed
+operation names; `/v1/mcp/*` REST endpoints remain unchanged.
+
 **Tasks:**
-- [ ] Add an MCP streamable-HTTP server endpoint at `/mcp` (mount alongside the existing
+- [x] Add an MCP streamable-HTTP server endpoint at `/mcp` (mount alongside the existing
       FastAPI app in `core_memory/integrations/http/server.py`)
-- [ ] Expose the existing typed-read tools (`query_current_state`, `query_temporal_window`,
+- [x] Expose the existing typed-read tools (`query_current_state`, `query_temporal_window`,
       `query_causal_chain`, `query_contradictions`) as MCP tools through the protocol server
-- [ ] Expose the existing typed-write tools (`write_turn_finalized`,
+- [x] Expose the existing typed-write tools (`write_turn_finalized`,
       `apply_reviewed_proposal`, `submit_entity_merge_proposal`) as MCP tools
-- [ ] Document the Claude Code config snippet in README.md:
+- [x] Document the Claude Code config snippet in README.md:
       ```json
       { "mcpServers": { "core-memory": { "type": "streamable-http",
         "url": "http://localhost:8000/mcp" } } }
@@ -238,10 +243,10 @@ spec. The model has no idea the rules in that doc exist.
 
 **Fix path — in order of preference:**
 
-- [ ] **Option A — MCP prompt resource (right answer, do alongside item #1):**
-      Status: implemented in Core-Memory PR #136 as MCP prompt `core-memory.agent-guide`;
-      close this checkbox only after the Core-Memory PR is merged, demo pins are bumped,
-      and `/mcp/healthz`/prompt enumeration are smoked from the pinned demo build.
+- [x] **Option A — MCP prompt resource (right answer, do alongside item #1):**
+      Closed in Core-Memory PR #136 as MCP prompt `core-memory.agent-guide`,
+      included in this demo backend pin. Post-deploy smoke should verify `/mcp/healthz`
+      advertises the prompt and MCP prompt enumeration returns it.
       When the `/mcp` server ships, register the skill instructions as a named MCP prompt
       resource (`core_memory_skill`). MCP has first-class support for prompts and resources;
       every MCP client gets injection-by-default with zero per-client wiring. The `.md`
@@ -340,21 +345,19 @@ Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the
 
 | # | Task | Effort | Adoption Impact |
 |---|------|--------|-----------------|
-| 1 | MCP protocol server at `/mcp` | M | Very High |
+| 1 | MCP protocol server at `/mcp` | Done | Very High |
 | 2 | `capture` / `recall` aliases | Done | High |
 | 3 | Async transcript ingestion pipeline | S | High |
 | 4 | Shared `RecallResult` output contract | S | Medium-High |
 | 5 | `POST /api/recall` (single-verb recall) | M | Very High |
 | 6 | LoCoMo / LongMemEval scoring harness | M | High (competitive lever) |
 | 7a | Agent instructions → OpenClaw manifest (Option B) | Done | High |
-| 7b | Agent instructions → MCP prompt resource (Option A) | In progress via Core-Memory PR #136 | Very High |
+| 7b | Agent instructions → MCP prompt resource (Option A) | Done, pending post-deploy smoke | Very High |
 | 8 | Promote async transcript ingest to Core-Memory demo/CLI/MCP | M | High |
 
-**Week plan status:** #2 and #7a are closed. #7b is implemented on the Core-Memory
-MCP protocol branch/PR and should be closed only after merge, demo pin bump, and live
-MCP prompt smoke. #1 unlocks Claude Code /
-Cursor integrations and is the biggest adoption surface; fold #7b in when #1 ships
-(they're the same PR). #3 is assembly work — the benchmark harness already provides
+**Week plan status:** #1, #2, #7a, and #7b are closed in code/TODO tracking.
+#1/#7b still need post-deploy smoke from the hosted demo after this pin lands: verify
+`/mcp/healthz`, tool advertisement, and prompt enumeration for `core-memory.agent-guide`. #3 is assembly work — the benchmark harness already provides
 the job queue, worker, turn loop, flush policy, and association synthesis; the real
 work is the normalizer and the pairing step.
 
