@@ -46,19 +46,23 @@ MCP config block.
 
 **Gap:** The canonical verbs are not approachable for first-touch integration.
 
+**Status:** Closed in Core-Memory PR #131 (`bd5beca`) and included in the current
+demo backend pin (`9913643cd61aeec3ff7956cd70d1abed5a449277`). Keep future
+`remember(text, type=...)` declarative-write work separate from this closed alias slice.
+
 **Tasks:**
-- [ ] Add `capture(...)` as a public alias for `process_turn_finalized(...)` in
+- [x] Add `capture(...)` as a public alias for `process_turn_finalized(...)` in
       `core_memory/__init__.py` — same signature, same behavior, zero new logic.
       (Note: the locked verb taxonomy uses `capture` for canonical write — observed-from-conversation —
       and reserves `remember(text, type=…)` for **declarative user-authored memory writes** in a
       later item. Don't conflate them.)
-- [ ] Add `recall(...)` as a public alias that wires through the new agentic recall
+- [x] Add `recall(...)` as a public alias that wires through the new agentic recall
       orchestrator (see item #5 below) — single-verb read that internally scales across
       tiers. Until the orchestrator lands, `recall` can be a thin wrapper over
       `memory_execute(...)` with `intent="remember"` as the default; swap to the
       orchestrator when #5 ships.
-- [ ] Export `capture` and `recall` from the top-level `core_memory` package
-- [ ] Add a "fastest path" README example using `capture` / `recall` above the existing
+- [x] Export `capture` and `recall` from the top-level `core_memory` package
+- [x] Add a "fastest path" README example using `capture` / `recall` above the existing
       `process_turn_finalized` / `memory_execute` examples (keep both; aliases are additive)
 
 ---
@@ -235,13 +239,18 @@ spec. The model has no idea the rules in that doc exist.
 **Fix path — in order of preference:**
 
 - [ ] **Option A — MCP prompt resource (right answer, do alongside item #1):**
+      Status: implemented in Core-Memory PR #136 as MCP prompt `core-memory.agent-guide`;
+      close this checkbox only after the Core-Memory PR is merged, demo pins are bumped,
+      and `/mcp/healthz`/prompt enumeration are smoked from the pinned demo build.
       When the `/mcp` server ships, register the skill instructions as a named MCP prompt
       resource (`core_memory_skill`). MCP has first-class support for prompts and resources;
       every MCP client gets injection-by-default with zero per-client wiring. The `.md`
       becomes a first-class resource instead of a stranded doc, and the problem is solved
       for all future clients in one shot.
 
-- [ ] **Option B — OpenClaw manifest (cheapest short-term fix):**
+- [x] **Option B — OpenClaw manifest (cheapest short-term fix):**
+      Closed in Core-Memory PR #129: the OpenClaw bridge loads the canonical skill
+      instructions into the plugin prompt supplement/skill path for existing users.
       Check whether `openclaw.plugin.json` supports an `instructions` or
       `systemPromptAddendum` field per the OpenClaw plugin spec. If yes, add
       `"instructions": "@docs/integrations/openclaw/core-memory-skill-instructions.md"`
@@ -332,17 +341,18 @@ Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the
 | # | Task | Effort | Adoption Impact |
 |---|------|--------|-----------------|
 | 1 | MCP protocol server at `/mcp` | M | Very High |
-| 2 | `capture` / `recall` aliases | XS | High |
+| 2 | `capture` / `recall` aliases | Done | High |
 | 3 | Async transcript ingestion pipeline | S | High |
 | 4 | Shared `RecallResult` output contract | S | Medium-High |
 | 5 | `POST /api/recall` (single-verb recall) | M | Very High |
 | 6 | LoCoMo / LongMemEval scoring harness | M | High (competitive lever) |
-| 7a | Agent instructions → OpenClaw manifest (Option B) | XS | High |
-| 7b | Agent instructions → MCP prompt resource (Option A) | XS | Very High |
+| 7a | Agent instructions → OpenClaw manifest (Option B) | Done | High |
+| 7b | Agent instructions → MCP prompt resource (Option A) | In progress via Core-Memory PR #136 | Very High |
 | 8 | Promote async transcript ingest to Core-Memory demo/CLI/MCP | M | High |
 
-**Week plan:** #2 and #7a are hours each — ship them first. #7a stops the behavioral
-spec from being a stranded doc for existing OpenClaw users. #1 unlocks Claude Code /
+**Week plan status:** #2 and #7a are closed. #7b is implemented on the Core-Memory
+MCP protocol branch/PR and should be closed only after merge, demo pin bump, and live
+MCP prompt smoke. #1 unlocks Claude Code /
 Cursor integrations and is the biggest adoption surface; fold #7b in when #1 ships
 (they're the same PR). #3 is assembly work — the benchmark harness already provides
 the job queue, worker, turn loop, flush policy, and association synthesis; the real
