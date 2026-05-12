@@ -65,8 +65,8 @@ MCP config block.
 
 ## 3. Async transcript ingestion pipeline
 
-**Adopter expectation:** `POST /api/remember` returns `202 Accepted` immediately; ingestion
-happens in the background. Integrations never block on write latency.
+**Adopter expectation:** `POST /api/ingest/transcript` returns `202 Accepted` immediately;
+ingestion happens in the background. Integrations never block on write latency.
 
 **What Core Memory has:** The benchmark harness in `Core-Memory-Demo` is already most of
 the way there. The infrastructure exists and is production-quality — it just needs to be
@@ -76,29 +76,30 @@ generalized from LoCoMo-specific to generic transcript input.
 - `benchmark_store.py` — Postgres job queue with `enqueue_job` → `claim_next_job`
   (`FOR UPDATE SKIP LOCKED`) → `finish_job`. Already the right pattern for async ingestion.
 - `benchmark_worker.py` — claim-one-job-and-run dispatch loop. Keep as-is.
-- `replay_locomo_sample()` in `transcript_only` mode — the turn iteration, `emit_turn_finalized()`
-  + `process_memory_event()` per turn, `per_session`/`end_only` flush policy, and
+- `replay_locomo_sample()` in `transcript_only` mode — the turn iteration, canonical
+  turn-finalization boundary, `per_session`/`end_only` flush policy, and
   `_synthesize_locomo_associations()` for temporal order and entity-overlap edges. All of
   this is generic enough to keep.
 
 **What needs to change:**
-- [ ] Write a **thin input normalizer** that maps a generic transcript schema
-      (`[{role, content, timestamp?}]`) to the same `_turn_envelope()` dict that the
-      LoCoMo replay already produces. The envelope fields (`session_id`, `turn_id`,
-      `user_query`, `assistant_final`, `metadata`) don't change — only the source schema does.
-- [ ] **Pair user+assistant turns** before the per-turn loop. The harness treats each
+- [x] Write a **thin input normalizer** that maps a generic transcript schema
+      (`[{role, content, timestamp?}]`) to canonical turn-envelope dicts. Current Core
+      Memory envelopes carry `turns=[{speaker, role, content, ts, metadata}]` plus
+      `session_id`, `turn_id`, and envelope `metadata`.
+- [x] **Pair user+assistant turns** before the per-turn loop. The harness treats each
       utterance as a separate bead; real transcript ingestion should group consecutive
-      `user`/`assistant` pairs so `user_query` and `assistant_final` are populated correctly.
-- [ ] **Replace `_extract_locomo_claims()`** with a generic pass — either a simple
-      NER/pattern step or just omit it initially. The harness works fine without claims;
-      they're an enrichment layer, not structural.
-- [ ] **Generalize the job `kwargs` schema** from LoCoMo params (`sample_id`, `sessions`)
+      `user`/`assistant` pairs so canonical `turns` preserve the completed exchange.
+- [x] **Replace `_extract_locomo_claims()`** with a generic pass — either a simple
+      NER/pattern step or just omit it initially. The first implementation omits generic
+      claim extraction; claims remain an enrichment layer, not structural.
+- [x] **Generalize the job `kwargs` schema** from LoCoMo params (`sample_id`, `sessions`)
       to `{transcript_id, turns: [...], session_id, flush_policy}`.
-- [ ] **Add `POST /ingest/transcript`** to the demo backend that enqueues a job and
-      returns `{job_id}` — callers poll `benchmark_store.read_job(job_id)` for status.
+- [x] **Add `POST /ingest/transcript`** to the demo backend that enqueues a job and
+      returns `{job_id}` — callers poll `/api/ingest/jobs/{job_id}` for status; queued
+      deployments persist through `benchmark_store.read_job(job_id)`.
 
 **Do not use** `ingest_locomo_turns()` / `MemoryStore.add_bead()` directly — that path
-bypasses the canonical runtime. Stay on `emit_turn_finalized()` + `process_memory_event()`.
+bypasses the canonical runtime. Stay on Core Memory's canonical turn-finalization boundary.
 
 ---
 

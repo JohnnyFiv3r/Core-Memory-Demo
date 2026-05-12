@@ -16,6 +16,7 @@ from app.core.state_fallback import safe_state_fallback
 from app.routes.health import router as health_router
 from app.routes.demo import public_router as demo_public_router
 from app.routes.demo import router as demo_router
+from app.routes.ingest import router as ingest_router
 from app.routes.inspect import router as inspect_router
 
 
@@ -69,6 +70,7 @@ app.add_middleware(
 app.include_router(health_router)
 app.include_router(demo_public_router)
 app.include_router(demo_router)
+app.include_router(ingest_router)
 app.include_router(inspect_router)
 
 STATE_PATHS = {'/api/demo/state', '/v1/memory/inspect/state'}
