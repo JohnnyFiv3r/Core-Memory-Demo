@@ -39,6 +39,8 @@ from core_memory.integrations.pydanticai.memory_tools import (
 from core_memory.integrations.pydanticai.run import run_with_memory
 
 from app.core.agent_runtime import create_agent_for_root
+from core_memory.retrieval.agent import recall as core_recall
+from core_memory.retrieval.contracts import RecallResult, validate_recall_effort
 from core_memory.retrieval.tools import memory as memory_tools
 from core_memory.retrieval.semantic_index import build_semantic_index, semantic_lookup
 from core_memory.retrieval.normalize import classify_intent
@@ -1785,6 +1787,44 @@ def _emit_chat_progress(progress: Callable[..., Any] | None, stage: str, message
         return
 
 
+def _recall_effort_for_query(message: str, requested: str | None = None) -> str:
+    if str(requested or "").strip():
+        return validate_recall_effort(str(requested or ""))
+    intent_probe = classify_intent(str(message or "")) or {}
+    intent_class = str(intent_probe.get("intent_class") or "").strip().lower()
+    return "high" if intent_class in {"causal", "why", "what_changed"} else "medium"
+
+
+def _recall_result_to_payload(result: RecallResult, *, ok: bool | None = None) -> dict[str, Any]:
+    payload = result.to_dict()
+    payload.setdefault("ok", bool(result.status != "failed") if ok is None else bool(ok))
+    return payload
+
+
+def run_recall(
+    query: str,
+    *,
+    effort: str = "medium",
+    speaker: str | None = None,
+    k: int | None = None,
+    include_raw: bool = False,
+) -> dict[str, Any]:
+    q = str(query or "").strip()
+    if not q:
+        return {"ok": False, "error": "missing_query"}
+    selected_effort = validate_recall_effort(effort)
+    with semantic_mode(_chat_semantic_mode_name()):
+        result = core_recall(
+            q,
+            effort=selected_effort,
+            speaker=speaker,
+            k=k,
+            root=settings.core_memory_root,
+            include_raw=include_raw,
+        )
+    return _recall_result_to_payload(result)
+
+
 def _sync_semantic_on_write(*, progress: Callable[..., Any] | None = None) -> dict[str, Any]:
     if not bool(settings.demo_chat_sync_semantic_on_write):
         return {
@@ -1845,8 +1885,16 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
         err = str(exc or "").strip()
         fallback_error = err or "model_unavailable"
         _emit_chat_progress(progress, "fallback", "Primary model unavailable, using retrieval fallback", error=fallback_error)
-        with semantic_mode(chat_semantic_mode):
-            retrieval_preview = memory_tools.execute({"query": message, "intent": "remember", "k": 8}, root=settings.core_memory_root, explain=False)
+        try:
+            recall_preview = run_recall(message, effort=_recall_effort_for_query(message), include_raw=True)
+            retrieval_preview = dict(recall_preview.get("raw") or {})
+        except Exception:
+            with semantic_mode(chat_semantic_mode):
+                retrieval_preview = memory_tools.execute(
+                    {"query": message, "intent": "remember", "k": 8},
+                    root=settings.core_memory_root,
+                    explain=False,
+                )
         answer = _build_fallback_answer(message, retrieval_preview)
         process_turn_finalized(
             root=settings.core_memory_root,
@@ -1876,19 +1924,19 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
 
     intent_probe = classify_intent(str(message or "")) or {}
     intent_class = str(intent_probe.get("intent_class") or "").strip().lower()
+    recall_effort = _recall_effort_for_query(message)
 
-    req: dict[str, Any] = {"query": message, "k": 8}
-    if intent_class in {"causal", "why", "what_changed"}:
-        req["intent"] = "causal"
+    _emit_chat_progress(progress, "diagnostics", "Collecting recall diagnostics", recall_effort=recall_effort)
+    recall_payload = run_recall(message, effort=recall_effort, include_raw=True)
+    retrieval = dict(recall_payload.get("raw") or {})
 
-    _emit_chat_progress(progress, "diagnostics", "Collecting retrieval diagnostics")
-    with semantic_mode(chat_semantic_mode):
-        retrieval = memory_tools.execute(req, root=settings.core_memory_root, explain=False)
-
+    evidence = list(recall_payload.get("evidence") or [])
+    top_evidence = dict(evidence[0] or {}) if evidence else {}
     top_result = (retrieval.get("results") or [{}])[0] if (retrieval.get("results") or []) else {}
     retrieval_mode = str(
         retrieval.get("retrieval_mode")
         or ((retrieval.get("request") or {}).get("grounding_mode") if isinstance(retrieval.get("request"), dict) else "")
+        or ",".join(str(x) for x in list(recall_payload.get("tier_path") or []))
         or "unknown"
     )
 
@@ -1908,11 +1956,15 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
             "ok": bool(retrieval.get("ok")),
             "answer_outcome": str(retrieval.get("next_action") or "answered"),
             "retrieval_mode": retrieval_mode,
-            "source_surface": "memory_execute",
-            "anchor_reason": str((top_result or {}).get("anchor_reason") or "retrieved"),
-            "result_count": int(len(list(retrieval.get("results") or []))),
-            "top_bead_ids": [str(r.get("bead_id") or "") for r in list(retrieval.get("results") or [])[:5]],
+            "source_surface": "recall_orchestrator",
+            "anchor_reason": str((top_result or {}).get("anchor_reason") or (top_evidence or {}).get("reason") or "retrieved"),
+            "result_count": int(len(evidence)),
+            "top_bead_ids": [str(r.get("bead_id") or "") for r in evidence[:5] if isinstance(r, dict)],
             "chain_count": int(len(list(retrieval.get("chains") or []))),
+            "recall_status": str(recall_payload.get("status") or ""),
+            "recall_effort": str(recall_effort),
+            "recall_tier_path": list(recall_payload.get("tier_path") or []),
+            "recall_result": {k: v for k, v in recall_payload.items() if k != "raw"},
             "grounding_level": str(grounding.get("level") or "none"),
             "grounding_required": bool(grounding.get("required")),
             "grounding_achieved": bool(grounding.get("achieved")),

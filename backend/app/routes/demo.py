@@ -41,6 +41,7 @@ from app.core.runtime import (
     run_benchmark,
     run_chat,
     run_flush,
+    run_recall,
     reset_test_session,
     seed_demo_history,
     set_demo_model_override,
@@ -660,6 +661,32 @@ def chat_status(job_id: str, cursor: int = 0):
     if not isinstance(row, dict):
         return JSONResponse({'ok': False, 'error': 'chat_job_not_found'}, status_code=404)
     return _chat_job_payload(row, cursor=max(0, int(cursor)))
+
+
+@router.post('/recall', dependencies=[Depends(rate_limit_chat)])
+async def recall_endpoint(request: Request):
+    body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
+    query = str((body or {}).get('query') or (body or {}).get('message') or '').strip()
+    if not query:
+        return JSONResponse({'ok': False, 'error': 'missing_query'}, status_code=400)
+    effort = str((body or {}).get('effort') or 'medium').strip().lower() or 'medium'
+    speaker = str((body or {}).get('speaker') or '').strip() or None
+    include_raw = bool((body or {}).get('include_raw', False))
+    k_raw = (body or {}).get('k')
+    k: int | None = None
+    if k_raw not in (None, ''):
+        try:
+            k = max(1, int(k_raw))
+        except Exception:
+            return JSONResponse({'ok': False, 'error': 'invalid_k'}, status_code=400)
+    try:
+        out = run_recall(query, effort=effort, speaker=speaker, k=k, include_raw=include_raw)
+        status = 200 if bool(out.get('ok', True)) else 400
+        return JSONResponse(out, status_code=status)
+    except ValueError as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=400)
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
 @router.post('/chat', dependencies=[Depends(rate_limit_chat)])
