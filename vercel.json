@@ -37,6 +37,10 @@
       "destination": "https://core-memory-demo.onrender.com/v1/:path*"
     },
     {
+      "source": "/mcp/:path*",
+      "destination": "https://core-memory-demo.onrender.com/mcp/:path*"
+    },
+    {
       "source": "/chat",
       "destination": "/chat.html"
     },
