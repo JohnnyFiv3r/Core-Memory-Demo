@@ -257,6 +257,45 @@ users. Do Option A when item #1 ships — it solves this permanently across all 
 
 ---
 
+## 8. Promote async transcript ingest to Core-Memory demo, CLI, and MCP surfaces
+
+**Adopter expectation:** The hosted demo proves async transcript ingestion first, but
+users should eventually get the same capability from local Core Memory surfaces: the
+in-repo demo, CLI, MCP, and direct-library APIs.
+
+**What the hosted demo will have after item #3:** A source-adapter layer that accepts
+generic transcript-like input, enqueues a background job, normalizes/pairs turns, and
+runs them through the canonical Core Memory turn-finalization pipeline.
+
+**Gap:** If this stays only in the hosted demo backend, the operational behavior and
+data contract become another demo-only feature instead of the durable ingestion model.
+
+**Tasks:**
+- [ ] After hosted demo item #3 lands, copy the stable request/response contract into
+      `Core-Memory/demo` so the local demo exercises the same async ingest path.
+- [ ] Identify the boundary between demo-owned operational queueing and Core-Memory-owned
+      ingestion semantics; keep memory behavior in Core Memory, keep hosted deployment
+      plumbing in demo repos.
+- [ ] Add a direct-library helper once the contract is proven, e.g.
+      `ingest_transcript(...)` or `capture_many(...)`, implemented on top of canonical
+      turn finalization rather than direct bead writes.
+- [ ] Add CLI support for file-based ingestion, e.g.
+      `core-memory ingest transcript path.json --root ...`, returning a synchronous
+      summary locally and documenting how hosted async jobs differ.
+- [ ] Extend the MCP `ingest` tool to accept the same transcript schema or a file/path
+      reference, so MCP clients can import conversation history without custom REST glue.
+- [ ] Preserve the locked verb taxonomy: `capture` for observed conversation turns,
+      future `remember(text, type=...)` for declarative user-authored memory, and
+      `recall(query, effort=...)` for read. Do not turn transcript ingest into direct
+      declarative memory writes.
+- [ ] Add parity tests showing a tiny transcript ingested through hosted demo, local demo,
+      CLI, and MCP surfaces yields recallable evidence with the same bead/source IDs where
+      deterministic IDs are available.
+
+**Non-goals:** Do not move the hosted demo's Postgres job queue wholesale into the library.
+Core Memory should own normalization/canonical ingestion semantics; each deployment
+surface can choose sync vs async execution and its own queue backend.
+
 ## Cross-repo dependencies / references
 
 Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the main
@@ -299,6 +338,7 @@ Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the
 | 6 | LoCoMo / LongMemEval scoring harness | M | High (competitive lever) |
 | 7a | Agent instructions → OpenClaw manifest (Option B) | XS | High |
 | 7b | Agent instructions → MCP prompt resource (Option A) | XS | Very High |
+| 8 | Promote async transcript ingest to Core-Memory demo/CLI/MCP | M | High |
 
 **Week plan:** #2 and #7a are hours each — ship them first. #7a stops the behavioral
 spec from being a stranded doc for existing OpenClaw users. #1 unlocks Claude Code /
@@ -310,7 +350,9 @@ work is the normalizer and the pairing step.
 **Sequence after the original three (#1–#3):** #4 ships the shared contract that #5
 depends on. #5 ships `/api/recall` and the single-verb orchestrator (paired with the
 Core-Memory main-repo agentic-retrieval work). #6 wraps the existing benchmark harness
-with scoring — pairs naturally with #3 once async ingest is generic.
+with scoring — pairs naturally with #3 once async ingest is generic. #8 is the follow-on
+promotion path for #3: prove async transcript ingest in the hosted demo first, then
+carry the stable contract into `Core-Memory/demo`, CLI, MCP, and direct-library surfaces.
 
 **Cross-repo note on naming (locked):** The verb taxonomy across both repos is
 `capture` (canonical write — observed conversation), `remember(text, type=…)`
