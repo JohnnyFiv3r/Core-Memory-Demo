@@ -1,17 +1,16 @@
-# TODO: Adoption-Ready Ergonomics (mnemory learnings)
+# TODO: Adoption-Ready Ergonomics
 
-Mnemory (https://github.com/fpytloun/mnemory) is an MCP-server-first persistent memory layer.
-After reading both codebases, Core Memory already has hybrid search, MCP-typed operations,
+Core Memory already has hybrid search, MCP-typed operations,
 a full HTTP server (`/v1/mcp/*`, `/v1/memory/*`, `/healthz`, `/v1/metrics`), multi-tenant
 header routing, and integrations for LangChain/PydanticAI/CrewAI/SpringAI/Neo4j.
 
-These are the genuine remaining gaps — things mnemory does that Core Memory hasn't nailed yet.
+These are the genuine remaining adoption-readiness gaps to close.
 
 ---
 
 ## 1. MCP protocol server endpoint (`/mcp`)
 
-**What mnemory does:** Runs as a proper MCP streamable-HTTP server at `/mcp`. Any client
+**Adopter expectation:** A proper MCP streamable-HTTP server at `/mcp`. Any client
 (Claude Code, Cursor, Windsurf, Open WebUI) wires it up with one JSON snippet and talks
 the MCP protocol natively. No custom glue code.
 
@@ -38,7 +37,7 @@ MCP config block.
 
 ## 2. Friendlier entry-point aliases for the two canonical verbs
 
-**What mnemory does:** Two verbs cover 80% of integrations: `remember(messages)` to write,
+**Adopter expectation:** Two verbs cover 80% of integrations: `remember(messages)` to write,
 `recall(query)` to read. New users have one mental model.
 
 **What Core Memory has:** `process_turn_finalized(...)` (write) and `memory_execute(...)`
@@ -66,7 +65,7 @@ MCP config block.
 
 ## 3. Async transcript ingestion pipeline
 
-**What mnemory does:** `POST /api/remember` returns `202 Accepted` immediately; ingestion
+**Adopter expectation:** `POST /api/remember` returns `202 Accepted` immediately; ingestion
 happens in the background. Integrations never block on write latency.
 
 **What Core Memory has:** The benchmark harness in `Core-Memory-Demo` is already most of
@@ -105,7 +104,7 @@ bypasses the canonical runtime. Stay on `emit_turn_finalized()` + `process_memor
 
 ## 4. Shared `RecallResult` output contract across surfaces
 
-**What mnemory does:** Single response shape for memory queries — what was retrieved
+**Adopter expectation:** Single response shape for memory queries — what was retrieved
 and what to do with it. Stable across MCP, REST, and direct-library so integrators
 write one parser.
 
@@ -133,7 +132,7 @@ and CLI drift over time.
 
 ## 5. POST /api/recall — single-verb recall endpoint with internal scaling
 
-**What mnemory does:** Single recall verb. Integrators don't have to know which retrieval
+**Adopter expectation:** Single recall verb. Integrators don't have to know which retrieval
 primitive fits their question.
 
 **What Core Memory has:** Three primitives (`memory_search`, `memory_trace`, `memory_execute`)
@@ -177,8 +176,7 @@ single verb. The demo's headline feature can't be wired without it.
 
 ## 6. Reproducible LoCoMo + LongMemEval scoring harness
 
-**What mnemory does:** Doesn't have a published-and-reproducible memory benchmark.
-Memanto claims SOTA but ships no in-repo runner.
+**Adopter expectation:** Published, reproducible memory benchmarks with an in-repo runner and citable reports.
 
 **What Core Memory has:** The benchmark harness in this repo runs LoCoMo replay
 end-to-end and produces edges/claims. Scoring and category breakdown are not yet
@@ -199,7 +197,7 @@ citable number.
       LongMemEval), per-case provenance (which beads retrieved, which edges walked,
       tier_path actually hit, why scored that way).
 - [ ] Comparison artifact `docs/benchmarks/locomo/baselines.md` — Core Memory vs
-      published mem0 / Memanto / baseline-RAG / Long-LLM-only numbers.
+      published baseline-RAG / long-context-LLM / memory-system numbers.
 - [ ] Same shape for LongMemEval.
 - [ ] Feature-flag the run: causal edges on/off, claims on/off, agent-judged
       myelination on/off — document what was on in the report so reproducers match.
