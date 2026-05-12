@@ -3,6 +3,8 @@ uvicorn==0.44.0
 pydantic-settings==2.13.1
 python-dotenv==1.2.2
 pyjwt[crypto]==2.10.1
-pydantic-ai==1.80.0
+# Use slim provider extras only; the full pydantic-ai meta-package pulls all providers
+# and Render currently fails resolving the mistral extra (`mistralai>=2.0.0`).
+pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Pinned to explicit Core-Memory commit for deploy stability.
-core-memory[semantic,pgvector] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@18fdb41
+core-memory[semantic,pgvector] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@7fa238838a42bef836229060eb80c847de5a1274
