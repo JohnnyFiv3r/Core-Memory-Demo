@@ -155,8 +155,13 @@ single verb. The demo's headline feature can't be wired without it.
 - [ ] Return the `RecallResult` shape from item #4.
 - [ ] Update `/api/chat` to call the same orchestrator internally so demo and CLI
       behave identically for grounded recall queries.
-- [ ] Frontend: expandable evidence/sources cards under the answer card; tier-path
-      indicator (which tiers ran) for power-user visibility.
+- [ ] Next visible demo feature: answer transparency UI.
+  - [ ] Frontend: expandable evidence/source cards under answer results.
+  - [ ] Show retrieval tier path / diagnostics in the UI (which tiers ran, why they ran,
+        and which evidence items grounded the answer).
+- [ ] Once the recall orchestrator lands, tighten `recall(...)` request kwargs by either
+      accepting only known top-level recall params or namespacing extras under something
+      like `filters={...}` / `constraints={...}`.
 
 ---
 
