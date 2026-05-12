@@ -125,7 +125,7 @@ async def ingest_transcript(request: Request):
     }
 
     _prune_ingest_jobs()
-    run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
+    run_mode = str(settings.transcript_ingest_run_mode or 'inline').strip().lower() or 'inline'
     if run_mode in {'queue', 'queued', 'cron'}:
         try:
             queued = benchmark_store.enqueue_job(job_id=job_id, request=request_payload, kwargs=kwargs)
