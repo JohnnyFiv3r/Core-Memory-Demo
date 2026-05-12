@@ -12,6 +12,8 @@ from app.core.semantic_env import configure_shared_semantic_backend_env
 configure_shared_semantic_backend_env()
 
 from core_memory.runtime.jobs import run_async_jobs
+from core_memory.integrations.mcp.constants import MCP_HTTP_PATH
+from core_memory.integrations.mcp.protocol_server import build_mcp_app
 from app.core.state_fallback import safe_state_fallback
 from app.routes.health import router as health_router
 from app.routes.demo import public_router as demo_public_router
@@ -72,6 +74,7 @@ app.include_router(demo_public_router)
 app.include_router(demo_router)
 app.include_router(ingest_router)
 app.include_router(inspect_router)
+app.mount(MCP_HTTP_PATH, build_mcp_app(root=str(settings.core_memory_root)))
 
 STATE_PATHS = {'/api/demo/state', '/v1/memory/inspect/state'}
 # Deploy tick: keep backend commits observable for Render auto-deploy health.
