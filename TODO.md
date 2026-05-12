@@ -20,10 +20,16 @@ MCP config block.
 
 **Gap:** Core Memory has the logic; it just hasn't been surfaced as a proper MCP transport.
 
-**Status:** Closed in Core-Memory PR #136 (`feb08489f05074c315007d83e55881b1f79b3041`)
-and included in this demo backend pin. The shipped MCP v1 surface mirrors the public
-verbs (`capture`, `recall`, `ingest`, `status`) rather than the older REST-only typed
-operation names; `/v1/mcp/*` REST endpoints remain unchanged.
+**Status:** Closed, deployed, and smoke-tested. Core-Memory PR #136
+(`feb08489f05074c315007d83e55881b1f79b3041`) added the protocol server; hosted demo
+follow-ups mounted it, started the MCP session manager lifespan, and included the public
+host allow-list from Core-Memory PR #137 (`cd6904e1bc7133c8229c04b7b0be5fe452ec01f3`).
+Final hosted smoke passed against Render and the public demo: `/mcp/healthz`, MCP
+`initialize`, `list_tools`, `list_prompts`, and `call_tool("status")`. The public
+Vercel URL for protocol clients is `https://demo.usecorememory.com/mcp` (no trailing
+slash); direct Render also accepts `/mcp/`. The shipped MCP v1 surface mirrors the
+public verbs (`capture`, `recall`, `ingest`, `status`) rather than the older REST-only
+typed operation names; `/v1/mcp/*` REST endpoints remain unchanged.
 
 **Tasks:**
 - [x] Add an MCP streamable-HTTP server endpoint at `/mcp` (mount alongside the existing
@@ -107,6 +113,12 @@ generalized from LoCoMo-specific to generic transcript input.
       returns `{job_id}` — callers poll `/api/ingest/jobs/{job_id}` for status; queued
       deployments persist through `benchmark_store.read_job(job_id)`.
 
+**Status:** Closed, deployed, and smoke-tested. Hosted demo PRs added generic
+transcript normalization/pairing, `POST /api/ingest/transcript`, job status polling,
+and inline production execution via `TRANSCRIPT_INGEST_RUN_MODE` while preserving the
+queue path. Deployed smoke ingested a transcript and recalled the imported fact from
+chat.
+
 **Do not use** `ingest_locomo_turns()` / `MemoryStore.add_bead()` directly — that path
 bypasses the canonical runtime. Stay on Core Memory's canonical turn-finalization boundary.
 
@@ -125,8 +137,13 @@ common contract.
 **Gap:** Adopters writing against Core Memory hit different shapes per surface; demos
 and CLI drift over time.
 
+**Status:** Partially implemented. Core-Memory now has `core_memory.retrieval.contracts.RecallResult`
+and the demo has `POST /api/recall` returning the contract, but #4 remains open until
+CLI JSON, `/api/chat`, REST, MCP, and direct-library parity are locked by tests and the
+frontend consumes the same evidence/source model.
+
 **Tasks:**
-- [ ] Define `RecallResult` in `shared/contracts.py` (or main-repo equivalent) with fields:
+- [x] Define `RecallResult` in `shared/contracts.py` (or main-repo equivalent) with fields:
       `answer`, `why`, `evidence: [{bead_id, type, title, content_excerpt}]`,
       `sources: [{turn_id, session_id, speaker, ts}]`, plus `tier_path` and `steps`
       (observability into which internal tier the orchestrator hit — see item #5)
@@ -152,8 +169,14 @@ bespoke per-demo logic.
 **Gap:** No grounded multi-hop recall endpoint that surfaces evidence + sources behind a
 single verb. The demo's headline feature can't be wired without it.
 
+**Status:** Partially implemented and deployed. Core-Memory has `core_memory.retrieval.agent.recall(...)`,
+public `capture`/`recall` aliases, MCP `recall`, and hosted demo `POST /api/recall`.
+Remaining closeout is parity and productization: `/api/chat` must emit/use the same
+contract without bespoke drift, CLI JSON must match, MCP structured output needs parity
+tests, effort semantics need tightening, and the UI needs evidence/source transparency.
+
 **Tasks:**
-- [ ] Build the orchestrator in the main Core-Memory repo (see Core-Memory item #5 /
+- [x] Build the orchestrator in the main Core-Memory repo (see Core-Memory item #5 /
       `core_memory/retrieval/agent.py`) — public entrypoint
       `recall(query, root, *, effort="medium", speaker=None) -> RecallResult`.
       Public effort modes are `"low" | "medium" | "high"`; internal tier choice is
@@ -167,8 +190,8 @@ single verb. The demo's headline feature can't be wired without it.
         benchmark/audit/thorough mode, but still bounded and deterministic.
 - [ ] Keep `effort="dynamic"` out of the first orchestrator behavior except as a documented
       future mode; do not let MVP adoption depend on opaque LLM-chosen effort.
-- [ ] Add `POST /api/recall` to the demo backend wired to the orchestrator.
-- [ ] Return the `RecallResult` shape from item #4.
+- [x] Add `POST /api/recall` to the demo backend wired to the orchestrator.
+- [x] Return the `RecallResult` shape from item #4.
 - [ ] Update `/api/chat` to call the same orchestrator internally so demo and CLI
       behave identically for grounded recall queries.
 - [ ] Next visible demo feature: answer transparency UI.
@@ -347,19 +370,17 @@ Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the
 |---|------|--------|-----------------|
 | 1 | MCP protocol server at `/mcp` | Done | Very High |
 | 2 | `capture` / `recall` aliases | Done | High |
-| 3 | Async transcript ingestion pipeline | S | High |
+| 3 | Async transcript ingestion pipeline | Done | High |
 | 4 | Shared `RecallResult` output contract | S | Medium-High |
 | 5 | `POST /api/recall` (single-verb recall) | M | Very High |
 | 6 | LoCoMo / LongMemEval scoring harness | M | High (competitive lever) |
 | 7a | Agent instructions → OpenClaw manifest (Option B) | Done | High |
-| 7b | Agent instructions → MCP prompt resource (Option A) | Done, pending post-deploy smoke | Very High |
+| 7b | Agent instructions → MCP prompt resource (Option A) | Done | Very High |
 | 8 | Promote async transcript ingest to Core-Memory demo/CLI/MCP | M | High |
 
-**Week plan status:** #1, #2, #7a, and #7b are closed in code/TODO tracking.
-#1/#7b still need post-deploy smoke from the hosted demo after this pin lands: verify
-`/mcp/healthz`, tool advertisement, and prompt enumeration for `core-memory.agent-guide`. #3 is assembly work — the benchmark harness already provides
-the job queue, worker, turn loop, flush policy, and association synthesis; the real
-work is the normalizer and the pairing step.
+**Week plan status:** #1, #2, #3, #7a, and #7b are closed in code/TODO tracking
+and have deployed smoke evidence. #4 and #5 are the active closeout focus: make
+`RecallResult` the single contract across direct-library, CLI, REST, chat, MCP, and UI.
 
 **Sequence after the original three (#1–#3):** #4 ships the shared contract that #5
 depends on. #5 ships `/api/recall` and the single-verb orchestrator (paired with the
