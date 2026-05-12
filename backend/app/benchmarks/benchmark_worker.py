@@ -9,7 +9,9 @@ from app.core.semantic_env import configure_shared_semantic_backend_env
 configure_shared_semantic_backend_env()
 
 from app.benchmarks import benchmark_store
+from app.core.config import settings
 from app.core.runtime import run_benchmark
+from app.ingest.transcript import run_transcript_ingest_job
 
 
 def run_once() -> int:
@@ -18,10 +20,15 @@ def run_once() -> int:
         print('benchmark_worker: no queued job')
         return 0
     job_id = str(job.get('job_id') or '')
+    request = dict(job.get('request') or {})
     kwargs = dict(job.get('kwargs') or {})
-    print(f'benchmark_worker: running {job_id}')
+    kind = str(request.get('kind') or kwargs.get('kind') or 'benchmark').strip() or 'benchmark'
+    print(f'benchmark_worker: running {job_id} kind={kind}')
     try:
-        out = run_benchmark(**kwargs)
+        if kind == 'transcript_ingest':
+            out = run_transcript_ingest_job(root=settings.core_memory_root, max_turns=int(settings.replay_max_turns), **kwargs)
+        else:
+            out = run_benchmark(**kwargs)
     except Exception as exc:
         benchmark_store.finish_job(job_id, error=str(exc))
         print(f'benchmark_worker: failed {job_id}: {exc}', file=sys.stderr)

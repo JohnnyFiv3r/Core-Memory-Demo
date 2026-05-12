@@ -270,6 +270,7 @@ def read_active_job() -> dict[str, Any] | None:
             SELECT job_id, status, request, kwargs, result, error, attempts, created_at, updated_at, started_at, finished_at
             FROM benchmarks.jobs
             WHERE status IN ('queued', 'running')
+              AND COALESCE(request->>'kind', 'benchmark') != 'transcript_ingest'
             ORDER BY created_at ASC
             LIMIT 1
             """

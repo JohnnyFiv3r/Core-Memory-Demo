@@ -65,8 +65,8 @@ MCP config block.
 
 ## 3. Async transcript ingestion pipeline
 
-**Adopter expectation:** `POST /api/remember` returns `202 Accepted` immediately; ingestion
-happens in the background. Integrations never block on write latency.
+**Adopter expectation:** `POST /api/ingest/transcript` returns `202 Accepted` immediately;
+ingestion happens in the background. Integrations never block on write latency.
 
 **What Core Memory has:** The benchmark harness in `Core-Memory-Demo` is already most of
 the way there. The infrastructure exists and is production-quality — it just needs to be
@@ -76,29 +76,30 @@ generalized from LoCoMo-specific to generic transcript input.
 - `benchmark_store.py` — Postgres job queue with `enqueue_job` → `claim_next_job`
   (`FOR UPDATE SKIP LOCKED`) → `finish_job`. Already the right pattern for async ingestion.
 - `benchmark_worker.py` — claim-one-job-and-run dispatch loop. Keep as-is.
-- `replay_locomo_sample()` in `transcript_only` mode — the turn iteration, `emit_turn_finalized()`
-  + `process_memory_event()` per turn, `per_session`/`end_only` flush policy, and
+- `replay_locomo_sample()` in `transcript_only` mode — the turn iteration, canonical
+  turn-finalization boundary, `per_session`/`end_only` flush policy, and
   `_synthesize_locomo_associations()` for temporal order and entity-overlap edges. All of
   this is generic enough to keep.
 
 **What needs to change:**
-- [ ] Write a **thin input normalizer** that maps a generic transcript schema
-      (`[{role, content, timestamp?}]`) to the same `_turn_envelope()` dict that the
-      LoCoMo replay already produces. The envelope fields (`session_id`, `turn_id`,
-      `user_query`, `assistant_final`, `metadata`) don't change — only the source schema does.
-- [ ] **Pair user+assistant turns** before the per-turn loop. The harness treats each
+- [x] Write a **thin input normalizer** that maps a generic transcript schema
+      (`[{role, content, timestamp?}]`) to canonical turn-envelope dicts. Current Core
+      Memory envelopes carry `turns=[{speaker, role, content, ts, metadata}]` plus
+      `session_id`, `turn_id`, and envelope `metadata`.
+- [x] **Pair user+assistant turns** before the per-turn loop. The harness treats each
       utterance as a separate bead; real transcript ingestion should group consecutive
-      `user`/`assistant` pairs so `user_query` and `assistant_final` are populated correctly.
-- [ ] **Replace `_extract_locomo_claims()`** with a generic pass — either a simple
-      NER/pattern step or just omit it initially. The harness works fine without claims;
-      they're an enrichment layer, not structural.
-- [ ] **Generalize the job `kwargs` schema** from LoCoMo params (`sample_id`, `sessions`)
+      `user`/`assistant` pairs so canonical `turns` preserve the completed exchange.
+- [x] **Replace `_extract_locomo_claims()`** with a generic pass — either a simple
+      NER/pattern step or just omit it initially. The first implementation omits generic
+      claim extraction; claims remain an enrichment layer, not structural.
+- [x] **Generalize the job `kwargs` schema** from LoCoMo params (`sample_id`, `sessions`)
       to `{transcript_id, turns: [...], session_id, flush_policy}`.
-- [ ] **Add `POST /ingest/transcript`** to the demo backend that enqueues a job and
-      returns `{job_id}` — callers poll `benchmark_store.read_job(job_id)` for status.
+- [x] **Add `POST /ingest/transcript`** to the demo backend that enqueues a job and
+      returns `{job_id}` — callers poll `/api/ingest/jobs/{job_id}` for status; queued
+      deployments persist through `benchmark_store.read_job(job_id)`.
 
 **Do not use** `ingest_locomo_turns()` / `MemoryStore.add_bead()` directly — that path
-bypasses the canonical runtime. Stay on `emit_turn_finalized()` + `process_memory_event()`.
+bypasses the canonical runtime. Stay on Core Memory's canonical turn-finalization boundary.
 
 ---
 
@@ -257,6 +258,45 @@ users. Do Option A when item #1 ships — it solves this permanently across all 
 
 ---
 
+## 8. Promote async transcript ingest to Core-Memory demo, CLI, and MCP surfaces
+
+**Adopter expectation:** The hosted demo proves async transcript ingestion first, but
+users should eventually get the same capability from local Core Memory surfaces: the
+in-repo demo, CLI, MCP, and direct-library APIs.
+
+**What the hosted demo will have after item #3:** A source-adapter layer that accepts
+generic transcript-like input, enqueues a background job, normalizes/pairs turns, and
+runs them through the canonical Core Memory turn-finalization pipeline.
+
+**Gap:** If this stays only in the hosted demo backend, the operational behavior and
+data contract become another demo-only feature instead of the durable ingestion model.
+
+**Tasks:**
+- [ ] After hosted demo item #3 lands, copy the stable request/response contract into
+      `Core-Memory/demo` so the local demo exercises the same async ingest path.
+- [ ] Identify the boundary between demo-owned operational queueing and Core-Memory-owned
+      ingestion semantics; keep memory behavior in Core Memory, keep hosted deployment
+      plumbing in demo repos.
+- [ ] Add a direct-library helper once the contract is proven, e.g.
+      `ingest_transcript(...)` or `capture_many(...)`, implemented on top of canonical
+      turn finalization rather than direct bead writes.
+- [ ] Add CLI support for file-based ingestion, e.g.
+      `core-memory ingest transcript path.json --root ...`, returning a synchronous
+      summary locally and documenting how hosted async jobs differ.
+- [ ] Extend the MCP `ingest` tool to accept the same transcript schema or a file/path
+      reference, so MCP clients can import conversation history without custom REST glue.
+- [ ] Preserve the locked verb taxonomy: `capture` for observed conversation turns,
+      future `remember(text, type=...)` for declarative user-authored memory, and
+      `recall(query, effort=...)` for read. Do not turn transcript ingest into direct
+      declarative memory writes.
+- [ ] Add parity tests showing a tiny transcript ingested through hosted demo, local demo,
+      CLI, and MCP surfaces yields recallable evidence with the same bead/source IDs where
+      deterministic IDs are available.
+
+**Non-goals:** Do not move the hosted demo's Postgres job queue wholesale into the library.
+Core Memory should own normalization/canonical ingestion semantics; each deployment
+surface can choose sync vs async execution and its own queue backend.
+
 ## Cross-repo dependencies / references
 
 Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the main
@@ -299,6 +339,7 @@ Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the
 | 6 | LoCoMo / LongMemEval scoring harness | M | High (competitive lever) |
 | 7a | Agent instructions → OpenClaw manifest (Option B) | XS | High |
 | 7b | Agent instructions → MCP prompt resource (Option A) | XS | Very High |
+| 8 | Promote async transcript ingest to Core-Memory demo/CLI/MCP | M | High |
 
 **Week plan:** #2 and #7a are hours each — ship them first. #7a stops the behavioral
 spec from being a stranded doc for existing OpenClaw users. #1 unlocks Claude Code /
@@ -310,7 +351,9 @@ work is the normalizer and the pairing step.
 **Sequence after the original three (#1–#3):** #4 ships the shared contract that #5
 depends on. #5 ships `/api/recall` and the single-verb orchestrator (paired with the
 Core-Memory main-repo agentic-retrieval work). #6 wraps the existing benchmark harness
-with scoring — pairs naturally with #3 once async ingest is generic.
+with scoring — pairs naturally with #3 once async ingest is generic. #8 is the follow-on
+promotion path for #3: prove async transcript ingest in the hosted demo first, then
+carry the stable contract into `Core-Memory/demo`, CLI, MCP, and direct-library surfaces.
 
 **Cross-repo note on naming (locked):** The verb taxonomy across both repos is
 `capture` (canonical write — observed conversation), `remember(text, type=…)`
