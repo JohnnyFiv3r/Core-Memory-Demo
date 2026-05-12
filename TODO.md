@@ -159,6 +159,16 @@ single verb. The demo's headline feature can't be wired without it.
   - [ ] Frontend: expandable evidence/source cards under answer results.
   - [ ] Show retrieval tier path / diagnostics in the UI (which tiers ran, why they ran,
         and which evidence items grounded the answer).
+- [ ] Public effort naming: prefer adopter-friendly `effort="low|medium|high"`
+      because it matches Claude/Codex mental models; document them behaviorally as
+      low=fast direct lookup, medium=default grounded recall, high=deep multi-hop /
+      temporal / benchmark-grade recall.
+- [ ] Add a later `effort="dynamic"` mode where query parsing chooses low/medium/high
+      from query complexity, expected evidence shape, time constraints, and confidence.
+- [ ] Add query-planning metadata that fuzzy-defines the expected result shape before
+      retrieval, e.g. "why did we make decision X last week?" should expect decision
+      beads in the inferred date range plus linked supersession/update beads for current
+      context.
 - [ ] Once the recall orchestrator lands, tighten `recall(...)` request kwargs by either
       accepting only known top-level recall params or namespacing extras under something
       like `filters={...}` / `constraints={...}`.
