@@ -376,7 +376,8 @@ Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the
 - **#7 agent instructions in live integrations** should reference Core-Memory behavior
   guardrails from #1/#3/#4: do not echo user text as `because`, treat user questions as
   retrieval/context rather than declarative memory, and use only canonical relationship
-  types.
+  types. Core-Memory #4 is closed as of 2026-05-13: question and retrieval-imperative turns
+  are forced to `context` before LLM bead typing and field-judge output cannot promote them.
 
 ---
 
