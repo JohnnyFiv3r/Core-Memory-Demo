@@ -373,11 +373,15 @@ Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the
   fixes: extracted `because` reasoning (#1), canonical association relationship types (#3),
   grounding hashes (#5), and monotonic claim supersede ordering (#6). Benchmark runs should
   stay on full Core Memory recall/trace paths rather than flat-search-only shortcuts.
+  Core-Memory #1 is closed as of 2026-05-13: `because` is defined in the live prompt path as
+  grounded free-text support for applied semantic labels/state, with short user-text quotes
+  allowed when they are the actual support and weak filler/speculation rejected.
 - **#7 agent instructions in live integrations** should reference Core-Memory behavior
-  guardrails from #1/#3/#4: do not echo user text as `because`, treat user questions as
-  retrieval/context rather than declarative memory, and use only canonical relationship
-  types. Core-Memory #4 is closed as of 2026-05-13: question and retrieval-imperative turns
-  are forced to `context` before LLM bead typing and field-judge output cannot promote them.
+  guardrails from #1/#3/#4: treat `because` as grounded label/state support rather than
+  guessed filler, treat user questions as retrieval/context rather than declarative memory,
+  and use only canonical relationship types. Core-Memory #4 is closed as of 2026-05-13:
+  question and retrieval-imperative turns are forced to `context` before LLM bead typing and
+  field-judge output cannot promote them.
 
 ---
 
