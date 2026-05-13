@@ -311,24 +311,31 @@ data contract become another demo-only feature instead of the durable ingestion 
 **Tasks:**
 - [ ] After hosted demo item #3 lands, copy the stable request/response contract into
       `Core-Memory/demo` so the local demo exercises the same async ingest path.
-- [ ] Identify the boundary between demo-owned operational queueing and Core-Memory-owned
+- [x] Identify the boundary between demo-owned operational queueing and Core-Memory-owned
       ingestion semantics; keep memory behavior in Core Memory, keep hosted deployment
-      plumbing in demo repos.
-- [ ] Add a direct-library helper once the contract is proven, e.g.
+      plumbing in demo repos. Core Memory now owns synchronous normalization/pairing and
+      canonical turn-finalization; hosted demo keeps Postgres queue/run-mode plumbing.
+- [x] Add a direct-library helper once the contract is proven, e.g.
       `ingest_transcript(...)` or `capture_many(...)`, implemented on top of canonical
       turn finalization rather than direct bead writes.
-- [ ] Add CLI support for file-based ingestion, e.g.
+- [x] Add CLI support for file-based ingestion, e.g.
       `core-memory ingest transcript path.json --root ...`, returning a synchronous
       summary locally and documenting how hosted async jobs differ.
-- [ ] Extend the MCP `ingest` tool to accept the same transcript schema or a file/path
+- [x] Extend the MCP `ingest` tool to accept the same transcript schema or a file/path
       reference, so MCP clients can import conversation history without custom REST glue.
-- [ ] Preserve the locked verb taxonomy: `capture` for observed conversation turns,
+- [x] Preserve the locked verb taxonomy: `capture` for observed conversation turns,
       future `remember(text, type=...)` for declarative user-authored memory, and
-      `recall(query, effort=...)` for read. Do not turn transcript ingest into direct
-      declarative memory writes.
+      `recall(query, effort=...)` for read. Transcript ingest stays an observed-turn import
+      path and does not perform direct declarative memory writes.
 - [ ] Add parity tests showing a tiny transcript ingested through hosted demo, local demo,
       CLI, and MCP surfaces yields recallable evidence with the same bead/source IDs where
       deterministic IDs are available.
+
+**Status:** Partially closed in Core-Memory. The stable transcript normalization/pairing
+contract has been promoted into the library as `ingest_transcript(...)`, exported from the
+public package, exposed via `core-memory ingest transcript <path>`, and reused by the MCP
+`ingest` tool for both inline transcript turns and local file imports. Remaining work is
+local-demo async parity plus full cross-surface parity evidence against the hosted demo.
 
 **Non-goals:** Do not move the hosted demo's Postgres job queue wholesale into the library.
 Core Memory should own normalization/canonical ingestion semantics; each deployment
@@ -376,11 +383,13 @@ Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the
 | 6 | LoCoMo / LongMemEval scoring harness | M | High (competitive lever) |
 | 7a | Agent instructions → OpenClaw manifest (Option B) | Done | High |
 | 7b | Agent instructions → MCP prompt resource (Option A) | Done | Very High |
-| 8 | Promote async transcript ingest to Core-Memory demo/CLI/MCP | M | High |
+| 8 | Promote async transcript ingest to Core-Memory demo/CLI/MCP | Partial | High |
 
 **Week plan status:** #1, #2, #3, #7a, and #7b are closed in code/TODO tracking
-and have deployed smoke evidence. #4 and #5 are the active closeout focus: make
-`RecallResult` the single contract across direct-library, CLI, REST, chat, MCP, and UI.
+and have deployed smoke evidence. #8 is partially closed in Core-Memory for direct-library,
+CLI, and MCP surfaces; local-demo async parity remains. #4 and #5 remain the active
+closeout focus for making `RecallResult` the single contract across direct-library, CLI,
+REST, chat, MCP, and UI.
 
 **Sequence after the original three (#1–#3):** #4 ships the shared contract that #5
 depends on. #5 ships `/api/recall` and the single-verb orchestrator (paired with the
