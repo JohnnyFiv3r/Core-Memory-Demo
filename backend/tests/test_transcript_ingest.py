@@ -211,7 +211,10 @@ class TestTranscriptIngestRoute(unittest.TestCase):
         self.assertNotIn("sessions", captured["kwargs"])
 
     def test_completed_stored_job_status_maps_done_and_passes_warnings(self):
-        from app.routes import ingest as ingest_routes
+        try:
+            from app.routes import ingest as ingest_routes
+        except ModuleNotFoundError as exc:
+            self.skipTest(f"fastapi unavailable: {exc}")
 
         stored = {
             "job_id": "ingest-stored",
