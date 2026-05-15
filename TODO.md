@@ -272,6 +272,34 @@ and surfacing it in `/api/chat`. Items #3, #8 are complete on the branch (async 
 PR #145 (auto-detection, degraded fallback, `semantic_doctor()` hint). #6 is fully
 implemented (scoring, per-category aggregation, reproducible artifacts).
 
+---
+
+## 10. Client plugins — Claude Code hooks + Hermes
+
+**What exists:** OpenClaw plugin ships today (`plugins/openclaw-core-memory-bridge/`).
+It injects the agent guide and calls `capture`/`recall` automatically without
+requiring the LLM to explicitly invoke MCP tools.
+
+**Gap:** Claude Code and Hermes are the two highest-value clients without a dedicated
+plugin. Both have hook/plugin systems that support automatic capture and recall.
+
+**Tasks:**
+- [ ] **Claude Code plugin** — implement using Claude Code hooks (pre/post message).
+      Auto-capture turns on every assistant response. Auto-inject `recall()` result
+      into context at conversation start. Same shape as the OpenClaw bridge.
+- [ ] **Hermes plugin** — author native Hermes plugin. Understand Hermes plugin API
+      first; model on OpenClaw bridge architecture.
+- [ ] **Plugin development guide** — `docs/plugins.md` documenting the interface so
+      third-party clients can build their own. Unlocks ecosystem growth.
+- [ ] Update README Supported Clients table: move both from "In progress" to
+      `[Plugin]` once shipped.
+
+**Priority:** Medium. MCP connection works for both clients today. Plugins remove
+the LLM tool-calling requirement and make capture/recall invisible to the agent,
+which meaningfully improves adoption ergonomics.
+
+---
+
 **Cross-repo note on naming (locked):** The verb taxonomy across both repos is
 `capture` (canonical write — observed conversation), `remember(text, type=…)`
 (declarative user-authored write — future, separate item), `recall(query, effort=…)`
