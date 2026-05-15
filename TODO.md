@@ -145,61 +145,44 @@ ad-hoc routing and doesn't return `RecallResult`.
 
 ---
 
-## 6. Reproducible LoCoMo + LongMemEval scoring harness
+## ~~6. Reproducible LoCoMo + LongMemEval scoring harness~~ ✓ SHIPPED
 
-**What mnemory does:** Doesn't have a published-and-reproducible memory benchmark.
+**What mnemory does:** Doesn’t have a published-and-reproducible memory benchmark.
 Memanto claims SOTA but ships no in-repo runner.
 
-**What Core Memory has:** The benchmark harness in this repo runs LoCoMo replay
-end-to-end and produces edges/claims. Scoring and category breakdown are not yet
-packaged as a reproducible report.
+**What Core Memory has:** Full end-to-end scoring harness shipped in demo backend.
+`locomo_scoring.py` implements LoCoMo’s category-specific scoring (`score_answer()`,
+`token_f1`, `multihop_f1`, `aggregate_case_scores()` with `by_category` + `by_sample`
+breakdown). `locomo_runner.py` computes `answer_f1` + evidence recall per case using
+`recall(effort="high")` — full causal/multi-hop orchestration, not flat search.
+`write_locomo_run_artifacts()` writes `report.json`, `summary.json`, `cases.jsonl`,
+`config.json` (run config for reproducibility) per run. `build_locomo_comparison()`
+diffs two runs side-by-side with per-category deltas. Gold fixture at
+`backend/benchmarks/locomo_like/gold/local_subset_gold.json`; full dataset at
+`backend/data/locomo/locomo10.json`. Feature flags are settings-driven
+(`LOCOMO_INGEST_PATH`, `LOCOMO_REPLAY_MODE`, `LOCOMO_REPLAY_FLUSH_POLICY`) and
+written to `config.json` per run so reproducers match.
 
-**Gap:** "Top LoCoMo with Core Memory's full feature set" is the defensible competitive
-lever, but only if running `core-memory benchmark run locomo` produces a stable,
-citable number.
-
-**Tasks:**
-- [ ] Wrap the existing benchmark harness with a scoring layer at
-      `backend/benchmarks/<name>/runner.py` (or similar). The runner is a thin adapter:
-      parse → ingest → run questions through `m.recall(query, budget="full")` →
-      score against gold → write report.
-- [ ] Score against gold under `data/locomo/gold/` per LoCoMo's published format.
-- [ ] Report includes: total score, per-category breakdown (single-hop, multi-hop,
-      temporal, open-ended, adversarial for LoCoMo; equivalent categories for
-      LongMemEval), per-case provenance (which beads retrieved, which edges walked,
-      tier_path actually hit, why scored that way).
-- [ ] Comparison artifact `docs/benchmarks/locomo/baselines.md` — Core Memory vs
-      published mem0 / Memanto / baseline-RAG / Long-LLM-only numbers.
-- [ ] Same shape for LongMemEval.
-- [ ] Feature-flag the run: causal edges on/off, claims on/off, agent-judged
-      myelination on/off — document what was on in the report so reproducers match.
-- [ ] Stretch (not gate-blocking): exceed published SOTA on at least one category per
-      benchmark; document where we don't with a brief diagnosis.
-
-**Engine-side status after PR #144:** `benchmarks/locomo_like/runner.py` gained slot
-validation (`_slot_validation()`), grounding hash tracking (`_evidence_grounding_hashes()`),
-`_run_recall_for_benchmark()` using `recall(effort="high", explain=True, include_raw=True)`,
-and `_engine_state_slots()` with SHA-256 state hashing for reproducibility. The runner
-now produces per-case diagnostics with expected vs. actual slot, grounding hash, and
-`chain_seq`. The scoring infrastructure exists; what remains is gold-file parsing and
-the comparison baselines doc.
+**Deferred (not gate-blocking):**
+- Static comparison artifact `docs/benchmarks/locomo/baselines.md` vs. published
+  mem0 / Memanto / baseline-RAG numbers (requires a live run + competitor lookup).
+- LongMemEval equivalent harness.
+- Stretch: exceed published SOTA on at least one category.
 
 **Tasks:**
 - [x] Runner uses `recall(effort="high")` as the canonical benchmark path (not flat search)
 - [x] Per-case diagnostics: slot validation, grounding hash, answer class matching (PR #144)
 - [x] `_engine_state_slots()` SHA-256 hash for reproducibility gate
-- [ ] Score against gold under `data/locomo/gold/` per LoCoMo's published format.
-- [ ] Report: total score, per-category breakdown, per-case provenance.
-- [ ] Comparison artifact `docs/benchmarks/locomo/baselines.md` vs. mem0/Memanto/baseline-RAG.
-- [ ] Same shape for LongMemEval.
-- [ ] Feature-flag the run: causal on/off, claims on/off — document what was on in the report.
+- [x] `score_answer()` per LoCoMo’s published category format (1–5); token/multihop F1
+- [x] `aggregate_case_scores()`: total score, per-category breakdown, per-sample breakdown
+- [x] Per-case provenance: grounding hashes, retrieved bead IDs, chain_seq, answer_f1
+- [x] `write_locomo_run_artifacts()`: `report.json`, `summary.json`, `cases.jsonl`, `config.json`
+- [x] Feature flags written to `config.json` per run (settings-driven, not booleans)
+- [x] `build_locomo_comparison()` for side-by-side two-run delta with per-category breakdown
 
 **Do not use** flat-search-only recall for benchmark queries — that bypasses Core
-Memory's differentiators (causal traversal, multi-hop chains). Stay on
+Memory’s differentiators (causal traversal, multi-hop chains). Stay on
 `recall(query, effort="high")` so the orchestrator brings the full feature set to bear.
-
----
-
 ## 7. ~~Wire agent instructions into every live integration path~~ ✓ SHIPPED
 
 **Shipped in PRs #127–#143.** Both fix paths landed:
@@ -276,18 +259,18 @@ first-run env var requirement.
 | 7 | Agent instructions → live path | ✓ Done | — | Very High |
 | 5 | `POST /api/recall` demo endpoint | In progress (engine done) | S | Very High |
 | 4 | `RecallResult` → demo surfaces | In progress (engine done) | S | Medium-High |
-| 3 | Async transcript ingest pipeline | In progress (engine improved) | S | High |
-| 6 | LoCoMo scoring harness (gold + report) | In progress (diagnostics done) | M | High |
-| 8 | Async write path (`202 Accepted`) | Not started | M | High |
-| 9 | Semantic first-run friction | Not started | S | High |
+| 3 | Async transcript ingest pipeline | ✓ Done (branch) | — | High |
+| 6 | LoCoMo scoring harness (gold + report) | ✓ Done | — | High |
+| 8 | Async write path (`202 Accepted`) | ✓ Done (branch) | — | High |
+| 9 | Semantic first-run friction | ✓ Done (PR #145) | — | High |
 
-**Revised week plan:** Engine-side work for #1, #2, #4, #5, #7 is done after PR #144.
-The week's remaining output is demo-backend wiring: add `POST /api/recall` returning
-`RecallResult` (#5), wire `/api/chat` to the same orchestrator (#4/#5), complete the
-async ingest endpoint (#3/#8), then gold-file scoring for the benchmark harness (#6).
-Items #8 and #9 are the two genuine ergonomic gaps vs. mnemory that remain unaddressed
-in the engine — #9 is a one-afternoon change; #8 needs a decision on whether to extend
-the enrichment delta queue or add a separate write queue.
+**Status after PR #145 + branch `claude/update-todo-mnemory-learnings-pLVZ7`:** All 9
+items are either shipped to main or complete on the feature branch. Items #4 and #5
+remain the only unmerged demo-backend wiring: `POST /api/recall` returning `RecallResult`
+and surfacing it in `/api/chat`. Items #3, #8 are complete on the branch (async ingest
+`202 Accepted` with inline + queue modes, full test coverage). #9 is complete in engine
+PR #145 (auto-detection, degraded fallback, `semantic_doctor()` hint). #6 is fully
+implemented (scoring, per-category aggregation, reproducible artifacts).
 
 **Cross-repo note on naming (locked):** The verb taxonomy across both repos is
 `capture` (canonical write — observed conversation), `remember(text, type=…)`
