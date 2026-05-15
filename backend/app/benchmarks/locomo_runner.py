@@ -21,6 +21,10 @@ try:
     from core_memory.retrieval.tools import memory as memory_tools
 except Exception:  # pragma: no cover
     memory_tools = None  # type: ignore
+try:
+    from core_memory.retrieval.contracts import recall_result_from_memory_execute
+except Exception:  # pragma: no cover
+    recall_result_from_memory_execute = None  # type: ignore
 
 try:
     from core_memory.retrieval.trace import trace_request
@@ -349,6 +353,9 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
     }
     try:
         result = memory_tools.execute(req, root=root, explain=False)
+        recall_payload: dict[str, Any] = {}
+        if recall_result_from_memory_execute is not None:
+            recall_payload = recall_result_from_memory_execute(result, query=req["query"], effort="high", include_raw=False).to_dict()
         raw_results = list(result.get("results") or [])
         if not raw_results and str(result.get("backend") or "").lower() != "lexical":
             # Some local/compare benchmark roots can have a usable lexical path
@@ -455,6 +462,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             "trace": trace_meta,
             "hydration": hydrate_meta,
             "retrieval_pipeline": pipeline_name,
+            "recall_result": recall_payload,
             "diagnostics": {
                 "raw_result_count": len(raw_results),
                 "raw_result_keys": sorted({str(k) for row in raw_results[:1] for k in dict(row or {}).keys()}),
@@ -469,6 +477,8 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
                 "answerer_used_dia_ids": list(answer.get("used_dia_ids") or []),
                 "answerer_unsupported": bool(answer.get("unsupported")),
                 "hydration": hydrate_meta,
+                "recall_tier_path": list(recall_payload.get("tier_path") or []),
+                "recall_status": str(recall_payload.get("status") or ""),
             },
         }
     except Exception as exc:

@@ -34,33 +34,42 @@ def _prune_ingest_jobs() -> None:
 
 
 def _safe_job_payload(row: dict[str, Any]) -> dict[str, Any]:
+    result = dict(row.get('result') or {}) if isinstance(row.get('result'), dict) else {}
+    status = str(row.get('status') or 'queued')
+    public_status = {'queued': 'pending', 'completed': 'done'}.get(status, status)
     out: dict[str, Any] = {
         'ok': True,
         'job_id': str(row.get('job_id') or ''),
         'kind': 'transcript_ingest',
-        'status': str(row.get('status') or 'queued'),
+        'status': public_status,
         'done': bool(row.get('done')),
         'created_ms': int(row.get('created_ms') or 0),
         'updated_ms': int(row.get('updated_ms') or 0),
+        'ingested_count': int(result.get('turns_ingested') or result.get('ingested_count') or 0),
+        'associations_created': result.get('associations_created') or {'count': 0, 'by_type': {}, 'items': []},
     }
     if row.get('error'):
         out['error'] = str(row.get('error') or '')
-    if isinstance(row.get('result'), dict):
-        out['result'] = dict(row.get('result') or {})
+    if result:
+        out['result'] = result
     return out
 
 
 def _stored_job_payload(stored: dict[str, Any]) -> dict[str, Any]:
     status = str((stored or {}).get('status') or '')
     result = stored.get('result') if isinstance(stored.get('result'), dict) else None
+    result_d = dict(result or {})
+    public_status = {'queued': 'pending', 'queued_external': 'pending', 'completed': 'done'}.get(status, status)
     out: dict[str, Any] = {
         'ok': True,
         'job_id': str((stored or {}).get('job_id') or ''),
         'kind': 'transcript_ingest',
-        'status': status,
+        'status': public_status,
         'done': status in {'completed', 'failed'},
         'error': (stored or {}).get('error'),
         'result': result,
+        'ingested_count': int(result_d.get('turns_ingested') or result_d.get('ingested_count') or 0),
+        'associations_created': result_d.get('associations_created') or {'count': 0, 'by_type': {}, 'items': []},
     }
     for key in ('created_at', 'updated_at', 'started_at', 'finished_at'):
         value = (stored or {}).get(key)
@@ -114,7 +123,6 @@ async def ingest_transcript(request: Request):
         'session_id': str(normalized.get('session_id') or ''),
         'turns': list(body.get('turns') or []),
         'flush_policy': str(normalized.get('flush_policy') or 'end_only'),
-        'metadata': dict(body.get('metadata') or {}) if isinstance(body.get('metadata'), dict) else {},
     }
     request_payload = {
         'kind': 'transcript_ingest',
@@ -183,3 +191,8 @@ def ingest_job_status(job_id: str):
     if not isinstance(row, dict):
         return JSONResponse({'ok': False, 'error': 'ingest_job_not_found'}, status_code=404)
     return _safe_job_payload(row)
+
+
+@router.get('/ingest/job/{job_id}')
+def ingest_job_status_singular(job_id: str):
+    return ingest_job_status(job_id)

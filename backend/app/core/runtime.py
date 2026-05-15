@@ -49,6 +49,7 @@ from core_memory.persistence.store_claim_ops import write_claim_updates_to_bead,
 from core_memory.runtime.engine import process_flush, process_turn_finalized
 from core_memory.runtime.jobs import async_jobs_status, run_async_jobs
 from core_memory.runtime.association_pass import run_association_pass
+from core_memory.schema.turn import Turn
 from core_memory.association.crawler_contract import merge_crawler_updates
 from core_memory.write_pipeline.continuity_injection import load_continuity_injection
 
@@ -64,6 +65,33 @@ from app.benchmarks.locomo_runner import run_locomo_retrieval_suite
 from app.benchmarks.locomo_scoring import aggregate_case_scores
 from app.benchmarks.locomo_suite import build_locomo_comparison, build_locomo_suite_metadata, ingest_locomo_samples, make_locomo_missing_dataset_response, write_locomo_run_artifacts
 from app.core.config import settings
+
+
+def _process_user_assistant_turn_finalized(
+    *,
+    root: str,
+    session_id: str,
+    turn_id: str,
+    transaction_id: str,
+    trace_id: str,
+    user_query: str,
+    assistant_final: str,
+    origin: str,
+    metadata: dict[str, Any] | None = None,
+) -> Any:
+    return process_turn_finalized(
+        root=root,
+        session_id=session_id,
+        turn_id=turn_id,
+        transaction_id=transaction_id,
+        trace_id=trace_id,
+        turns=[
+            Turn(speaker="user", role="user", content=str(user_query or "")),
+            Turn(speaker="assistant", role="assistant", content=str(assistant_final or "")),
+        ],
+        origin=origin,
+        metadata=dict(metadata or {}),
+    )
 
 
 @dataclass
@@ -445,7 +473,7 @@ def _replay_locomo_row(row: dict[str, Any]) -> dict[str, Any]:
     if row.get("query") is not None:
         metadata["locomo_image_query"] = row.get("query")
 
-    process_turn_finalized(
+    _process_user_assistant_turn_finalized(
         root=settings.core_memory_root,
         session_id=session_id,
         turn_id=turn_id,
@@ -1909,7 +1937,7 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
                     explain=False,
                 )
         answer = _build_fallback_answer(message, retrieval_preview)
-        process_turn_finalized(
+        _process_user_assistant_turn_finalized(
             root=settings.core_memory_root,
             session_id=SESSION.session_id,
             turn_id=turn_id,
@@ -1940,7 +1968,14 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
     recall_effort = _recall_effort_for_query(message)
 
     _emit_chat_progress(progress, "diagnostics", "Collecting recall diagnostics", recall_effort=recall_effort)
-    recall_payload = run_recall(message, effort=recall_effort, include_raw=True)
+    with semantic_mode(chat_semantic_mode):
+        recall_result = core_recall(
+            str(message or ""),
+            effort=recall_effort,
+            root=settings.core_memory_root,
+            include_raw=True,
+        )
+    recall_payload = _recall_result_to_payload(recall_result)
     recall_contract = _public_recall_contract(recall_payload)
     retrieval = dict(recall_payload.get("raw") or {})
 
@@ -2885,7 +2920,7 @@ def _materialize_locomo_setup(*, root: str, setup: dict[str, Any], case_id: str)
         af = str(t.get("assistant_final") or "").strip()
         if not uq or not af:
             continue
-        process_turn_finalized(
+        _process_user_assistant_turn_finalized(
             root=root,
             session_id=sid,
             turn_id=tid,
@@ -2947,7 +2982,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
         try:
-            dataset_meta, selected_cases, selected_samples = build_locomo_suite_metadata(
+            dataset_meta, selected_cases, selected_samples, _unused_answer_context = build_locomo_suite_metadata(
                 suite=suite_name,
                 sample_limit=sample_limit,
                 qa_limit=qa_limit,
@@ -3305,7 +3340,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
     if preload_from_demo:
         preloaded_rows = _load_preload_turns_from_live(max_turns=preload_turns_max)
         for rec in preloaded_rows:
-            process_turn_finalized(
+            _process_user_assistant_turn_finalized(
                 root=str(base_root),
                 session_id=str(rec.get("session_id") or "bench"),
                 turn_id=str(rec.get("turn_id") or uuid.uuid4().hex[:10]),

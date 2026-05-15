@@ -1,10 +1,12 @@
 from __future__ import annotations
 
 import re
+import json
 from datetime import datetime, timezone
+from pathlib import Path
 from typing import Any
 
-from core_memory.runtime.engine import process_flush, process_turn_finalized
+from core_memory.runtime.engine import _session_visible_bead_ids, process_flush, process_turn_finalized
 
 _SAFE_ID_RE = re.compile(r"[^A-Za-z0-9_.:-]+")
 _ROLE_ALIASES = {
@@ -102,10 +104,17 @@ def normalize_transcript_payload(payload: dict[str, Any], *, max_turns: int = 50
         pairs.append({'user': None, 'assistant': cur})
         i += 1
 
+    warnings: list[dict[str, Any]] = []
     envelopes: list[dict[str, Any]] = []
     for pair_index, pair in enumerate(pairs):
         user = pair.get('user')
         assistant = pair.get('assistant')
+        if isinstance(user, dict) and assistant is None:
+            warnings.append({
+                'code': 'unpaired_final_user_turn',
+                'message': 'Final user turn has no assistant response; ingesting it as a user-only turn.',
+                'source_index': int(user.get('index') or 0),
+            })
         first = user or assistant or {}
         last = assistant or user or {}
         turn_id = _safe_id(
@@ -166,6 +175,7 @@ def normalize_transcript_payload(payload: dict[str, Any], *, max_turns: int = 50
         'flush_policy': flush_policy,
         'turns_received': len(utterances),
         'turns_paired': len(envelopes),
+        'warnings': warnings,
         'envelopes': envelopes,
     }
 
@@ -181,6 +191,11 @@ def ingest_turn_envelopes(*, root: str, envelopes: list[dict[str, Any]], flush_p
         if session_id and session_id not in session_ids:
             session_ids.append(session_id)
         try:
+            if session_id:
+                prior_visible = _session_visible_bead_ids(root=root, session_id=session_id)
+                env['window_bead_ids'] = sorted(set(
+                    [str(x) for x in (env.get('window_bead_ids') or []) if str(x).strip()] + prior_visible
+                ))
             out = process_turn_finalized(root=root, **env)
             emitted_flag = bool(out.get('ok', True))
             row = {
@@ -188,6 +203,7 @@ def ingest_turn_envelopes(*, root: str, envelopes: list[dict[str, Any]], flush_p
                 'session_id': session_id,
                 'status': 'ingested' if emitted_flag else 'skipped_existing',
                 'worker_ok': bool(out.get('ok', True)),
+                'bead_ids': list(out.get('bead_ids') or []),
             }
             if emitted_flag:
                 emitted.append(row)
@@ -223,6 +239,41 @@ def ingest_turn_envelopes(*, root: str, envelopes: list[dict[str, Any]], flush_p
     }
 
 
+def _associations_created_summary(root: str, bead_ids: list[str]) -> dict[str, Any]:
+    created = {str(x) for x in (bead_ids or []) if str(x).strip()}
+    if not created:
+        return {'count': 0, 'by_type': {}, 'items': []}
+    try:
+        idx = json.loads((Path(root) / '.beads' / 'index.json').read_text(encoding='utf-8'))
+    except Exception:
+        return {'count': 0, 'by_type': {}, 'items': []}
+    rows: list[dict[str, Any]] = []
+    for assoc in (idx.get('associations') or []) if isinstance(idx, dict) else []:
+        if not isinstance(assoc, dict):
+            continue
+        src = str(assoc.get('source_bead') or assoc.get('source_bead_id') or '').strip()
+        tgt = str(assoc.get('target_bead') or assoc.get('target_bead_id') or '').strip()
+        if src not in created:
+            continue
+        rows.append({
+            'source': src,
+            'target': tgt,
+            'source_bead_id': src,
+            'target_bead_id': tgt,
+            'relationship': str(assoc.get('relationship') or ''),
+            'confidence': assoc.get('confidence'),
+            'reason_code': assoc.get('reason_code'),
+            'reason_text': assoc.get('reason_text') or assoc.get('rationale'),
+            'provenance': assoc.get('provenance'),
+        })
+    rows.sort(key=lambda r: (r.get('source_bead_id') or '', r.get('target_bead_id') or '', r.get('relationship') or ''))
+    by_type: dict[str, int] = {}
+    for row in rows:
+        rel = str(row.get('relationship') or '').strip() or 'unknown'
+        by_type[rel] = by_type.get(rel, 0) + 1
+    return {'count': len(rows), 'by_type': dict(sorted(by_type.items())), 'items': rows}
+
+
 def run_transcript_ingest_job(*, root: str, transcript_id: str, session_id: str | None = None, turns: list[dict[str, Any]] | None = None, flush_policy: str = 'end_only', metadata: dict[str, Any] | None = None, max_turns: int = 500) -> dict[str, Any]:
     normalized = normalize_transcript_payload(
         {
@@ -235,6 +286,13 @@ def run_transcript_ingest_job(*, root: str, transcript_id: str, session_id: str 
         max_turns=max_turns,
     )
     out = ingest_turn_envelopes(root=root, envelopes=list(normalized.get('envelopes') or []), flush_policy=str(normalized.get('flush_policy') or flush_policy))
+    new_bead_ids = sorted({
+        str(bid)
+        for row in (out.get('ingested') or [])
+        if isinstance(row, dict)
+        for bid in (row.get('bead_ids') or [])
+        if str(bid).strip()
+    })
     return {
         'ok': bool(out.get('ok')),
         'kind': 'transcript_ingest',
@@ -242,5 +300,7 @@ def run_transcript_ingest_job(*, root: str, transcript_id: str, session_id: str 
         'session_id': str(normalized.get('session_id') or ''),
         'turns_received': int(normalized.get('turns_received') or 0),
         'turns_paired': int(normalized.get('turns_paired') or 0),
+        'warnings': list(normalized.get('warnings') or []) + list(out.get('warnings') or []),
+        'associations_created': _associations_created_summary(root, new_bead_ids),
         **out,
     }

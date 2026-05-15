@@ -127,7 +127,7 @@ class TestLocomoReplay(unittest.TestCase):
         self.assertIn('follows', relationships)
         self.assertIn('precedes', relationships)
 
-    def test_synthesized_entity_overlap_relationship_counts_as_semantic(self):
+    def test_synthesized_entity_overlap_uses_canonical_relationship(self):
         if replay_locomo_sample is None:
             self.skipTest('pydantic_settings unavailable')
         with tempfile.TemporaryDirectory() as td:
@@ -154,8 +154,8 @@ class TestLocomoReplay(unittest.TestCase):
                 out = locomo_replay_mod._synthesize_locomo_associations(root=str(root), sample_id='conv-26', session_index=1, turns=turns)
 
         relationships = {row['relationship'] for row in captured['updates']['associations']}
-        self.assertIn('entity_overlap', relationships)
-        self.assertNotIn('associated_with', relationships)
+        self.assertIn('associated_with', relationships)
+        self.assertNotIn('entity_overlap', relationships)
         self.assertGreaterEqual(out['associations_requested'], 3)
 
     def test_synthesis_reports_lookup_miss_examples(self):

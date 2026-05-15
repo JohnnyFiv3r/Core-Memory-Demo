@@ -705,8 +705,11 @@ async def chat(request: Request):
 @router.post('/flush')
 async def flush(request: Request):
     try:
-        with heavy_operation_slot(request):
-            await rate_limit_heavy(request)
+        # Manual flush is a UI ergonomics action, not a benchmark/seed operation.
+        # Keep a tiny concurrency gate to prevent double-click races, but do not spend
+        # the shared heavy-operation rate bucket; story-pack seeding can otherwise make
+        # the user's explicit "flush session" button return a confusing 429.
+        with heavy_operation_slot(request, slot_key=f"flush:{request.client.host if request.client else 'unknown'}"):
             return run_flush()
     except HTTPException as exc:
         return _http_exc_response(exc)
@@ -985,6 +988,8 @@ def benchmark_preflight(
     suite_name = str(suite or 'locomo_mini').strip().lower() or 'locomo_mini'
     semantic_mode_name = str(semantic_mode or 'required').strip().lower() or 'required'
     answer_mode_name = str(answer_mode or 'none').strip().lower() or 'none'
+    if answer_mode_name not in {'none', 'extractive', 'llm'}:
+        answer_mode_name = 'none'
     generator_model_name = str(generator_model or '').strip()
     if answer_mode_name == 'llm' and not generator_model_name:
         generator_model_name = detect_model()
@@ -1096,7 +1101,9 @@ async def benchmark_run(request: Request):
     retrieval_k = int((body or {}).get('retrieval_k') or settings.locomo_default_retrieval_k)
     retrieval_k = max(1, retrieval_k)
     ingestion_mode = str((body or {}).get('ingestion_mode') or settings.locomo_ingest_mode_default).strip() or settings.locomo_ingest_mode_default
-    answer_mode = str((body or {}).get('answer_mode') or '').strip() or None
+    answer_mode = str((body or {}).get('answer_mode') or '').strip().lower() or None
+    if answer_mode not in {None, 'none', 'extractive', 'llm'}:
+        answer_mode = 'none'
     generator_model = str((body or {}).get('generator_model') or '').strip() or None
     embeddings_provider = str((body or {}).get('embeddings_provider') or '').strip() or None
     evidence_recall_k = [int(x) for x in ((body or {}).get('evidence_recall_k') or [1, 3, 5, 8, 10]) if str(x).strip()]
@@ -1134,9 +1141,10 @@ async def benchmark_run(request: Request):
     )
 
     _prune_benchmark_jobs()
+    run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
     prior_job_id = ACTIVE_BENCHMARK_JOB_ID
     prior_row = BENCHMARK_JOBS.get(prior_job_id or '') if prior_job_id else None
-    if isinstance(prior_row, dict) and not bool(prior_row.get('done')):
+    if run_mode not in {'inline', 'local', 'sync'} and isinstance(prior_row, dict) and not bool(prior_row.get('done')):
         prior_row['updated_ms'] = _now_ms()
         _benchmark_event(prior_row, 'running', 'Benchmark request reused active job')
         return {
@@ -1147,18 +1155,19 @@ async def benchmark_run(request: Request):
             'already_running': True,
             'superseded_job_id': None,
         }
-    stored_active = benchmark_store.read_active_job()
-    if isinstance(stored_active, dict):
-        active_job_id = str(stored_active.get('job_id') or '').strip()
-        if active_job_id:
-            return {
-                'ok': True,
-                'job_id': active_job_id,
-                'status': str(stored_active.get('status') or 'running'),
-                'active_job_id': active_job_id,
-                'already_running': True,
-                'superseded_job_id': None,
-            }
+    if run_mode not in {'inline', 'local', 'sync'}:
+        stored_active = benchmark_store.read_active_job()
+        if isinstance(stored_active, dict):
+            active_job_id = str(stored_active.get('job_id') or '').strip()
+            if active_job_id:
+                return {
+                    'ok': True,
+                    'job_id': active_job_id,
+                    'status': str(stored_active.get('status') or 'running'),
+                    'active_job_id': active_job_id,
+                    'already_running': True,
+                    'superseded_job_id': None,
+                }
 
     job_id = uuid.uuid4().hex[:12]
     row = {
@@ -1177,7 +1186,6 @@ async def benchmark_run(request: Request):
     BENCHMARK_JOBS[job_id] = row
     if isinstance(prior_row, dict) and not bool(prior_row.get('done')):
         prior_row['superseded_by'] = job_id
-    run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
     if run_mode in {'queue', 'queued', 'cron'}:
         try:
             queued = benchmark_store.enqueue_job(job_id=job_id, request=dict(body or {}), kwargs=kwargs)
@@ -1222,6 +1230,12 @@ async def benchmark_run(request: Request):
         row['error'] = 'benchmark_run_disabled'
         _benchmark_event(row, 'failed', 'Benchmark run disabled')
         return JSONResponse({'ok': False, 'job_id': job_id, 'status': 'failed', 'error': row['error']}, status_code=503)
+    if run_mode in {'inline', 'local', 'sync'}:
+        await _run_benchmark_job(job_id, kwargs)
+        result = row.get('result') if isinstance(row.get('result'), dict) else None
+        if isinstance(result, dict):
+            return result
+        return JSONResponse({'ok': False, 'job_id': job_id, 'status': row.get('status') or 'failed', 'error': row.get('error') or 'benchmark_failed'}, status_code=500)
     task = asyncio.create_task(_run_benchmark_job(job_id, kwargs))
     row['task'] = task
     _benchmark_event(row, 'queued', 'Benchmark queued', supersedes=prior_job_id or '')

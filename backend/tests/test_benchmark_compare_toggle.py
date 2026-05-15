@@ -42,10 +42,15 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
                 seen['kwargs'] = dict(frame.f_locals.get('kwargs') or {})
             coro.close()
             return fake_task
-        with patch.object(demo_routes, '_prune_benchmark_jobs'), \
-             patch.object(demo_routes.asyncio, 'create_task', side_effect=_capture_task), \
-             patch.object(demo_routes, '_benchmark_event'):
-            out = await demo_routes.benchmark_run(req)
+        old_mode = demo_routes.settings.benchmark_run_mode
+        demo_routes.settings.benchmark_run_mode = 'background'
+        try:
+            with patch.object(demo_routes, '_prune_benchmark_jobs'), \
+                 patch.object(demo_routes.asyncio, 'create_task', side_effect=_capture_task), \
+                 patch.object(demo_routes, '_benchmark_event'):
+                out = await demo_routes.benchmark_run(req)
+        finally:
+            demo_routes.settings.benchmark_run_mode = old_mode
         self.assertTrue(out['ok'])
         self.assertTrue(seen['kwargs']['compare_paths'])
         self.assertEqual({'1': 3, '2': 2}, seen['kwargs']['qa_per_category'])

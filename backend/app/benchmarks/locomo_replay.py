@@ -24,6 +24,13 @@ _LOCOMO_ENTITY_STOP = {
 def _turn_metadata(*, sample_id: str, session_index: int, session_date_time: str, turn_index: int, dia_id: str, speaker: str, img_url: str, blip_caption: str) -> dict[str, Any]:
     return {
         'benchmark_name': 'locomo',
+        'sample_id': sample_id,
+        'session_index': session_index,
+        'session_date_time': session_date_time,
+        'dia_id': dia_id,
+        'dia_ids': [dia_id] if dia_id else [],
+        'speaker': speaker,
+        'turn_index': turn_index,
         'locomo_sample_id': sample_id,
         'locomo_session_index': session_index,
         'locomo_session_date_time': session_date_time,
@@ -63,8 +70,18 @@ def _turn_envelope(*, sample_id: str, session_index: int, turn: dict[str, Any]) 
         'turn_id': turn_id,
         'transaction_id': f'tx-{turn_id}',
         'trace_id': f'tr-{turn_id}',
-        'user_query': f'[LoCoMo replay] session={session_index} dia_id={dia_id} speaker={speaker}',
-        'assistant_final': f'{speaker}: {text}'.strip(': '),
+        'turns': [
+            {
+                'speaker': 'benchmark',
+                'role': 'user',
+                'content': f'[LoCoMo replay] session={session_index} dia_id={dia_id} speaker={speaker}',
+            },
+            {
+                'speaker': speaker or 'assistant',
+                'role': 'assistant',
+                'content': f'{speaker}: {text}'.strip(': '),
+            },
+        ],
         'trace_depth': 0,
         'origin': 'LOCOMO_REPLAY',
         'tools_trace': [],
@@ -249,7 +266,8 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
 
     # Bounded entity-overlap links: connect each turn to the latest previous
     # mentions of the same meaningful people/entities, excluding generic replay
-    # scaffolding tokens. This keeps density useful without building a clique.
+    # scaffolding tokens. The relationship itself stays in the canonical Core
+    # Memory vocabulary; the overlap heuristic is recorded as reason metadata.
     latest_by_entity: dict[str, str] = {}
     for cur in ordered:
         cur_bead = str(cur.get('bead_id') or '')
@@ -262,7 +280,7 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
                 add_assoc(
                     cur_bead,
                     prior_bead,
-                    'entity_overlap',
+                    'associated_with',
                     f"LoCoMo replay entity overlap: both turns mention {entity!r} within sample {sample_id} session {session_index}.",
                     0.82,
                     'locomo_entity_overlap',

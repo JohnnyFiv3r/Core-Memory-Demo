@@ -72,6 +72,7 @@ class TestRetrievalRegressions(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "core-memory"
             os.environ["CORE_MEMORY_EMBEDDINGS_PROVIDER"] = "hash"
+            os.environ["CORE_MEMORY_CANONICAL_SEMANTIC_MODE"] = "degraded_allowed"
 
             store = MemoryStore(root=str(root))
             bead_id = store.add_bead(

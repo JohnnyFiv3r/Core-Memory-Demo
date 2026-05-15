@@ -309,42 +309,26 @@ runs them through the canonical Core Memory turn-finalization pipeline.
 data contract become another demo-only feature instead of the durable ingestion model.
 
 **Tasks:**
-- [x] After hosted demo item #3 lands, copy the stable request/response contract into
-      `Core-Memory/demo` so the local demo exercises the same async ingest path. The
-      local demo now exposes `POST /api/ingest/transcript` and
-      `GET /api/ingest/jobs/{job_id}` with an in-memory async worker over the shared
-      Core-Memory transcript ingest helper.
-- [x] Identify the boundary between demo-owned operational queueing and Core-Memory-owned
+- [ ] After hosted demo item #3 lands, copy the stable request/response contract into
+      `Core-Memory/demo` so the local demo exercises the same async ingest path.
+- [ ] Identify the boundary between demo-owned operational queueing and Core-Memory-owned
       ingestion semantics; keep memory behavior in Core Memory, keep hosted deployment
-      plumbing in demo repos. Core Memory now owns synchronous normalization/pairing and
-      canonical turn-finalization; hosted demo keeps Postgres queue/run-mode plumbing.
-- [x] Add a direct-library helper once the contract is proven, e.g.
+      plumbing in demo repos.
+- [ ] Add a direct-library helper once the contract is proven, e.g.
       `ingest_transcript(...)` or `capture_many(...)`, implemented on top of canonical
       turn finalization rather than direct bead writes.
-- [x] Add CLI support for file-based ingestion, e.g.
+- [ ] Add CLI support for file-based ingestion, e.g.
       `core-memory ingest transcript path.json --root ...`, returning a synchronous
       summary locally and documenting how hosted async jobs differ.
-- [x] Extend the MCP `ingest` tool to accept the same transcript schema or a file/path
+- [ ] Extend the MCP `ingest` tool to accept the same transcript schema or a file/path
       reference, so MCP clients can import conversation history without custom REST glue.
-- [x] Preserve the locked verb taxonomy: `capture` for observed conversation turns,
+- [ ] Preserve the locked verb taxonomy: `capture` for observed conversation turns,
       future `remember(text, type=...)` for declarative user-authored memory, and
-      `recall(query, effort=...)` for read. Transcript ingest stays an observed-turn import
-      path and does not perform direct declarative memory writes.
-- [x] Add parity tests showing a tiny transcript ingested through hosted demo, local demo,
+      `recall(query, effort=...)` for read. Do not turn transcript ingest into direct
+      declarative memory writes.
+- [ ] Add parity tests showing a tiny transcript ingested through hosted demo, local demo,
       CLI, and MCP surfaces yields recallable evidence with the same bead/source IDs where
-      deterministic IDs are available. Core-Memory now has parity coverage for direct
-      library, CLI, MCP, and local demo async surfaces using the same deterministic
-      transcript/session/turn contract. Hosted demo coverage landed with item #3 smoke;
-      future semantic-index "recallable without manual rebuild" polish remains tracked in
-      `Core-Memory/demo/TODO.md` #7 rather than this adoption-surface item.
-
-**Status:** Closed. The stable transcript normalization/pairing contract has been promoted
-into the library as `ingest_transcript(...)`, exported from the public package, exposed via
-`core-memory ingest transcript <path>`, reused by the MCP `ingest` tool for both inline
-transcript turns and local file imports, and copied into the in-repo local demo as async
-`/api/ingest/transcript` + job-status endpoints. Cross-surface parity tests cover direct
-library, CLI, MCP, and local demo behavior with deterministic transcript IDs, session IDs,
-and turn IDs.
+      deterministic IDs are available.
 
 **Non-goals:** Do not move the hosted demo's Postgres job queue wholesale into the library.
 Core Memory should own normalization/canonical ingestion semantics; each deployment
@@ -373,15 +357,10 @@ Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the
   fixes: extracted `because` reasoning (#1), canonical association relationship types (#3),
   grounding hashes (#5), and monotonic claim supersede ordering (#6). Benchmark runs should
   stay on full Core Memory recall/trace paths rather than flat-search-only shortcuts.
-  Core-Memory #1 is closed as of 2026-05-13: `because` is defined in the live prompt path as
-  grounded free-text support for applied semantic labels/state, with short user-text quotes
-  allowed when they are the actual support and weak filler/speculation rejected.
 - **#7 agent instructions in live integrations** should reference Core-Memory behavior
-  guardrails from #1/#3/#4: treat `because` as grounded label/state support rather than
-  guessed filler, treat user questions as retrieval/context rather than declarative memory,
-  and use only canonical relationship types. Core-Memory #4 is closed as of 2026-05-13:
-  question and retrieval-imperative turns are forced to `context` before LLM bead typing and
-  field-judge output cannot promote them.
+  guardrails from #1/#3/#4: do not echo user text as `because`, treat user questions as
+  retrieval/context rather than declarative memory, and use only canonical relationship
+  types.
 
 ---
 
@@ -397,13 +376,11 @@ Keep this TODO focused on adoption surfaces in `Core-Memory-Demo`, but track the
 | 6 | LoCoMo / LongMemEval scoring harness | M | High (competitive lever) |
 | 7a | Agent instructions → OpenClaw manifest (Option B) | Done | High |
 | 7b | Agent instructions → MCP prompt resource (Option A) | Done | Very High |
-| 8 | Promote async transcript ingest to Core-Memory demo/CLI/MCP | Done | High |
+| 8 | Promote async transcript ingest to Core-Memory demo/CLI/MCP | M | High |
 
-**Week plan status:** #1, #2, #3, #7a, #7b, and #8 are closed in code/TODO tracking
-and have deployed or local parity evidence. #4 and #5 remain the active closeout focus for
-making `RecallResult` the single contract across direct-library, CLI, REST, chat, MCP, and
-UI. Benchmark scoring #6 should stay separate and use the engine-correctness dependencies
-listed in `Core-Memory/demo/TODO.md`.
+**Week plan status:** #1, #2, #3, #7a, and #7b are closed in code/TODO tracking
+and have deployed smoke evidence. #4 and #5 are the active closeout focus: make
+`RecallResult` the single contract across direct-library, CLI, REST, chat, MCP, and UI.
 
 **Sequence after the original three (#1–#3):** #4 ships the shared contract that #5
 depends on. #5 ships `/api/recall` and the single-verb orchestrator (paired with the
