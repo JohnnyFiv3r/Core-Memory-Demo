@@ -22,11 +22,11 @@ def run_once() -> int:
     job_id = str(job.get('job_id') or '')
     request = dict(job.get('request') or {})
     kwargs = dict(job.get('kwargs') or {})
-    kind = str(request.get('kind') or kwargs.get('kind') or 'benchmark').strip() or 'benchmark'
+    kind = str(request.get('kind') or 'benchmark').strip() or 'benchmark'
     print(f'benchmark_worker: running {job_id} kind={kind}')
     try:
         if kind == 'transcript_ingest':
-            out = run_transcript_ingest_job(root=settings.core_memory_root, max_turns=int(settings.replay_max_turns), **kwargs)
+            out = run_transcript_ingest_job(**kwargs)
         else:
             out = run_benchmark(**kwargs)
     except Exception as exc:
