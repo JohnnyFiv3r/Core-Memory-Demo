@@ -1141,9 +1141,9 @@ function renderRecallEvidence(container, recallResult) {
   for (const item of evidence) {
     const row = document.createElement('div');
     row.className = 'recall-evidence-item';
-    const label = String(item.bead_id || item.id || 'evidence').trim();
+    const label = String(item.bead_id || item.id || item.title || 'evidence').trim();
     const score = Number(item.score || item.confidence || 0);
-    const text = String(item.text || item.summary || item.reason || '').trim();
+    const text = String(item.content_excerpt || item.text || item.summary || item.title || item.reason || '').trim();
     row.textContent = label + (score ? ' · ' + score.toFixed(2) : '') + (text ? ' — ' + text.slice(0, 180) : '');
     panel.appendChild(row);
   }
