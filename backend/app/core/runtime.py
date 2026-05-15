@@ -1823,23 +1823,34 @@ def _recall_effort_for_query(message: str, requested: str | None = None) -> str:
     return "high" if intent_class in {"causal", "why", "what_changed"} else "medium"
 
 
-def _recall_result_to_payload(result: RecallResult, *, ok: bool | None = None) -> dict[str, Any]:
-    payload = result.to_dict()
-    payload.setdefault("metadata", {})
-    if isinstance(payload["metadata"], dict):
-        payload["metadata"].setdefault("source_surface", "recall_orchestrator")
+def _ensure_public_recall_shape(payload: dict[str, Any], *, include_raw: bool = False) -> dict[str, Any]:
+    out = dict(payload or {})
+    out.setdefault("contract", "recall_result")
+    out.setdefault("schema_version", "recall_result.v1")
+    out.setdefault("status", "empty")
+    for key in ("evidence", "resolved_goals", "sources", "tier_path", "steps", "warnings"):
+        if not isinstance(out.get(key), list):
+            out[key] = []
+    if not isinstance(out.get("claim_slots"), dict):
+        out["claim_slots"] = {}
+    if not isinstance(out.get("planning"), dict):
+        out["planning"] = {}
+    out.setdefault("metadata", {})
+    if isinstance(out["metadata"], dict):
+        out["metadata"].setdefault("source_surface", "recall_orchestrator")
+    if not include_raw:
+        out.pop("raw", None)
+    return out
+
+
+def _recall_result_to_payload(result: RecallResult, *, ok: bool | None = None, include_raw: bool = False) -> dict[str, Any]:
+    payload = _ensure_public_recall_shape(result.to_dict(), include_raw=include_raw)
     payload.setdefault("ok", bool(result.status != "failed") if ok is None else bool(ok))
     return payload
 
 
 def _public_recall_contract(payload: dict[str, Any] | None) -> dict[str, Any]:
-    out = {k: v for k, v in dict(payload or {}).items() if k != "raw"}
-    out.setdefault("contract", "recall_result")
-    out.setdefault("schema_version", "recall_result.v1")
-    out.setdefault("metadata", {})
-    if isinstance(out["metadata"], dict):
-        out["metadata"].setdefault("source_surface", "recall_orchestrator")
-    return out
+    return _ensure_public_recall_shape(dict(payload or {}), include_raw=False)
 
 
 def run_recall(
@@ -1863,7 +1874,7 @@ def run_recall(
             root=settings.core_memory_root,
             include_raw=include_raw,
         )
-    return _recall_result_to_payload(result)
+    return _recall_result_to_payload(result, include_raw=include_raw)
 
 
 def _sync_semantic_on_write(*, progress: Callable[..., Any] | None = None) -> dict[str, Any]:
@@ -1975,7 +1986,7 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
             root=settings.core_memory_root,
             include_raw=True,
         )
-    recall_payload = _recall_result_to_payload(recall_result)
+    recall_payload = _recall_result_to_payload(recall_result, include_raw=True)
     recall_contract = _public_recall_contract(recall_payload)
     retrieval = dict(recall_payload.get("raw") or {})
 
