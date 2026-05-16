@@ -105,14 +105,6 @@ See the [full setup guide](https://github.com/JohnnyFiv3r/Core-Memory-Demo/blob/
 
 **Plug and play adoption** Your data stays on your infrastructure. No cloud dependencies. Works with any MCP client. Native setup guides for Claude Code, Cursor, ChatGPT, and OpenClaw. Any MCP-compatible client works out of the box.
 
-<!-- TODO: Add causal graph screenshot before publish.
-     Use the demo UI screenshot showing the node graph + JSON panel.
-     Crop/blur the session header bar (email visible) before committing.
-     Save to docs/assets/core-memory-causal-graph.png -->
-<p align="center">
-  <img src="docs/assets/core-memory-causal-graph.png" alt="Core Memory causal graph — memory objects and evidence panel" />
-</p>
-
 ---
 
 ## Supported Clients
