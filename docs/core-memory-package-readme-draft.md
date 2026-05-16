@@ -315,8 +315,8 @@ Useful docs:
 
 Core Memory is maintained by:
 
-John Inniger (@JohnnyFiv3r)
-Chris Dedow (@chrisdedow)
+[John Inniger](https://github.com/JohnnyFiv3r) (@JohnnyFiv3r)
+[Chris Dedow](https://github.com/chrisdedow) (@chrisdedow)
 
 For bugs and feature requests, please open an issue. For anything else related to the project, feel free to reach out to the maintainers directly.
 
