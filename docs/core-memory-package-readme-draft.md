@@ -2,10 +2,15 @@
   <img src="https://raw.githubusercontent.com/JohnnyFiv3r/Core-Memory/master/docs/assets/core-memory-hero-banner.jpg" alt="Core Memory banner" />
 </p>
 
-Apache-2.0 License Python 3.10+
+<p align="center">
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-Apache%202.0-blue.svg" alt="Apache-2.0 License"></a>
+  <a href="#"><img src="https://img.shields.io/badge/python-3.10%2B-blue.svg" alt="Python 3.10+"></a>
+</p>
 
-Causal memory for AI agents.
-Structured memory objects + causal trace over durable events — so agents can recall why, not just what.
+<p align="center">
+  <b>Causal memory for AI agents.</b><br>
+  Structured memory objects + causal trace over durable events — so agents can recall <i>why</i>, not just <i>what</i>.
+</p>
 
 [Quickstart](#quick-start) · [Features](#features) · [Supported Clients](#supported-clients) · [Contributing](#contributing)
 
