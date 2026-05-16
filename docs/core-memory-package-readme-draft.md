@@ -1,9 +1,5 @@
-# Core Memory README
-
----
-
 <p align="center">
-  <img src="docs/assets/core-memory-hero-banner.jpg" alt="Core Memory banner" />
+  <img src="https://raw.githubusercontent.com/JohnnyFiv3r/Core-Memory/master/docs/assets/core-memory-hero-banner.jpg" alt="Core Memory banner" />
 </p>
 
 Apache-2.0 License Python 3.10+
@@ -11,7 +7,7 @@ Apache-2.0 License Python 3.10+
 Causal memory for AI agents.
 Structured memory objects + causal trace over durable events — so agents can recall why, not just what.
 
-[Quickstart]() · [Features]() · [Supported Clients]() · [Contributing]()
+[Quickstart](#quick-start) · [Features](#features) · [Supported Clients](#supported-clients) · [Contributing](#contributing)
 
 ## Core Memory
 
@@ -29,7 +25,7 @@ Transcripts are where most decision making actually happens, across agent conver
 
 <p align="center">
   <a href="https://youtu.be/56uyTJEnOAA">
-    <img src="docs/assets/core-memory-live-demo-still.jpg" alt="Core Memory live demo (click to watch on YouTube)" width="100%" />
+    <img src="https://raw.githubusercontent.com/JohnnyFiv3r/Core-Memory/master/docs/assets/core-memory-live-demo-still.jpg" alt="Core Memory live demo (click to watch on YouTube)" width="100%" />
   </a>
 </p>
 
@@ -128,7 +124,7 @@ Use Core Memory as a memory backend directly within your agent harness:
 ---
 
 <p align="center">
-  <img src="docs/assets/core-memory-architecture-new.png" alt="Core Memory Architecture Diagram" />
+  <img src="https://raw.githubusercontent.com/JohnnyFiv3r/Core-Memory/master/docs/assets/core-memory-architecture-new.png" alt="Core Memory Architecture Diagram" />
 </p>
 
 ## How It Works
@@ -332,26 +328,4 @@ Inspired in part by Steve Yegge's writing on beads and memory systems: https://g
 
 ---
 
-Apache-2.0 License · Code of Conduct · Changelog
-
----
-
-# Drafting checklist (delete before publish)
-
-Before this README ships:
-
-- [ ] Selling lines (hero) all use specific nouns, no hype words
-- [ ] One-command install actually works on a fresh box (test it)
-- [ ] MCP config snippet is copy-paste-valid (port matches default)
-- [ ] Every doc/ link in the documentation table resolves
-- [ ] Every client in the supported-clients table has a working setup guide
-- [ ] Screenshots reflect actual UI (or section is omitted)
-- [ ] Benchmark section: either has real numbers, or is omitted
-- [ ] Verb names match what's actually registered (`capture`, `recall`)
-- [ ] `RecallResult` JSON example validates against the real schema
-- [ ] No mnemory-specific framing leaked through (search for "mnemory", "Qdrant",
-      "Cognis", "Hermes" before publish)
-- [ ] Tone is declarative + specific, not "powerful" / "intelligent" / "AI-powered"
-- [ ] First paragraph passes the "60-second skim" test — does a senior eng know
-      what Core Memory does and what makes it different?
-- [ ] Causal graph screenshot added to docs/assets/core-memory-causal-graph.png (crop/blur header bar first)
+<p align="center">Apache-2.0 License · Code of Conduct · Changelog</p>
