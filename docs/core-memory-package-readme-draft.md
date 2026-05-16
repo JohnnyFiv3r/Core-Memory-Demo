@@ -1,0 +1,357 @@
+# Core Memory README
+
+---
+
+<p align="center">
+  <img src="docs/assets/core-memory-hero-banner.jpg" alt="Core Memory banner" />
+</p>
+
+Apache-2.0 License Python 3.10+
+
+Causal memory for AI agents.
+Structured memory objects + causal trace over durable events — so agents can recall why, not just what.
+
+[Quickstart]() · [Features]() · [Supported Clients]() · [Contributing]()
+
+## Core Memory
+
+Give your AI agents persistent memory built for the way conversations actually work. Core Memory is a plug and play, self-hosted conversational memory MCP server that captures each turn as a memory object, builds causal links as the dialogue unfolds, and recalls with full evidence. Works with Claude Code, Cursor, ChatGPT, or any MCP-compatible client.
+
+Transcripts are where most decision making actually happens, across agent conversations, email threads, and Slack. Yet every tool treats them as a noisier version of a document. Core Memory is built specifically for that problem.
+
+**Remember every turn:** Each turn produces a memory object linked to prior turns by typed causal edges. Claims are tracked and superseded when contradicted, so memory stays truthful as the dialogue develops.
+
+**Stored as a causal graph:** Memory objects are linked by the relationship between them, like `caused_by`, `contradicts`, and `supports`. When you ask a question, your agent follows the chain of reasoning, not just a ranked vector similarity score. Every result shows you the path of causality between the memory events.
+
+**Depth on demand:** Tune recall(query, effort="low" | "medium" | "high") for your needs. Fast lookup when that is enough, full causal traversal when the question needs it. The orchestrator decides.
+
+**Rolling context injection on a budget:** Compacted memory objects carry only their title, type, and causal associations, allowing 10+ sessions of history to be injected for a fraction of the token cost of naive loading. Promoted objects stay full context when active, and the agent can expand any compacted memory on demand with a single tool call.
+
+<p align="center">
+  <a href="https://youtu.be/56uyTJEnOAA">
+    <img src="docs/assets/core-memory-live-demo-still.jpg" alt="Core Memory live demo (click to watch on YouTube)" width="100%" />
+  </a>
+</p>
+
+[Watch the Core Memory live demo on YouTube](https://youtu.be/56uyTJEnOAA)
+
+---
+
+## Quick Start
+
+Core Memory auto-detects your embeddings provider from OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY. No configuration needed.
+
+```bash
+uvx "core-memory[mcp]" mcp serve
+```
+
+Core Memory starts on http://localhost:8000/mcp and stores data in ~/.core-memory/.
+
+For Claude Code, add to your MCP config:
+
+```json
+{
+  "mcpServers": {
+    "core-memory": {
+      "type": "streamable-http",
+      "url": "http://localhost:8000/mcp"
+    }
+  }
+}
+```
+
+Start a new conversation. Your agent captures and recalls automatically.
+
+Or install directly from PyPI for Python SDK use:
+
+```bash
+pip install "core-memory[mcp]"
+```
+
+To ingest existing transcripts, use the CLI command:
+
+`core-memory ingest my-transcript.jsonl`
+
+Or call the ingest tool directly from any connected MCP client. Accepts JSONL or JSON with user/assistant, human/ai, or customer/agent roles.
+
+See the [full setup guide](https://github.com/JohnnyFiv3r/Core-Memory-Demo/blob/claude/update-todo-mnemory-learnings-pLVZ7/docs/integrations/mcp/quickstart.md) for Cursor, ChatGPT, OpenClaw, and adapter configurations for PydanticAI, LangChain, and SpringAI.
+
+---
+
+## Features
+
+**Transcript-native storage** Built specifically for conversational data, each turn is normalized into a memory object rather than chunked and indexed alongside authored documents.
+
+**Captures every turn automatically** The LLM applies causal labels from a fixed taxonomy rather than judging importance, so nothing is filtered before storage and no explicit "remember this" is required.
+
+**Rolling context injection on a budget** Compacted memory objects carry only their title, type, and causal associations, fitting 10+ sessions of history into a fraction of the token cost of naive loading.
+
+**Causal graph, not a flat index** Memory objects are linked by typed relationships (caused_by, contradicts, supports, and more), so recall follows reasoning chains instead of ranking similarity scores.
+
+**Claims tracked and superseded** Statements like "user prefers PostgreSQL" are monitored and updated when later turns contradict them. Memory stays truthful, not just full.
+
+**Full context is always retrievable** Full transcripts are preserved and linked via turn and session_ID references, so full context is always a tool call away.
+
+**Inspectable retrieval with provenance** Every recall() returns the source conversation, the traversal path that found it, and a verifiable hash. Retrieval is never a black box.
+
+**Depth on demand** recall(query, effort="low" | "medium" | "high") scales from fast lookup to full causal traversal. The orchestrator decides what the question needs.
+
+**Self-hosted MCP** Streamable-HTTP server at /mcp with a canonical agent guide that loads automatically at connection. No system prompt changes needed.
+
+**Auto-detected embedding model** Picks up OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY from your environment. Runs in degraded mode with one hint if none are set.
+
+**Plug and play adoption** Your data stays on your infrastructure. No cloud dependencies. Works with any MCP client. Native setup guides for Claude Code, Cursor, ChatGPT, and OpenClaw. Any MCP-compatible client works out of the box.
+
+---
+
+## Supported Clients
+
+**MCP Connection**
+Any MCP-compatible client works out of the box via the streamable-HTTP server at `/mcp`. See the [MCP Quickstart](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/mcp/quickstart.md) for setup instructions.
+
+- Claude Code
+- Cursor
+- Codex
+- Claude Desktop
+- ChatGPT
+
+**Adapter Layer**
+Use Core Memory as a memory backend directly within your agent harness:
+
+| Client | Plugin | Quickstart | Integration Guide | API Reference | Adapter Spec |
+|------------|---------|------------|-------------------|---------------|--------------|
+| OpenClaw   | [Plugin](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/plugins/openclaw-core-memory-bridge/openclaw.plugin.json) and [Skill](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/plugins/openclaw-core-memory-bridge/skills/core-memory/SKILL.md) | [Quickstart](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/openclaw/quickstart.md) and [Setup Guide](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/openclaw/plugin-setup.md) | [Guide](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/openclaw/integration-guide.md) | [API Reference](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/openclaw/api-reference.md) | [Adapter Spec](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/adapters/openclaw.md) |
+| PydanticAI | — | [Quickstart](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/pydanticai/quickstart.md) | [Guide](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/pydanticai/integration-guide.md) | [API Reference](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/pydanticai/api-reference.md) | [Adapter Spec](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/adapters/pydanticai.md) |
+| SpringAI   | — | [Quickstart](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/springai/quickstart.md) | [Guide](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/springai/integration-guide.md) | [API Reference](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/springai/api-reference.md) | [Adapter Spec](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/adapters/springai.md) |
+| LangChain  | — | [Quickstart](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/langchain/quickstart.md) | [Guide](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/langchain/integration-guide.md) | [API Reference](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/integrations/langchain/api-reference.md) | [Adapter Spec](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/adapters/langchain.md) |
+
+---
+
+<p align="center">
+  <img src="docs/assets/core-memory-architecture-new.png" alt="Core Memory Architecture Diagram" />
+</p>
+
+## How It Works
+
+Core Memory separates retrieval from writes, connected through session-scoped storage. Each agent turn follows the same loop:
+
+**Capture:** Call capture() after each turn — or connect via MCP and it happens automatically. Each turn becomes a memory object typed as a decision, lesson, outcome, evidence, or context. An agent judge assigns typed causal associations (caused_by, contradicts, supports, and more), and claims are tracked and superseded when later turns update them. Nothing is filtered before storage — the LLM assigns structure, not importance.
+
+**Recall:** recall(query, effort="low" | "medium" | "high") is the single read verb. Before each agent turn, a bounded context packet is built from the rolling window: promoted memory objects at full context, compacted ones as lightweight stubs. effort="low" runs lexical and semantic anchor search. effort="medium" adds temporal routing. effort="high" runs the full orchestration pipeline: causal traversal, multi-hop chains, goal resolution, and claim-slot enrichment. The orchestrator decides what the question needs.
+
+**Grounding:** Every recall() returns a RecallResult — not just the memory, but the source conversation it came from, the traversal path that found it, and a verifiable hash. The result carries per-memory evidence records and a planning trace showing exactly which retrieval surfaces fired. Retrieval is deterministic from indexed state.
+
+**Maintain:** Memory objects are either promoted (full context in the rolling window) or compacted to title, type, and associations only. Compacted objects remain queryable and their associations stay intact — the agent expands any on demand with a single tool call. Frequently-walked causal edges strengthen over time; rarely-accessed memory compacts naturally.
+
+
+**Core Concepts**
+
+**Memory Object**
+A memory object is a structured unit of recall typed as a decision, lesson, outcome, evidence, context, or another typed event. Each object is either promoted (full context in the rolling window) or compacted (title, type, and associations only). Promoted objects are immediately available; compacted objects can be expanded on demand via a single tool call.
+
+**Rolling Window**
+Before each agent turn, Core Memory builds a bounded context packet from the rolling window — the session-scoped set of memory objects visible to the current conversation. Promoted objects contribute full context; compacted stubs contribute their title, type, and associations. The rolling window allows 10+ sessions of history to fit within a standard token budget.
+
+**Associations**
+Associations are typed causal or temporal links between memory objects, assigned by an agent judge from a fixed 28-label taxonomy (caused_by, contradicts, supports, and more). Associations remain queryable even as memory objects compact. Unlike semantic similarity links, associations encode the reason one memory relates to another.
+
+**Claims**
+Claims are verifiable statements extracted from conversation turns and tracked across sessions. When a later turn contradicts an existing claim, the association graph is updated — the prior claim is superseded, not deleted. The full history of a changing belief is preserved while the current state remains accurate.
+
+**Retrieval Pipeline**
+Three canonical surfaces, exposed through recall(query, effort=...):
+
+* `search` — lexical and semantic anchor retrieval (`effort="low"`)
+* `trace` — causal traversal from search anchors (`effort="medium"`)
+* `execute` — full orchestration: search + trace + goal resolution + claim-slot enrichment (`effort="high"`)
+
+Hydration is explicit post-selection source recovery (turn/tools/adjacent) — not a general retrieval mode and not the same as the rolling window. Retrieval is deterministic from indexed state.
+
+**RecallResult**
+Every `recall()` returns a typed `RecallResult` with `evidence[]` (memory objects with grounding hashes), `sources[]`, `steps[]` (which surfaces fired and in what order), `resolved_goals[]`, and `claim_slots{}`. Stable across MCP, REST, and Python SDK.
+
+**Semantic Mode**
+
+| Mode | Behavior |
+|---|---|
+| `required` (default) | Fails closed when semantic backend is unavailable |
+| `degraded_allowed` | Lexical fallback with degraded markers |
+
+**Storage Backend**
+
+| Backend | Use case |
+|---|---|
+| `local-faiss` | Development, single-process only (`[semantic]`) |
+| `qdrant` | Production, distributed (`[qdrant]`) |
+| `pgvector` | Production, Postgres-native (`[pgvector]`) |
+| `chromadb` | Development alternative (`[chromadb]`) |
+
+Set via CORE_MEMORY_VECTOR_BACKEND. Avoid local-faiss for multi-worker deployments. See semantic backend docs.
+
+Learn more in the [architecture docs](docs/architecture.md).
+
+---
+
+## Recall Example
+
+**Request**
+
+```python
+from core_memory import recall
+
+result = recall(
+    "what database did we decide on for Project Heron?",
+    effort="high",
+    root="~/.core-memory"
+)
+```
+
+<!-- TODO: Add causal graph screenshot before publish.
+     Use the demo UI screenshot showing the node graph + JSON panel.
+     Crop/blur the session header bar (email visible) before committing.
+     Save to docs/assets/core-memory-causal-graph.png -->
+<p align="center">
+  <img src="docs/assets/core-memory-causal-graph.png" alt="Core Memory causal graph — nodes and evidence panel" />
+</p>
+
+**Response**
+
+```json
+{
+  "contract": "recall_result",
+  "schema_version": "recall_result.v1",
+  "status": "answered",
+  "answer": "PostgreSQL",
+  "why": "Decision recorded in session 2026-04-12: PostgreSQL selected for Project Heron tenant config",
+  "evidence": [
+    {
+      "bead_id": "b_a3f9c2",
+      "type": "decision",
+      "title": "PostgreSQL selected for Project Heron tenant config",
+      "content_excerpt": "We decided to use PostgreSQL for the main tenant config database.",
+      "score": 0.94,
+      "grounding_hash": "sha256:e3b0c44..."
+    }
+  ],
+  "sources": [
+    {
+      "turn_id": "turn_042",
+      "session_id": "session_2026_04_12",
+      "bead_id": "b_a3f9c2",
+      "speaker": "user",
+      "ts": "2026-04-12T14:23:00Z"
+    }
+  ],
+  "steps": [
+    { "tier": "semantic", "status": "ok", "result_count": 3, "why": "anchor search" },
+    { "tier": "causal",   "status": "ok", "result_count": 1, "why": "causal chains resolved" }
+  ],
+  "planning": {
+    "selected_effort": "high",
+    "reason": "full orchestration: search + trace + goal resolution + claim enrichment"
+  },
+  "claim_slots": {
+    "project_heron.database": {
+      "subject": "project_heron",
+      "slot": "database",
+      "current_value": "PostgreSQL",
+      "status": "active",
+      "current_claim_id": "claim_b3f1a9",
+      "chain_seq": 1,
+      "grounding_hash": "sha256:e3b0c44..."
+    }
+  },
+  "resolved_goals": [],
+  "warnings": []
+}
+```
+
+---
+
+## Documentation
+
+**Repo Map**
+```
+core_memory/
+├── persistence/
+├── schema/
+├── retrieval/
+├── graph/
+├── write_pipeline/
+├── runtime/
+├── association/
+├── integrations/
+├── policy/
+└── cli.py
+```
+Other useful folders:
+
+* examples/ runnable examples
+* tests/ behavioral and regression coverage
+* docs/ architecture, integration guides, and contracts
+* plugins/ OpenClaw bridge assets
+* demo/ live demo app and assets
+
+---
+
+## Contributing
+```bash
+git clone https://github.com/JohnnyFiv3r/Core-Memory.git
+cd Core-Memory
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -U pip
+pip install -e ".[dev]"
+core-memory --help
+python3 -c "import core_memory; print('core_memory import ok')"
+pytest
+```
+
+Useful docs:
+
+[CONTRIBUTING.md](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/CONTRIBUTING.md)
+[Public Surface](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/public_surface.md)
+[Index](https://github.com/JohnnyFiv3r/Core-Memory/blob/master/docs/index.md)
+
+---
+
+## Maintainers
+
+Core Memory is maintained by:
+
+John Inniger (@JohnnyFiv3r)
+Chris Dedow (@chrisdedow)
+
+For bugs and feature requests, please open an issue. For anything else related to the project, feel free to reach out to the maintainers directly.
+
+---
+
+## Inspiration
+
+Inspired in part by Steve Yegge's writing on beads and memory systems: https://github.com/steveyegge/beads
+
+---
+
+Apache-2.0 License · Code of Conduct · Changelog
+
+---
+
+# Drafting checklist (delete before publish)
+
+Before this README ships:
+
+- [ ] Selling lines (hero) all use specific nouns, no hype words
+- [ ] One-command install actually works on a fresh box (test it)
+- [ ] MCP config snippet is copy-paste-valid (port matches default)
+- [ ] Every doc/ link in the documentation table resolves
+- [ ] Every client in the supported-clients table has a working setup guide
+- [ ] Screenshots reflect actual UI (or section is omitted)
+- [ ] Benchmark section: either has real numbers, or is omitted
+- [ ] Verb names match what's actually registered (`capture`, `recall`)
+- [ ] `RecallResult` JSON example validates against the real schema
+- [ ] No mnemory-specific framing leaked through (search for "mnemory", "Qdrant",
+      "Cognis", "Hermes" before publish)
+- [ ] Tone is declarative + specific, not "powerful" / "intelligent" / "AI-powered"
+- [ ] First paragraph passes the "60-second skim" test — does a senior eng know
+      what Core Memory does and what makes it different?
+- [ ] Causal graph screenshot added to docs/assets/core-memory-causal-graph.png (crop/blur header bar first)
