@@ -12,7 +12,9 @@
   Structured memory objects + causal trace over durable events — so agents can recall <i>why</i>, not just <i>what</i>.
 </p>
 
-[Quickstart](#quick-start) · [Features](#features) · [Supported Clients](#supported-clients) · [Contributing](#contributing)
+<p align="center">
+  <a href="#quick-start">Quickstart</a> · <a href="#features">Features</a> · <a href="#supported-clients">Supported Clients</a> · <a href="#contributing">Contributing</a>
+</p>
 
 ## Core Memory
 
@@ -34,7 +36,7 @@ Transcripts are where most decision making actually happens, across agent conver
   </a>
 </p>
 
-[Watch the Core Memory live demo on YouTube](https://youtu.be/56uyTJEnOAA)
+<p align="center"><a href="https://youtu.be/56uyTJEnOAA">Watch the Core Memory live demo on YouTube</a></p>
 
 ---
 
@@ -102,6 +104,14 @@ See the [full setup guide](https://github.com/JohnnyFiv3r/Core-Memory-Demo/blob/
 **Auto-detected embedding model** Picks up OPENAI_API_KEY, ANTHROPIC_API_KEY, GEMINI_API_KEY, or GOOGLE_API_KEY from your environment. Runs in degraded mode with one hint if none are set.
 
 **Plug and play adoption** Your data stays on your infrastructure. No cloud dependencies. Works with any MCP client. Native setup guides for Claude Code, Cursor, ChatGPT, and OpenClaw. Any MCP-compatible client works out of the box.
+
+<!-- TODO: Add causal graph screenshot before publish.
+     Use the demo UI screenshot showing the node graph + JSON panel.
+     Crop/blur the session header bar (email visible) before committing.
+     Save to docs/assets/core-memory-causal-graph.png -->
+<p align="center">
+  <img src="docs/assets/core-memory-causal-graph.png" alt="Core Memory causal graph — memory objects and evidence panel" />
+</p>
 
 ---
 
@@ -206,14 +216,6 @@ result = recall(
     root="~/.core-memory"
 )
 ```
-
-<!-- TODO: Add causal graph screenshot before publish.
-     Use the demo UI screenshot showing the node graph + JSON panel.
-     Crop/blur the session header bar (email visible) before committing.
-     Save to docs/assets/core-memory-causal-graph.png -->
-<p align="center">
-  <img src="docs/assets/core-memory-causal-graph.png" alt="Core Memory causal graph — nodes and evidence panel" />
-</p>
 
 **Response**
 
@@ -333,4 +335,6 @@ Inspired in part by Steve Yegge's writing on beads and memory systems: https://g
 
 ---
 
-<p align="center">Apache-2.0 License · Code of Conduct · Changelog</p>
+<p align="center">
+  <a href="LICENSE">Apache-2.0 License</a> · <a href="CODE_OF_CONDUCT.md">Code of Conduct</a> · <a href="CHANGELOG.md">Changelog</a>
+</p>
