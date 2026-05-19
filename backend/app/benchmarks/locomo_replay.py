@@ -376,17 +376,11 @@ def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'tran
         for turn in session_turns:
             env = _turn_envelope(sample_id=sample_id, session_index=session_index, turn=dict(turn or {}))
             if str(mode or 'transcript_only') == 'canonical_turn':
-                previous_callable = os.environ.get('CORE_MEMORY_AGENT_CRAWLER_CALLABLE')
                 previous_invoke = os.environ.get('CORE_MEMORY_AGENT_CRAWLER_INVOKE')
-                os.environ['CORE_MEMORY_AGENT_CRAWLER_CALLABLE'] = previous_callable or _LOCOMO_CRAWLER_CALLABLE
-                os.environ['CORE_MEMORY_AGENT_CRAWLER_INVOKE'] = previous_invoke or '1'
+                os.environ['CORE_MEMORY_AGENT_CRAWLER_INVOKE'] = '1'
                 try:
                     out = finalize_and_process_turn(root=root, policy=None, **env)
                 finally:
-                    if previous_callable is None:
-                        os.environ.pop('CORE_MEMORY_AGENT_CRAWLER_CALLABLE', None)
-                    else:
-                        os.environ['CORE_MEMORY_AGENT_CRAWLER_CALLABLE'] = previous_callable
                     if previous_invoke is None:
                         os.environ.pop('CORE_MEMORY_AGENT_CRAWLER_INVOKE', None)
                     else:

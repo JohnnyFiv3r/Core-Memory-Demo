@@ -40,6 +40,10 @@ try:
     from core_memory.runtime.turn_archive import find_turn_record
 except Exception:  # pragma: no cover
     find_turn_record = None  # type: ignore
+try:
+    from core_memory.retrieval.agent import recall as core_recall
+except Exception:  # pragma: no cover
+    core_recall = None  # type: ignore
 
 
 _STOP_TERMS = {
@@ -410,6 +414,28 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         except Exception as exc:
             trace_warning = f"trace_request_failed:{exc}"
             trace_meta = {"used": False, "reason": "trace_failed", "anchor_ids": [], "chains": [], "grounding": {}}
+        # Supplement with core_recall() for semantic + claims coverage beyond
+        # the lexical execute pass. Sample scoping is handled by _locomo_score()
+        # since core_recall doesn't accept metadata facets.
+        if core_recall is not None:
+            try:
+                cr_result = core_recall(
+                    str(qa.get("question") or ""),
+                    effort="high",
+                    root=root,
+                    k=max(int(retrieval_k or 8), 8),
+                    include_raw=True,
+                )
+                cr_dict = cr_result.to_dict() if hasattr(cr_result, "to_dict") else {}
+                cr_raw_rows = list((dict(cr_dict.get("raw") or {}).get("results") or []))
+                if cr_raw_rows:
+                    cr_extracted = [
+                        _extract_result_row(root=root, rank=len(retrieved) + idx, row=dict(r or {}))
+                        for idx, r in enumerate(cr_raw_rows, start=1)
+                    ]
+                    retrieved = _dedupe_rows(retrieved + cr_extracted)
+            except Exception:
+                pass
         retrieved, hydrate_meta = _hydrate_locomo_rows(root=root, rows=retrieved, sample_id=sample_id, limit=max(int(retrieval_k or 8), 8))
         for row in retrieved:
             row["locomo_score"] = _locomo_score(row, sample_id=sample_id, question=str(qa.get("question") or ""))

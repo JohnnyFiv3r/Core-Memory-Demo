@@ -205,14 +205,16 @@ class TestLocomoReplay(unittest.TestCase):
         self.assertEqual('conv-26', archived[0]['sample_id'])
         self.assertEqual('D1:2', archived[1]['dia_id'])
 
-    def test_canonical_replay_sets_locomo_crawler_callable_for_turns(self):
+    def test_canonical_replay_enables_crawler_invoke_without_overriding_callable(self):
         if replay_locomo_sample is None:
             self.skipTest('pydantic_settings unavailable')
         sample = self._sample()
-        seen = []
+        seen_callables = []
+        seen_invokes = []
 
         def fake_finalize(**kwargs):
-            seen.append(os.environ.get('CORE_MEMORY_AGENT_CRAWLER_CALLABLE'))
+            seen_callables.append(os.environ.get('CORE_MEMORY_AGENT_CRAWLER_CALLABLE'))
+            seen_invokes.append(os.environ.get('CORE_MEMORY_AGENT_CRAWLER_INVOKE'))
             return {'ok': True, 'processed': 1, 'emitted': {'emitted': True}}
 
         with tempfile.TemporaryDirectory() as td, \
@@ -224,8 +226,12 @@ class TestLocomoReplay(unittest.TestCase):
             os.environ.pop('CORE_MEMORY_AGENT_CRAWLER_INVOKE', None)
             replay_locomo_sample(root=td, sample=sample, mode='canonical_turn', flush_policy='per_session')
 
-        self.assertTrue(seen)
-        self.assertTrue(all(value == 'app.benchmarks.locomo_turn_crawler:locomo_crawler_callable' for value in seen))
+        self.assertTrue(seen_callables)
+        # The real LLM crawler is used — callable must NOT be forced to the
+        # deterministic locomo stub so that core_memory uses its production crawler.
+        self.assertTrue(all(value is None for value in seen_callables))
+        # INVOKE must be set so crawling actually runs.
+        self.assertTrue(all(value == '1' for value in seen_invokes))
 
 
 if __name__ == '__main__':

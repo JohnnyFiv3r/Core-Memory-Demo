@@ -3030,6 +3030,20 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
         if snapshot_sanitize_meta:
             ingestion_meta["snapshot_sanitize"] = dict(snapshot_sanitize_meta)
+        try:
+            async_jobs_out = run_async_jobs(
+                root=str(base_root),
+                run_semantic=False,
+                max_compaction=2,
+                max_side_effects=8,
+            )
+            ingestion_meta["async_jobs"] = {
+                "ok": bool((async_jobs_out or {}).get("ok")),
+                "compaction_ran": int((async_jobs_out or {}).get("compaction_ran") or 0),
+                "side_effects_ran": int((async_jobs_out or {}).get("side_effects_ran") or 0),
+            }
+        except Exception as exc:
+            ingestion_meta["async_jobs"] = {"ok": False, "error": str(exc)}
 
         resolved_answer_mode = str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm"))
         resolved_generator_model = str(generator_model or "").strip()
