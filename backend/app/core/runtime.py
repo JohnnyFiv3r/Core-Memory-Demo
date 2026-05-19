@@ -3026,7 +3026,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             _copy_tree(Path(settings.core_memory_root), base_root)
             snapshot_sanitize_meta = _sanitize_locomo_benchmark_snapshot(base_root)
         ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
-        ingest_path_active = str(settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
+        ingest_path_active = str(settings.locomo_ingest_path or 'canonical_replay').strip().lower() or 'canonical_replay'
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
         if snapshot_sanitize_meta:
             ingestion_meta["snapshot_sanitize"] = dict(snapshot_sanitize_meta)

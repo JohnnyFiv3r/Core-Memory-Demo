@@ -5,7 +5,10 @@ import json
 import re
 from typing import Any
 
-from app.core.agent_runtime import run_agent_for_root
+try:
+    from app.core.agent_runtime import run_agent_for_root
+except Exception:  # pragma: no cover
+    run_agent_for_root = None  # type: ignore
 
 
 def _support_strength(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
@@ -187,6 +190,8 @@ def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str
     if mode_name == "oracle_context":
         raise ValueError("oracle_context_answer_mode_disabled_for_scored_benchmarks")
     if mode_name == "llm":
+        if run_agent_for_root is None:
+            raise RuntimeError("agent_runtime_unavailable")
         model_id = str(generator_model or "").strip()
         if not model_id:
             raise RuntimeError("missing_generator_model")

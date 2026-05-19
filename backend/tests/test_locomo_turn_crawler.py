@@ -63,8 +63,11 @@ class TestLocomoTurnCrawler(unittest.TestCase):
         self.assertEqual('supports', out['associations'][0]['relationship'])
 
     def test_current_turn_alias_resolves_in_core_memory_contract(self):
-        from core_memory.association.crawler_contract import apply_crawler_updates
-        from core_memory.persistence.store import MemoryStore
+        try:
+            from core_memory.association.crawler_contract import apply_crawler_updates
+            from core_memory.persistence.store import MemoryStore
+        except ImportError:
+            self.skipTest('core_memory unavailable')
 
         with tempfile.TemporaryDirectory() as td:
             store = MemoryStore(td)

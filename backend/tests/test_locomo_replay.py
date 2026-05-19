@@ -185,6 +185,26 @@ class TestLocomoReplay(unittest.TestCase):
         self.assertEqual('b-other', miss['same_session_examples'][0]['bead_id'])
         self.assertEqual(['unexpected'], miss['same_session_examples'][0]['source_turn_ids'])
 
+    def test_replay_writes_turn_archive_for_each_ingested_turn(self):
+        if replay_locomo_sample is None:
+            self.skipTest('pydantic_settings unavailable')
+        sample = self._sample()
+        archived: list[dict] = []
+
+        def fake_archive(*, root, turn):
+            archived.append({'dia_id': turn.get('dia_id'), 'sample_id': turn.get('sample_id')})
+
+        with patch('app.benchmarks.locomo_replay._archive_locomo_turn', side_effect=fake_archive), \
+             patch.object(locomo_replay_mod, 'emit_turn_finalized', return_value={'emitted': True, 'event_id': 'ev-1', 'payload': {}}), \
+             patch.object(locomo_replay_mod, 'process_flush', return_value={'ok': True}):
+            out = replay_locomo_sample(root='/tmp/fake', sample=sample, mode='transcript_only', flush_policy='end_only')
+
+        self.assertEqual(2, out['ingested_count'])
+        self.assertEqual(2, len(archived), 'turn archive must be written for every ingested turn')
+        self.assertEqual('D1:1', archived[0]['dia_id'])
+        self.assertEqual('conv-26', archived[0]['sample_id'])
+        self.assertEqual('D1:2', archived[1]['dia_id'])
+
     def test_canonical_replay_sets_locomo_crawler_callable_for_turns(self):
         if replay_locomo_sample is None:
             self.skipTest('pydantic_settings unavailable')

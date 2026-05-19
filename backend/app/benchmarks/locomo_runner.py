@@ -374,7 +374,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         pipeline_name = str(retrieval_pipeline or "execute_trace").strip().lower() or "execute_trace"
         force_three_phase = pipeline_name in {"execute_trace_hydrate", "forced_three_phase", "three_phase"}
         trace_meta = {"used": False, "reason": "trace_disabled", "anchor_ids": [], "chains": [], "grounding": {}}
-        hydrate_meta = {"used": False, "reason": "not_requested", "hydrated_rows": 0}
+        hydrate_meta: dict[str, Any] = {}
         trace_warning = None
         try:
             anchor_ids = [str((row or {}).get("bead_id") or "").strip() for row in raw_results if str((row or {}).get("bead_id") or "").strip()]
@@ -410,8 +410,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         except Exception as exc:
             trace_warning = f"trace_request_failed:{exc}"
             trace_meta = {"used": False, "reason": "trace_failed", "anchor_ids": [], "chains": [], "grounding": {}}
-        if force_three_phase:
-            retrieved, hydrate_meta = _hydrate_locomo_rows(root=root, rows=retrieved, sample_id=sample_id, limit=max(int(retrieval_k or 8), 8))
+        retrieved, hydrate_meta = _hydrate_locomo_rows(root=root, rows=retrieved, sample_id=sample_id, limit=max(int(retrieval_k or 8), 8))
         for row in retrieved:
             row["locomo_score"] = _locomo_score(row, sample_id=sample_id, question=str(qa.get("question") or ""))
         retrieved.sort(key=lambda r: float(r.get("locomo_score") or 0.0), reverse=True)
