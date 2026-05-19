@@ -365,6 +365,7 @@ function BenchmarkPane(props) {
           ? ((isActiveRun && runId ? ('pending run_id: ' + String(runId) + ' · ') : '') +
             'root mode: ' + String(summary.root_mode || 'n/a') +
             ' · answer mode: ' + String(summary.answer_mode || 'n/a') +
+            ' · model: ' + String(summary.generator_model || 'auto') +
             ' · retrieval k: ' + String(summary.retrieval_k || 'n/a'))
           : ('root mode: ' + String(summary.root_mode || 'n/a') + ' · preload turns: ' + String(summary.preload_turn_count || 0))
       ),
@@ -402,16 +403,58 @@ function BenchmarkPane(props) {
         : null,
       React.createElement(
         'div',
-        { style: { marginTop: '6px' } },
+        { style: { marginTop: '6px', display: 'flex', gap: '8px', flexWrap: 'wrap' } },
         React.createElement(
           ((report || {}).artifact_download_url || (summary || {}).artifact_download_url) ? 'a' : 'button',
           ((report || {}).artifact_download_url || (summary || {}).artifact_download_url)
             ? { className: 'btn', href: ((report || {}).artifact_download_url || (summary || {}).artifact_download_url), download: true }
             : { className: 'btn', onClick: () => openPayload('LOCOMO Benchmark Report (raw JSON)', report || {}) },
-          ((report || {}).artifact_download_url || (summary || {}).artifact_download_url) ? 'Download raw JSON' : 'Open raw JSON'
-        )
+          ((report || {}).artifact_download_url || (summary || {}).artifact_download_url) ? 'Download report.json' : 'Open raw JSON'
+        ),
+        (summary || {}).run_id
+          ? React.createElement(
+              'a',
+              { className: 'btn', href: '/api/demo/benchmark/artifact/' + String(summary.run_id) + '/cases.jsonl', download: true },
+              'Download cases.jsonl'
+            )
+          : null
       )
     ),
+    isLocomo && !isActiveRun && (summary || {}).methodology
+      ? React.createElement(
+          'div',
+          { className: 'runtime-card' },
+          React.createElement('strong', null, 'Methodology'),
+          React.createElement(
+            'div',
+            { style: { marginTop: '4px', color: 'var(--text-dim)' } },
+            'categories: ' + String(((summary.methodology || {}).categories_scored || []).join(', ') || 'n/a') +
+              ' · cat-5 excluded: ' + String(!!(summary.methodology || {}).category_5_excluded) +
+              ' · runs: ' + String((summary.methodology || {}).runs || 1) +
+              ' · variance: ' + String((summary.methodology || {}).variance_reported ? 'reported' : 'not reported')
+          ),
+          React.createElement(
+            'div',
+            { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+            'comparable to: ' + String((summary.methodology || {}).comparable_to || 'n/a')
+          ),
+          (summary.methodology || {}).questions_no_evidence
+            ? React.createElement(
+                'div',
+                { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+                'questions with no evidence annotation: ' + String((summary.methodology || {}).questions_no_evidence) +
+                  ' (recall@k=1.0 for these — vacuous)'
+              )
+            : null,
+          (summary || {}).locomo_repo_commit
+            ? React.createElement(
+                'div',
+                { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+                'dataset commit: ' + String(summary.locomo_repo_commit)
+              )
+            : null
+        )
+      : null,
     isLocomo && semanticBuild
       ? React.createElement(
           'div',
