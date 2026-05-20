@@ -31,6 +31,7 @@ let selectedClaimSlot = null;
 let claimsAsOf = '';
 let claimsDetailOpen = false;
 let seedStatusState = {active: false, kind: '', status: 'idle', message: ''};
+let activeSeedJobId = null;
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
@@ -956,7 +957,15 @@ function bindUiEventHandlers() {
   }
 
   const seedBtn = document.getElementById('btn-seed');
-  if (seedBtn) seedBtn.addEventListener('click', seedMemory);
+  if (seedBtn) seedBtn.addEventListener('click', () => {
+    if (activeSeedJobId) {
+      const jobId = activeSeedJobId;
+      activeSeedJobId = null;
+      fetch(`/api/locomo/replay/job/${jobId}/cancel`, {method: 'POST'}).catch(() => {});
+    } else {
+      seedMemory();
+    }
+  });
 
   const benchmarkBtn = document.getElementById('btn-benchmark');
   if (benchmarkBtn) benchmarkBtn.addEventListener('click', runBenchmark);
@@ -3973,7 +3982,7 @@ async function seedMemory() {
       if (locomoSampleMode === 'single' && !locomoSampleId) {
         throw new Error('locomo_sample_not_found');
       }
-      const progress = addMsg('system', 'Seeding LoCoMo transcript corpus...');
+      const progressEl = addMsg('system', 'Seeding LoCoMo transcript corpus...');
       const payload = {
         sample_mode: locomoSampleMode,
         sample_id: locomoSampleMode === 'single' ? locomoSampleId : null,
@@ -3985,24 +3994,54 @@ async function seedMemory() {
         auto_flush: true,
         flush_threshold_ratio: AUTO_FLUSH_THRESHOLD_PCT / 100,
       };
-      const res = await fetch('/api/locomo/replay', {
+      const startRes = await fetch('/api/locomo/replay', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload),
       });
-      data = await parseApiJsonResponse(res, 'locomo replay');
-      const seeded = Number(data.seeded || data.seeded_turns || 0);
-      const queueIdle = !!data.queue_idle;
-      const range = data.turn_range || {};
-      const sampleIds = Array.isArray(data.sample_ids) ? data.sample_ids : [];
-      const sampleLabel = sampleIds.length === 1 ? ('sample=' + String(sampleIds[0])) : ('samples=' + String(sampleIds.length || 0));
-      progress.textContent =
-        'Seeded ' + seeded + ' turn(s) via LoCoMo replay' +
-        (sampleLabel ? (' · ' + sampleLabel) : '') +
-        (range.first && range.last ? (' · range=' + String(range.first) + '-' + String(range.last)) : '') +
-        ' · queue_idle=' + String(queueIdle);
-      if (Number(data.failed_turns || 0) > 0) {
-        addMsg('system', 'Warning: LoCoMo replay completed with ' + String(data.failed_turns || 0) + ' failed turn(s).');
+      const startJson = await parseApiJsonResponse(startRes, 'locomo replay');
+      const seedJobId = String(startJson.job_id || '');
+      if (!seedJobId) throw new Error('locomo replay: no job_id returned');
+      activeSeedJobId = seedJobId;
+      if (seedBtn) seedBtn.textContent = 'Cancel seed';
+
+      // Poll until the background job finishes
+      let job = {};
+      let cursor = 0;
+      while (true) {
+        await new Promise(r => setTimeout(r, 1200));
+        if (activeSeedJobId !== seedJobId) break; // cancelled client-side
+        try {
+          const pollRes = await fetch(`/api/locomo/replay/job/${seedJobId}?cursor=${cursor}`);
+          job = await parseApiJsonResponse(pollRes, 'locomo replay job');
+          cursor = Number(job.cursor_next || cursor);
+          const stage = String(job.stage || '');
+          progressEl.textContent = 'Seeding LoCoMo transcript corpus... ' + stage;
+        } catch (_) {
+          // transient poll failure — keep trying
+        }
+        if (job.done) break;
+      }
+
+      activeSeedJobId = null;
+      data = (job.result) || {};
+
+      if (String(job.status || '') === 'cancelled') {
+        progressEl.textContent = 'LoCoMo seed cancelled.';
+      } else {
+        const seeded = Number(data.seeded || data.seeded_turns || 0);
+        const queueIdle = !!data.queue_idle;
+        const range = data.turn_range || {};
+        const sampleIds = Array.isArray(data.sample_ids) ? data.sample_ids : [];
+        const sampleLabel = sampleIds.length === 1 ? ('sample=' + String(sampleIds[0])) : ('samples=' + String(sampleIds.length || 0));
+        progressEl.textContent =
+          'Seeded ' + seeded + ' turn(s) via LoCoMo replay' +
+          (sampleLabel ? (' · ' + sampleLabel) : '') +
+          (range.first && range.last ? (' · range=' + String(range.first) + '-' + String(range.last)) : '') +
+          ' · queue_idle=' + String(queueIdle);
+        if (Number(data.failed_turns || 0) > 0) {
+          addMsg('system', 'Warning: LoCoMo replay completed with ' + String(data.failed_turns || 0) + ' failed turn(s).');
+        }
       }
     } else if (seedSource === 'story_pack' && preloadEnabled) {
       let startTurn = 1;
