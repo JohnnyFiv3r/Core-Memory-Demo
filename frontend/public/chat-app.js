@@ -4039,6 +4039,7 @@ async function seedMemory() {
       let job = {};
       let cursor = 0;
       let seedPollBackoffMs = 3000;
+      let cancellingStartMs = 0;
       while (true) {
         await new Promise(r => setTimeout(r, seedPollBackoffMs));
         try {
@@ -4052,8 +4053,11 @@ async function seedMemory() {
           seedPollBackoffMs = Math.max(3000, Number(job.poll_after_ms || 3000));
           const stage = String(job.stage || '');
           if (activeSeedJobId !== seedJobId) {
+            if (!cancellingStartMs) cancellingStartMs = Date.now();
             progressEl.textContent = 'Cancelling LoCoMo seed...';
+            if (Date.now() - cancellingStartMs > 30000) break;
           } else {
+            cancellingStartMs = 0;
             progressEl.textContent = 'Seeding LoCoMo transcript corpus... ' + stage;
           }
         } catch (_) {

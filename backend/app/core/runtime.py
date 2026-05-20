@@ -550,7 +550,7 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
             })
 
     post_drain: dict[str, Any] = {}
-    if drain_after_ingest and seeded > 0 and not cancelled:
+    if drain_after_ingest and seeded > 0 and not cancelled and not (cancel_event is not None and cancel_event.is_set()):
         if callable(heartbeat):
             heartbeat("draining", f"Processing async jobs for {seeded} ingested turn(s)")
         post_drain = _drain_async_until_idle(
