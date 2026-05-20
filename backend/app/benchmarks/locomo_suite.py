@@ -45,10 +45,17 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
     if isinstance(sample_limit, int) and sample_limit > 0:
         selected = selected[: sample_limit]
 
-    # Default to official categories 1-4 when the caller provides no filter.
-    # An empty list means "no preference" (not "all"), treated identically to None.
-    effective_filter = list(category_filter) if category_filter else _OFFICIAL_LOCOMO_CATEGORIES
+    # Default to official categories 1-4 when neither category_filter nor
+    # qa_per_category is specified. If qa_per_category is given without an
+    # explicit filter, its keys define the effective set (original behaviour).
+    # An empty category_filter list means "no preference", same as None.
     category_caps = _normalize_qa_per_category(qa_per_category)
+    if category_filter:
+        effective_filter = list(category_filter)
+    elif category_caps:
+        effective_filter = []  # let category_caps drive the set via the existing or-logic below
+    else:
+        effective_filter = _OFFICIAL_LOCOMO_CATEGORIES
     category_set = {int(x) for x in effective_filter}
     if category_caps:
         category_set = set(category_set or category_caps.keys())
