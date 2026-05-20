@@ -3653,6 +3653,14 @@ async function refreshMemory() {
   if (authEnabled && !authReady) return;
   if (!modelOptionsHydrated) loadDemoModels();
   refreshSeedStatus();
+
+  // While a LoCoMo seed is actively polling, skip the full state refresh —
+  // the seed poll loop owns progress updates and the rate budget is tight.
+  if (activeSeedJobId) {
+    refreshErrorStreak = 0;
+    return;
+  }
+
   try {
     const activeBenchmarkStatus = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
     const activeBenchmarkJobId = String((lastBenchmarkSummary || {}).job_id || '').trim();
@@ -4011,13 +4019,19 @@ async function seedMemory() {
       // Poll until the background job finishes
       let job = {};
       let cursor = 0;
+      let seedPollBackoffMs = 3000;
       while (true) {
-        await new Promise(r => setTimeout(r, 1200));
+        await new Promise(r => setTimeout(r, seedPollBackoffMs));
         if (activeSeedJobId !== seedJobId) break; // cancelled client-side
         try {
           const pollRes = await fetch(`/api/locomo/replay/job/${seedJobId}?cursor=${cursor}`);
+          if (pollRes.status === 429) {
+            seedPollBackoffMs = Math.min(seedPollBackoffMs * 2, 30000);
+            continue;
+          }
           job = await parseApiJsonResponse(pollRes, 'locomo replay job');
           cursor = Number(job.cursor_next || cursor);
+          seedPollBackoffMs = Math.max(3000, Number(job.poll_after_ms || 3000));
           const stage = String(job.stage || '');
           progressEl.textContent = 'Seeding LoCoMo transcript corpus... ' + stage;
         } catch (_) {
@@ -4049,7 +4063,11 @@ async function seedMemory() {
           (range.first && range.last ? (' · range=' + String(range.first) + '-' + String(range.last)) : '') +
           ' · queue_idle=' + String(queueIdle);
         if (Number(data.failed_turns || 0) > 0) {
-          addMsg('system', 'Warning: LoCoMo replay completed with ' + String(data.failed_turns || 0) + ' failed turn(s).');
+          const turnErrors = Array.isArray(data.errors) ? data.errors : [];
+          const errDetails = turnErrors.slice(0, 3).map(e =>
+            'dia_id=' + String((e || {}).dia_id || '?') + ': ' + String((e || {}).error || 'unknown')
+          ).join('; ');
+          addMsg('system', 'Warning: LoCoMo replay completed with ' + String(data.failed_turns || 0) + ' failed turn(s).' + (errDetails ? ' ' + errDetails : ''));
         }
       }
     } else if (seedSource === 'story_pack' && preloadEnabled) {
