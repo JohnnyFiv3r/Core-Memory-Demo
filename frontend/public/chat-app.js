@@ -3807,10 +3807,14 @@ async function refreshMemory() {
     refreshPauseNoticeShown = false;
     restartRefreshTimer(refreshBackoffMs);
   } catch (err) {
-    refreshErrorStreak += 1;
-    refreshBackoffMs = Math.min(30000, Math.max(2500, refreshBackoffMs * 2));
+    const errMsg = String((err && err.message) || err || '');
+    const isTransientNetwork = /network_changed|network_io_suspended|failed to fetch|networkerror/i.test(errMsg);
+    if (!isTransientNetwork) {
+      refreshErrorStreak += 1;
+      refreshBackoffMs = Math.min(30000, Math.max(2500, refreshBackoffMs * 2));
+    }
     restartRefreshTimer(refreshBackoffMs);
-    if (refreshErrorStreak >= 3 && !refreshPauseNoticeShown) {
+    if (!isTransientNetwork && refreshErrorStreak >= 3 && !refreshPauseNoticeShown) {
       refreshPauseNoticeShown = true;
       addMsg('system', 'Data refresh is degraded due to repeated backend/proxy errors. Retrying automatically with backoff.');
     }
