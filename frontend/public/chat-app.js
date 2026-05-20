@@ -4003,7 +4003,10 @@ async function seedMemory() {
       const seedJobId = String(startJson.job_id || '');
       if (!seedJobId) throw new Error('locomo replay: no job_id returned');
       activeSeedJobId = seedJobId;
-      if (seedBtn) seedBtn.textContent = 'Cancel seed';
+      if (seedBtn) {
+        seedBtn.textContent = 'Cancel seed';
+        seedBtn.disabled = false;
+      }
 
       // Poll until the background job finishes
       let job = {};
@@ -4024,10 +4027,16 @@ async function seedMemory() {
       }
 
       activeSeedJobId = null;
+      if (seedBtn) seedBtn.disabled = true; // re-disable while finally restores label
       data = (job.result) || {};
 
-      if (String(job.status || '') === 'cancelled') {
+      const terminalStatus = String(job.status || '');
+      if (terminalStatus === 'cancelled') {
         progressEl.textContent = 'LoCoMo seed cancelled.';
+      } else if (terminalStatus === 'failed' || (job.done && job.error)) {
+        const errMsg = String(job.error || data.error || 'unknown error');
+        progressEl.textContent = 'LoCoMo seed failed: ' + errMsg;
+        addMsg('system', 'LoCoMo seed failed: ' + errMsg);
       } else {
         const seeded = Number(data.seeded || data.seeded_turns || 0);
         const queueIdle = !!data.queue_idle;
