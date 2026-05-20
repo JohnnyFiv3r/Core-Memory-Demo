@@ -3996,9 +3996,7 @@ async function seedMemory() {
         sample_id: locomoSampleMode === 'single' ? locomoSampleId : null,
         replay_mode: 'transcript_only',
         max_turns: locomoMaxTurns,
-        wait_for_idle: true,
-        idle_timeout_ms: 120000,
-        idle_poll_ms: 250,
+        wait_for_idle: false,
         auto_flush: true,
         flush_threshold_ratio: AUTO_FLUSH_THRESHOLD_PCT / 100,
       };
