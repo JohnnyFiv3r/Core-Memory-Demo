@@ -1027,7 +1027,7 @@ async def locomo_replay(request: Request):
     max_turns_raw = (body or {}).get('max_turns')
     start_session_raw = (body or {}).get('start_session')
     max_sessions_raw = (body or {}).get('max_sessions')
-    wait_for_idle = bool((body or {}).get('wait_for_idle', True))
+    wait_for_idle = bool((body or {}).get('wait_for_idle', False))
     idle_timeout_ms = int((body or {}).get('idle_timeout_ms') or 120000)
     idle_poll_ms = int((body or {}).get('idle_poll_ms') or 250)
     auto_flush = bool((body or {}).get('auto_flush', True))
