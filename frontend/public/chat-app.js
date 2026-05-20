@@ -4319,6 +4319,7 @@ async function runBenchmark() {
   btn.dataset.prevLabel = prev;
   btn.disabled = true;
   btn.textContent = 'Starting...';
+  completedBenchmarkRunId = null;
   const optimisticJobId = 'pending-job-' + Date.now().toString(36);
   const optimisticAnswerMode = answerMode || 'auto';
   lastBenchmarkSummary = {
