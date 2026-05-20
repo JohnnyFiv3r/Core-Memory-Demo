@@ -33,6 +33,8 @@ let claimsDetailOpen = false;
 let seedStatusState = {active: false, kind: '', status: 'idle', message: ''};
 let activeSeedJobId = null;
 let benchmarkProgressEl = null;
+let activeBenchmarkPollJobId = null;
+let completedBenchmarkRunId = null;
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
@@ -3684,11 +3686,15 @@ async function refreshMemory() {
         const controlRes = await fetch('/api/demo/control-state');
         const control = await parseApiJsonResponse(controlRes, 'control-state');
         const bench = control.benchmark || {};
-        if (bench.summary) lastBenchmarkSummary = bench.summary || lastBenchmarkSummary;
-        if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
-        if (bench.history) lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
-        updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
-        renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
+        // While the poll loop owns the benchmark state, don't let control-state overwrite
+        // it — the backend returns the previous run's summary as the "live" summary.
+        if (!activeBenchmarkPollJobId) {
+          if (bench.summary) lastBenchmarkSummary = bench.summary || lastBenchmarkSummary;
+          if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
+          if (bench.history) lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
+          updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
+          renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
+        }
       } catch (_) {
         // best effort only
       }
@@ -3791,7 +3797,12 @@ async function refreshMemory() {
     const inspectBenchmarkSummary = (data.benchmark || {}).last_summary || null;
     const liveBenchmarkPinned = benchmarkSummaryHasLiveJob(lastBenchmarkSummary, lastBenchmarkReport);
     if (!liveBenchmarkPinned && inspectBenchmarkSummary) {
-      lastBenchmarkSummary = inspectBenchmarkSummary;
+      const incomingRunId = String(inspectBenchmarkSummary.run_id || '');
+      // Only overwrite if: no prior completed run (initial load), or the backend has
+      // caught up and is returning the run we just completed.
+      if (!completedBenchmarkRunId || incomingRunId === completedBenchmarkRunId) {
+        lastBenchmarkSummary = inspectBenchmarkSummary;
+      }
     }
     lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
     if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
@@ -4028,6 +4039,7 @@ async function seedMemory() {
       let job = {};
       let cursor = 0;
       let seedPollBackoffMs = 3000;
+      let cancellingStartMs = 0;
       while (true) {
         await new Promise(r => setTimeout(r, seedPollBackoffMs));
         try {
@@ -4041,8 +4053,11 @@ async function seedMemory() {
           seedPollBackoffMs = Math.max(3000, Number(job.poll_after_ms || 3000));
           const stage = String(job.stage || '');
           if (activeSeedJobId !== seedJobId) {
+            if (!cancellingStartMs) cancellingStartMs = Date.now();
             progressEl.textContent = 'Cancelling LoCoMo seed...';
+            if (Date.now() - cancellingStartMs > 30000) break;
           } else {
+            cancellingStartMs = 0;
             progressEl.textContent = 'Seeding LoCoMo transcript corpus... ' + stage;
           }
         } catch (_) {
@@ -4359,6 +4374,7 @@ async function runBenchmark() {
       throw new Error(data.error || ('HTTP ' + res.status));
     }
     const jobId = String(data.job_id || '').trim();
+    activeBenchmarkPollJobId = jobId;
     lastBenchmarkSummary = {
       ...(lastBenchmarkSummary || {}),
       run_id: '',
@@ -4434,8 +4450,9 @@ async function runBenchmark() {
         await new Promise(resolve => setTimeout(resolve, Math.max(500, Number(job.poll_after_ms || 1200))));
       } else if (job.result && job.result.ok) {
         const result = job.result || {};
-        lastBenchmarkSummary = result.summary || lastBenchmarkSummary;
-        lastBenchmarkReport = result.report || lastBenchmarkReport;
+        lastBenchmarkSummary = { ...(lastBenchmarkSummary || {}), ...(result.summary || {}) };
+        lastBenchmarkReport = { ...(lastBenchmarkReport || {}), ...(result.report || {}) };
+        completedBenchmarkRunId = String((lastBenchmarkSummary || {}).run_id || '') || null;
         try {
           const rh = await fetch('/api/demo/benchmark/history?limit=20');
           const jh = await parseApiJsonResponse(rh, 'benchmark-history');
@@ -4463,6 +4480,7 @@ async function runBenchmark() {
       addMsg('system', 'Benchmark failed: ' + msg);
     }
   } finally {
+    activeBenchmarkPollJobId = null;
     benchmarkProgressEl = null;
     syncBenchmarkButton(lastBenchmarkSummary || {});
   }
