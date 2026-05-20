@@ -4324,6 +4324,7 @@ async function runBenchmark() {
   btn.textContent = 'Starting...';
   completedBenchmarkRunId = null;
   const optimisticJobId = 'pending-job-' + Date.now().toString(36);
+  activeBenchmarkPollJobId = optimisticJobId;
   const optimisticAnswerMode = answerMode || 'auto';
   lastBenchmarkSummary = {
     run_id: '',

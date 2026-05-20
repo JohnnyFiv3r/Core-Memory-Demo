@@ -9,7 +9,7 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'Core-Memory'))
 
-if importlib.util.find_spec('pydantic_settings') is not None:
+if importlib.util.find_spec('pydantic_settings') is not None and importlib.util.find_spec('core_memory') is not None:
     from app.core import runtime as runtime_mod
 else:
     runtime_mod = None
@@ -85,7 +85,8 @@ class TestLocomoComparisonMode(unittest.TestCase):
             runtime_mod.settings.locomo_compare_paths_enabled = True
             try:
                 with patch.object(runtime_mod, 'build_locomo_suite_metadata', return_value=(fake_dataset_meta, fake_cases, fake_samples, fake_gold)), \
-                     patch.object(runtime_mod, 'ingest_locomo_samples', side_effect=[{'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0}, {'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0}]), \
+                     patch.object(runtime_mod, 'ingest_locomo_samples_through_core_memory', return_value={'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0, 'post_drain': {'ok': True}}), \
+                     patch.object(runtime_mod, 'ingest_locomo_samples', return_value={'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0}), \
                      patch.object(runtime_mod, 'run_locomo_retrieval_suite', side_effect=[main_report, compare_report]), \
                      patch.object(runtime_mod, 'build_semantic_index', side_effect=[{'ok': True, 'backend': 'hash', 'entries': 1}, {'ok': True, 'backend': 'hash', 'entries': 1}]):
                     out = runtime_mod.run_benchmark(
@@ -115,7 +116,7 @@ class TestLocomoComparisonMode(unittest.TestCase):
         self.assertTrue(out['ok'])
         self.assertTrue(out['report']['config']['compare_paths_requested'])
         self.assertTrue(out['report']['config']['compare_paths_executed'])
-        self.assertEqual('bead_direct', out['report']['config']['ingest_path_active'])
+        self.assertEqual('core_memory_pipeline', out['report']['config']['ingest_path_active'])
         self.assertEqual('canonical_replay', out['report']['config']['compare_target'])
         self.assertIn('comparison', out['report'])
         self.assertEqual('bead_direct', out['report']['comparison']['left'])

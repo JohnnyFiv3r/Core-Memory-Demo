@@ -440,7 +440,7 @@ def _locomo_core_session_id(sample_id: str) -> str:
     return f"locomo:{str(sample_id or '').strip() or 'unknown'}"
 
 
-def _replay_locomo_row(row: dict[str, Any]) -> dict[str, Any]:
+def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[str, Any]:
     sample_id = str(row.get("sample_id") or "").strip() or "unknown"
     dia_id = str(row.get("dia_id") or "").strip() or f"row-{uuid.uuid4().hex[:8]}"
     speaker = str(row.get("speaker") or "").strip()
@@ -474,7 +474,7 @@ def _replay_locomo_row(row: dict[str, Any]) -> dict[str, Any]:
         metadata["locomo_image_query"] = row.get("query")
 
     _process_user_assistant_turn_finalized(
-        root=settings.core_memory_root,
+        root=str(root or settings.core_memory_root),
         session_id=session_id,
         turn_id=turn_id,
         transaction_id=f"locomo-tx:{sample_id}:{dia_id}",
@@ -485,6 +485,110 @@ def _replay_locomo_row(row: dict[str, Any]) -> dict[str, Any]:
         metadata=metadata,
     )
     return {"ok": True, "session_id": session_id, "turn_id": turn_id, "dia_id": dia_id}
+
+
+def ingest_locomo_samples_through_core_memory(
+    *,
+    base_root: str,
+    samples: list[dict[str, Any]],
+    cancel_event: Any | None = None,
+    progress: Any | None = None,
+    heartbeat: Any | None = None,
+    drain_timeout_ms: int = 600_000,
+    max_compaction_per_pass: int = 4,
+    max_side_effects_per_pass: int = 16,
+) -> dict[str, Any]:
+    """Ingest pre-loaded LoCoMo samples through the full Core Memory pipeline.
+
+    Same code path as `replay_locomo_corpus` (seeding) uses for the live root,
+    but writes into the supplied benchmark root and accepts already-iterated
+    samples from `build_locomo_suite_metadata`. Drains the async queue on the
+    benchmark root before returning so semantic build runs against a fully
+    enriched state.
+    """
+    target_root = str(base_root)
+    total_turns = 0
+    ingested_count = 0
+    errors: list[dict[str, Any]] = []
+    rows: list[dict[str, Any]] = []
+
+    flat_rows: list[dict[str, Any]] = []
+    for sample in samples or []:
+        sample_id = str((sample or {}).get("sample_id") or "").strip()
+        for session in list((sample or {}).get("sessions") or []):
+            session_index = int((session or {}).get("session_index") or 0)
+            session_date_time = str((session or {}).get("date_time") or "")
+            for turn in list((session or {}).get("turns") or []):
+                if not isinstance(turn, dict):
+                    continue
+                flat_rows.append(
+                    {
+                        "sample_id": sample_id,
+                        "session_index": session_index,
+                        "session_date_time": session_date_time,
+                        "turn_index": int(turn.get("turn_index") or 0),
+                        "speaker": str(turn.get("speaker") or "").strip(),
+                        "dia_id": str(turn.get("dia_id") or "").strip(),
+                        "text": str(turn.get("text") or "").strip(),
+                        "img_url": turn.get("img_url"),
+                        "blip_caption": turn.get("blip_caption"),
+                    }
+                )
+    total_turns = len(flat_rows)
+
+    cancelled = False
+    for idx, row in enumerate(flat_rows, start=1):
+        if cancel_event is not None and cancel_event.is_set():
+            cancelled = True
+            break
+        try:
+            _replay_locomo_row(row, root=target_root)
+            ingested_count += 1
+            if callable(progress):
+                try:
+                    progress(ingested_count, total_turns)
+                except Exception:
+                    pass
+        except Exception as exc:
+            errors.append(
+                {
+                    "index": idx,
+                    "sample_id": str(row.get("sample_id") or ""),
+                    "dia_id": str(row.get("dia_id") or ""),
+                    "error": str(exc or "locomo_replay_row_failed"),
+                }
+            )
+
+    post_drain: dict[str, Any] = {}
+    if ingested_count > 0 and not cancelled and not (cancel_event is not None and cancel_event.is_set()):
+        if callable(heartbeat):
+            heartbeat("draining", f"Processing async jobs for {ingested_count} ingested turn(s)")
+        post_drain = _drain_async_until_idle(
+            timeout_ms=max(60_000, int(drain_timeout_ms)),
+            poll_ms=1000,
+            max_compaction=max(int(max_compaction_per_pass), 4),
+            max_side_effects=max(int(max_side_effects_per_pass), 16),
+            root=target_root,
+        )
+
+    final_queue = async_jobs_status(root=target_root)
+    return {
+        "ok": ingested_count > 0 and not cancelled,
+        "cancelled": cancelled,
+        "mode": "core_memory_through_process_turn_finalized",
+        "ingest_path": "core_memory_pipeline",
+        "samples": len(list(samples or [])),
+        "turns_total": total_turns,
+        "ingested_turns": ingested_count,
+        "ingested_count": ingested_count,
+        "skipped_existing_count": 0,
+        "claims_written": 0,
+        "failed_turns": len(errors),
+        "errors": errors[:20],
+        "post_drain": post_drain,
+        "queue_idle": bool(_queue_idle(final_queue)),
+        "rows": rows,
+    }
 
 
 def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, replay_mode: str = "transcript_only", max_turns: int | None = None, start_session: int | None = None, max_sessions: int | None = None, auto_flush: bool = True, flush_threshold_ratio: float = 0.80, flush_every_turns: int = 0, max_compaction_per_pass: int = 2, max_side_effects_per_pass: int = 8, reset_session: bool = False, drain_after_ingest: bool = True, drain_timeout_ms: int = 600_000, cancel_event: Any | None = None, progress: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
@@ -2162,15 +2266,17 @@ def _drain_async_until_idle(
     poll_ms: int,
     max_compaction: int,
     max_side_effects: int,
+    root: str | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     timeout_s = max(1.0, float(timeout_ms) / 1000.0)
     poll_s = max(0.05, float(poll_ms) / 1000.0)
+    target_root = str(root or settings.core_memory_root)
 
     passes = 0
     last_status: dict[str, Any] = {}
     while (time.monotonic() - started) <= timeout_s:
-        last_status = async_jobs_status(root=settings.core_memory_root)
+        last_status = async_jobs_status(root=target_root)
         if _queue_idle(last_status):
             return {
                 "ok": True,
@@ -2181,7 +2287,7 @@ def _drain_async_until_idle(
             }
 
         out = run_async_jobs(
-            root=settings.core_memory_root,
+            root=target_root,
             run_semantic=True,
             max_compaction=max(1, int(max_compaction)),
             max_side_effects=max(1, int(max_side_effects)),
@@ -3030,32 +3136,35 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             _copy_tree(Path(settings.core_memory_root), base_root)
             snapshot_sanitize_meta = _sanitize_locomo_benchmark_snapshot(base_root)
         if callable(heartbeat):
-            heartbeat("ingesting", f"Ingesting {len(selected_samples)} samples ({len(selected_cases)} QA cases)")
+            heartbeat("ingesting", f"Ingesting {len(selected_samples)} samples ({len(selected_cases)} QA cases) via Core Memory pipeline")
         if cancel_event is not None and cancel_event.is_set():
             raise BenchmarkCancelledError("benchmark_cancelled_before_ingest")
         ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
-        ingest_path_active = str(settings.locomo_ingest_path or 'canonical_replay').strip().lower() or 'canonical_replay'
-        ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
+        ingest_path_active = "core_memory_pipeline"
+        # Use the SAME rich Core Memory pipeline (process_turn_finalized) that
+        # seeding uses, but writing into the benchmark base_root. This drives
+        # entity extraction, claim resolution, and agent-judged associations —
+        # exactly the value-add Core Memory is supposed to provide. The previous
+        # path (replay_locomo_sample with transcript_only mode) used the lighter
+        # emit_turn_finalized + worker pipeline, which skipped the synchronous
+        # enrichment and graded retrieval against a thinner memory state.
+        ingestion_meta = ingest_locomo_samples_through_core_memory(
+            base_root=str(base_root),
+            samples=selected_samples,
+            cancel_event=cancel_event,
+            heartbeat=heartbeat,
+        )
         if snapshot_sanitize_meta:
             ingestion_meta["snapshot_sanitize"] = dict(snapshot_sanitize_meta)
-        if callable(heartbeat):
-            heartbeat("async_jobs", "Running async enrichment (entity merge, associations)")
         if cancel_event is not None and cancel_event.is_set():
             raise BenchmarkCancelledError("benchmark_cancelled_after_ingest")
-        try:
-            async_jobs_out = run_async_jobs(
-                root=str(base_root),
-                run_semantic=False,
-                max_compaction=2,
-                max_side_effects=8,
-            )
-            ingestion_meta["async_jobs"] = {
-                "ok": bool((async_jobs_out or {}).get("ok")),
-                "compaction_ran": int((async_jobs_out or {}).get("compaction_ran") or 0),
-                "side_effects_ran": int((async_jobs_out or {}).get("side_effects_ran") or 0),
-            }
-        except Exception as exc:
-            ingestion_meta["async_jobs"] = {"ok": False, "error": str(exc)}
+        # ingest_locomo_samples_through_core_memory already drained until idle,
+        # so we skip the per-pass run_async_jobs that used to live here.
+        ingestion_meta["async_jobs"] = {
+            "ok": bool((ingestion_meta.get("post_drain") or {}).get("ok")),
+            "compaction_ran": int((ingestion_meta.get("post_drain") or {}).get("passes") or 0),
+            "drained_via": "ingest_locomo_samples_through_core_memory",
+        }
 
         resolved_answer_mode = str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm"))
         resolved_generator_model = str(generator_model or "").strip()
