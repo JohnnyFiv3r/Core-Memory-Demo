@@ -571,7 +571,7 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
     final_queue = async_jobs_status(root=settings.core_memory_root)
     turn_range = {"first": 1 if seeded > 0 else 0, "last": int(seeded)}
     return {
-        "ok": seeded > 0 and not errors and not cancelled,
+        "ok": seeded > 0 and not cancelled,
         "cancelled": cancelled,
         "seeded": int(seeded),
         "seeded_turns": int(seeded),
