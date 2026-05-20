@@ -969,7 +969,19 @@ function bindUiEventHandlers() {
   });
 
   const benchmarkBtn = document.getElementById('btn-benchmark');
-  if (benchmarkBtn) benchmarkBtn.addEventListener('click', runBenchmark);
+  if (benchmarkBtn) benchmarkBtn.addEventListener('click', () => {
+    const status = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
+    if (status === 'running' || status === 'queued' || status === 'waiting_for_slot') {
+      const jobId = String((lastBenchmarkSummary || {}).job_id || '');
+      if (jobId) {
+        benchmarkBtn.textContent = 'Cancelling...';
+        benchmarkBtn.disabled = true;
+        cancelBenchmarkJob(jobId);
+      }
+    } else {
+      runBenchmark();
+    }
+  });
 
   const modal = document.getElementById('modal');
   if (modal) {
@@ -3866,15 +3878,9 @@ function syncBenchmarkButton(summary) {
   const qaTotal = Number(s.qa_cases || 0);
   const qaDone = Number(s.qa_completed || 0);
   if (status === 'running' || status === 'queued' || status === 'waiting_for_slot') {
-    btn.disabled = true;
-    if (qaTotal > 0) {
-      btn.textContent = 'QA ' + qaDone + '/' + qaTotal;
-    } else if (phase === 'waiting_for_slot' || phase === 'queued') {
-      btn.textContent = 'Queued...';
-    } else if (phase) {
-      btn.textContent = phase.replace(/_/g, ' ') + '...';
-    } else {
-      btn.textContent = 'Running...';
+    if (btn.textContent !== 'Cancelling...') {
+      btn.disabled = false;
+      btn.textContent = 'Cancel';
     }
     return;
   }
