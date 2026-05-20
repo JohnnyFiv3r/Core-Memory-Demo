@@ -3996,7 +3996,6 @@ async function seedMemory() {
         sample_id: locomoSampleMode === 'single' ? locomoSampleId : null,
         replay_mode: 'transcript_only',
         max_turns: locomoMaxTurns,
-        wait_for_idle: false,
         auto_flush: true,
         flush_threshold_ratio: AUTO_FLUSH_THRESHOLD_PCT / 100,
       };
@@ -4020,7 +4019,6 @@ async function seedMemory() {
       let seedPollBackoffMs = 3000;
       while (true) {
         await new Promise(r => setTimeout(r, seedPollBackoffMs));
-        if (activeSeedJobId !== seedJobId) break; // cancelled client-side
         try {
           const pollRes = await fetch(`/api/locomo/replay/job/${seedJobId}?cursor=${cursor}`);
           if (pollRes.status === 429) {
@@ -4031,7 +4029,11 @@ async function seedMemory() {
           cursor = Number(job.cursor_next || cursor);
           seedPollBackoffMs = Math.max(3000, Number(job.poll_after_ms || 3000));
           const stage = String(job.stage || '');
-          progressEl.textContent = 'Seeding LoCoMo transcript corpus... ' + stage;
+          if (activeSeedJobId !== seedJobId) {
+            progressEl.textContent = 'Cancelling LoCoMo seed...';
+          } else {
+            progressEl.textContent = 'Seeding LoCoMo transcript corpus... ' + stage;
+          }
         } catch (_) {
           // transient poll failure — keep trying
         }
