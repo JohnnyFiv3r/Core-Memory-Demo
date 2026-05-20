@@ -32,6 +32,7 @@ let claimsAsOf = '';
 let claimsDetailOpen = false;
 let seedStatusState = {active: false, kind: '', status: 'idle', message: ''};
 let activeSeedJobId = null;
+let benchmarkProgressEl = null;
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
@@ -4191,6 +4192,20 @@ function updateBenchmarkProgressMessage(summary, report) {
   const btn = document.getElementById('btn-benchmark');
   if (!btn) return;
   syncBenchmarkButton(summary || {});
+  if (!benchmarkProgressEl) return;
+  const status = String((summary || {}).status || '');
+  if (status !== 'running') return;
+  const stage = String((summary || {}).stage || '');
+  const qa = Number((summary || {}).qa_completed || 0);
+  const qaTotal = Number((summary || {}).qa_cases || 0);
+  let label;
+  if (stage === 'ingesting') label = 'ingesting turns';
+  else if (stage === 'async_jobs') label = 'enriching memory';
+  else if (stage === 'building_index') label = 'building index';
+  else if (stage === 'running_qa') label = 'running QA';
+  else label = stage || 'starting';
+  if (qaTotal > 0) label += ' · ' + qa + '/' + qaTotal + ' QA';
+  benchmarkProgressEl.textContent = 'Benchmark running... ' + label;
 }
 
 function formatBenchmarkSummary(s) {
@@ -4302,6 +4317,7 @@ async function runBenchmark() {
     'Starting LOCOMO benchmark (' + subset + ', answer=' + optimisticAnswerMode + (generatorModel ? '/' + generatorModel : '') + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
       ', preload=' + (preloadEnabled ? preloadMax : 0) + ')...'
   );
+  benchmarkProgressEl = addMsg('system', 'Benchmark running...');
   try {
     const benchmarkPayload = {
       suite: subset,
@@ -4437,6 +4453,7 @@ async function runBenchmark() {
       addMsg('system', 'Benchmark failed: ' + msg);
     }
   } finally {
+    benchmarkProgressEl = null;
     syncBenchmarkButton(lastBenchmarkSummary || {});
   }
 }
