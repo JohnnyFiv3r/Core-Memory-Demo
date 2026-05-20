@@ -169,7 +169,10 @@ def load_locomo_dataset(*, data_file: str | Path | None = None, require_exists: 
     path = Path(data_file) if data_file else resolve_locomo_data_file()
     if require_exists and not path.exists():
         raise LocomoLoaderError(f"locomo_dataset_missing:{path}")
-    payload = json.loads(path.read_text(encoding="utf-8"))
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise LocomoLoaderError(f"locomo_dataset_corrupt:{path}:{exc}") from exc
     if not isinstance(payload, list):
         raise LocomoLoaderError("locomo_dataset_invalid_root")
 

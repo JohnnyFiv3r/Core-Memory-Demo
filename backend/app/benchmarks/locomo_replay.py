@@ -362,8 +362,12 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
 
 
 def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'transcript_only', flush_policy: str = 'per_session') -> dict[str, Any]:
-    if emit_turn_finalized is None and finalize_and_process_turn is None:
-        raise RuntimeError('core_memory_unavailable')
+    if str(mode or 'transcript_only') == 'canonical_turn':
+        if finalize_and_process_turn is None:
+            raise RuntimeError('core_memory_unavailable:finalize_and_process_turn')
+    else:
+        if emit_turn_finalized is None:
+            raise RuntimeError('core_memory_unavailable:emit_turn_finalized')
     sample_id = str(sample.get('sample_id') or '').strip()
     sessions = list(sample.get('sessions') or [])
     emitted: list[dict[str, Any]] = []

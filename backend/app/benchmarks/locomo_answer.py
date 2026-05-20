@@ -23,8 +23,6 @@ def _support_strength(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]
         return {"supported": False, "reason": "empty_top_text"}
     if not used_dia_ids:
         return {"supported": False, "reason": "missing_dia_ids"}
-    if top_score is not None and top_score <= 0.0:
-        return {"supported": False, "reason": "non_positive_score"}
     return {"supported": True, "reason": "top_hit_grounded"}
 
 

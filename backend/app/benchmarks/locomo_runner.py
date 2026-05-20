@@ -361,34 +361,23 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         if recall_result_from_memory_execute is not None:
             recall_payload = recall_result_from_memory_execute(result, query=req["query"], effort="high", include_raw=False).to_dict()
         raw_results = list(result.get("results") or [])
-        if not raw_results and str(result.get("backend") or "").lower() != "lexical":
-            # Some local/compare benchmark roots can have a usable lexical path
-            # even when high-signal must_terms over-constrain typed filtering.
-            # Retry once with sample/session metadata intact, but without
-            # required lexical terms, before falling back to the turn archive.
-            retry_facets = dict(req.get("facets") or {})
-            retry_facets["must_terms"] = []
-            retry_req = {**req, "facets": retry_facets}
-            retry_result = memory_tools.execute(retry_req, root=root, explain=False)
-            retry_rows = list(retry_result.get("results") or [])
-            if retry_rows:
-                result = retry_result
-                raw_results = retry_rows
         retrieved = [_extract_result_row(root=root, rank=idx, row=dict(row or {})) for idx, row in enumerate(raw_results, start=1)]
         pipeline_name = str(retrieval_pipeline or "execute_trace").strip().lower() or "execute_trace"
-        force_three_phase = pipeline_name in {"execute_trace_hydrate", "forced_three_phase", "three_phase"}
-        trace_meta = {"used": False, "reason": "trace_disabled", "anchor_ids": [], "chains": [], "grounding": {}}
+        # Phase 2: causal traversal anchored to semantic bead candidates.
+        # Always runs as part of the single retrieval pass — results are merged
+        # with the semantic set before hydration.
+        trace_meta = {"used": False, "reason": "trace_unavailable", "anchor_ids": [], "chains": [], "grounding": {}}
         hydrate_meta: dict[str, Any] = {}
         trace_warning = None
         try:
             anchor_ids = [str((row or {}).get("bead_id") or "").strip() for row in raw_results if str((row or {}).get("bead_id") or "").strip()]
-            if (anchor_ids or force_three_phase) and trace_request is not None:
+            if trace_request is not None:
                 trace = trace_request(
                     root=root,
                     query=str(qa.get("question") or "").strip(),
-                    k=max(int(retrieval_k or 8), 8 if force_three_phase else 3),
+                    k=max(int(retrieval_k or 8), 8),
                     anchor_ids=anchor_ids[: max(3, int(retrieval_k or 8))] if anchor_ids else None,
-                    hydration={"max_beads": max(int(retrieval_k or 8), 8), "adjacent_before": 0, "adjacent_after": 0} if force_three_phase else None,
+                    hydration={"max_beads": max(int(retrieval_k or 8), 8), "adjacent_before": 0, "adjacent_after": 0},
                 )
                 trace_rows = [
                     _extract_result_row(root=root, rank=len(retrieved) + idx, row=dict(row or {}))
@@ -407,35 +396,15 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
                     "diagnostics": dict((trace or {}).get("trace_diagnostics") or {}),
                 }
             else:
-                trace_meta = {"used": False, "reason": "no_anchor_ids", "anchor_ids": [], "chains": [], "grounding": {}}
+                trace_meta = {"used": False, "reason": "trace_unavailable", "anchor_ids": [], "chains": [], "grounding": {}}
         except TypeError as exc:
             trace_warning = f"trace_request_type_error:{exc}"
             trace_meta = {"used": False, "reason": "trace_type_error", "anchor_ids": [], "chains": [], "grounding": {}}
         except Exception as exc:
             trace_warning = f"trace_request_failed:{exc}"
             trace_meta = {"used": False, "reason": "trace_failed", "anchor_ids": [], "chains": [], "grounding": {}}
-        # Supplement with core_recall() for semantic + claims coverage beyond
-        # the lexical execute pass. Sample scoping is handled by _locomo_score()
-        # since core_recall doesn't accept metadata facets.
-        if core_recall is not None:
-            try:
-                cr_result = core_recall(
-                    str(qa.get("question") or ""),
-                    effort="high",
-                    root=root,
-                    k=max(int(retrieval_k or 8), 8),
-                    include_raw=True,
-                )
-                cr_dict = cr_result.to_dict() if hasattr(cr_result, "to_dict") else {}
-                cr_raw_rows = list((dict(cr_dict.get("raw") or {}).get("results") or []))
-                if cr_raw_rows:
-                    cr_extracted = [
-                        _extract_result_row(root=root, rank=len(retrieved) + idx, row=dict(r or {}))
-                        for idx, r in enumerate(cr_raw_rows, start=1)
-                    ]
-                    retrieved = _dedupe_rows(retrieved + cr_extracted)
-            except Exception:
-                pass
+        # Phase 3: source transcript lookup — hydrate bead candidates to full
+        # archived turn text using turn refs identified in phases 1 and 2.
         retrieved, hydrate_meta = _hydrate_locomo_rows(root=root, rows=retrieved, sample_id=sample_id, limit=max(int(retrieval_k or 8), 8))
         for row in retrieved:
             row["locomo_score"] = _locomo_score(row, sample_id=sample_id, question=str(qa.get("question") or ""))
@@ -514,6 +483,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             "question": str(qa.get("question") or ""),
             "gold_answer": str(qa.get("answer") or ""),
             "prediction": "",
+            "used_dia_ids": [],
             "answer_f1": 0.0,
             "status": "error",
             "error": str(exc),
