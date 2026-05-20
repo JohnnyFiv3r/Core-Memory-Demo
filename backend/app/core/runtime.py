@@ -61,7 +61,7 @@ except Exception:  # pragma: no cover - compatibility with older core-memory ver
 from app.benchmarks.fixture_smoke import load_fixture_smoke_cases
 from app.benchmarks import benchmark_store
 from app.benchmarks.locomo_loader import LocomoLoaderError
-from app.benchmarks.locomo_runner import run_locomo_retrieval_suite
+from app.benchmarks.locomo_runner import BenchmarkCancelledError, run_locomo_retrieval_suite
 from app.benchmarks.locomo_scoring import aggregate_case_scores
 from app.benchmarks.locomo_suite import build_locomo_comparison, build_locomo_suite_metadata, ingest_locomo_samples, make_locomo_missing_dataset_response, write_locomo_run_artifacts
 from app.core.config import settings
@@ -2989,7 +2989,7 @@ def _resolve_benchmark_embeddings_provider(explicit_provider: str | None = None)
     return "hash"
 
 
-def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", progress: Any | None = None) -> dict[str, Any]:
+def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", progress: Any | None = None, cancel_event: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
         try:
@@ -3025,11 +3025,19 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         if str(root_mode or "snapshot") == "snapshot":
             _copy_tree(Path(settings.core_memory_root), base_root)
             snapshot_sanitize_meta = _sanitize_locomo_benchmark_snapshot(base_root)
+        if callable(heartbeat):
+            heartbeat("ingesting", f"Ingesting {len(selected_samples)} samples ({len(selected_cases)} QA cases)")
+        if cancel_event is not None and cancel_event.is_set():
+            raise BenchmarkCancelledError("benchmark_cancelled_before_ingest")
         ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
         ingest_path_active = str(settings.locomo_ingest_path or 'canonical_replay').strip().lower() or 'canonical_replay'
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
         if snapshot_sanitize_meta:
             ingestion_meta["snapshot_sanitize"] = dict(snapshot_sanitize_meta)
+        if callable(heartbeat):
+            heartbeat("async_jobs", "Running async enrichment (entity merge, associations)")
+        if cancel_event is not None and cancel_event.is_set():
+            raise BenchmarkCancelledError("benchmark_cancelled_after_ingest")
         try:
             async_jobs_out = run_async_jobs(
                 root=str(base_root),
@@ -3052,8 +3060,14 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         benchmark_embeddings_provider = _resolve_benchmark_embeddings_provider(embeddings_provider)
         benchmark_semantic_build: dict[str, Any] | None = None
         retrieval_pipeline_name = str(retrieval_pipeline or "execute_trace").strip().lower() or "execute_trace"
+        if callable(heartbeat):
+            heartbeat("building_index", "Building semantic index")
+        if cancel_event is not None and cancel_event.is_set():
+            raise BenchmarkCancelledError("benchmark_cancelled_before_qa")
         with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
             benchmark_semantic_build = build_semantic_index(Path(base_root))
+            if callable(heartbeat):
+                heartbeat("running_qa", f"Running {len(selected_cases)} QA cases")
             retrieval_report = run_locomo_retrieval_suite(
                 root=str(base_root),
                 qa_cases=selected_cases,
@@ -3063,6 +3077,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 generator_model=resolved_generator_model,
                 progress=progress,
                 retrieval_pipeline=retrieval_pipeline_name,
+                cancel_event=cancel_event,
             )
         score_summary = aggregate_case_scores(list(retrieval_report.get("cases") or []))
 

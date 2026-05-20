@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import gc
 import re
+import threading
 from pathlib import Path
+
+
+class BenchmarkCancelledError(RuntimeError):
+    pass
 from typing import Any
 
 from app.benchmarks.locomo_answer import generate_locomo_answer
@@ -535,11 +540,13 @@ def _slim_locomo_case_result(result: dict[str, Any], *, retrieved_limit: int = 1
     return row
 
 
-def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, progress: Any | None = None, retrieval_pipeline: str = "execute_trace") -> dict[str, Any]:
+def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, progress: Any | None = None, retrieval_pipeline: str = "execute_trace", cancel_event: threading.Event | None = None) -> dict[str, Any]:
     cases = []
     qa_rows = qa_cases or []
     total = len(qa_rows)
     for idx, case in enumerate(qa_rows, start=1):
+        if cancel_event is not None and cancel_event.is_set():
+            raise BenchmarkCancelledError("benchmark_cancelled_during_qa")
         result = run_locomo_retrieval_case(
             root=root,
             sample_id=str(case.get("sample_id") or ""),

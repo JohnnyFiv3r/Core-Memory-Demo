@@ -3584,7 +3584,7 @@ function ensureBenchmarkPaneRenderer() {
   return ensureSliceBinding(
     benchmarkPaneRenderer,
     'benchmarkPaneRenderer',
-    '/chat-slices/benchmark-pane.js?v=20260519-locomo-benchmark-ui-1',
+    '/chat-slices/benchmark-pane.js?v=20260520-heartbeat-cancel-1',
     (mod) => (mod && typeof mod.renderBenchmarkPane === 'function' ? mod.renderBenchmarkPane : null),
     (value) => { benchmarkPaneRenderer = value; }
   );
@@ -3596,6 +3596,15 @@ function benchmarkSummaryHasLiveJob(summary, report) {
   const status = String(s.status || r.status || '').trim().toLowerCase();
   const jobId = String(s.job_id || r.active_job_id || '').trim();
   return !!(jobId && (status === 'running' || status === 'queued' || status === 'waiting_for_slot'));
+}
+
+async function cancelBenchmarkJob(jobId) {
+  if (!jobId) return;
+  try {
+    await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' });
+  } catch (_) {
+    // best effort
+  }
 }
 
 function renderBenchmark(summary, report, benchmarkMeta) {
@@ -3615,6 +3624,7 @@ function renderBenchmark(summary, report, benchmarkMeta) {
       onOpenPayload: (title, payload) => {
         openJsonModal(String(title || 'Benchmark detail'), payload || {});
       },
+      onCancel: (jobId) => cancelBenchmarkJob(jobId),
     }),
     () => renderBenchmarkFallback(safeSummary, safeReport, safeMeta),
     ensureBenchmarkPaneRenderer
@@ -4194,7 +4204,9 @@ async function runBenchmark() {
   const locomoSampleId = String(document.getElementById('locomo-sample-id')?.value || '').trim();
   const locomoMaxTurnsRaw = Number(document.getElementById('locomo-max-turns')?.value || 200);
   const locomoMaxTurns = Number.isFinite(locomoMaxTurnsRaw) ? Math.max(1, Math.floor(locomoMaxTurnsRaw)) : 200;
-  const answerMode = document.getElementById('bench-answer-mode')?.value || 'llm';
+  const answerModeRaw = document.getElementById('bench-answer-mode')?.value || 'auto';
+  const answerModeIsAuto = answerModeRaw === 'auto' || !answerModeRaw;
+  const answerMode = answerModeIsAuto ? '' : answerModeRaw;
   const generatorModel = String(document.getElementById('bench-generator-model')?.value || '').trim();
 
   const prev = btn.textContent;
@@ -4202,25 +4214,26 @@ async function runBenchmark() {
   btn.disabled = true;
   btn.textContent = 'Starting...';
   const optimisticJobId = 'pending-job-' + Date.now().toString(36);
+  const optimisticAnswerMode = answerMode || 'auto';
   lastBenchmarkSummary = {
     run_id: '',
     job_id: optimisticJobId,
     suite: subset,
     semantic_mode: semanticMode,
     root_mode: rootMode,
-    answer_mode: answerMode,
+    answer_mode: optimisticAnswerMode,
     status: 'running',
     phase: 'starting',
     samples: 0,
     qa_cases: 0,
     turns_ingested: 0,
   };
-  lastBenchmarkReport = {live: true, active_job_id: optimisticJobId, status: 'running', phase: 'starting', config: {suite: subset, root_mode: rootMode, semantic_mode: semanticMode, answer_mode: answerMode}};
+  lastBenchmarkReport = {live: true, active_job_id: optimisticJobId, status: 'running', phase: 'starting', config: {suite: subset, root_mode: rootMode, semantic_mode: semanticMode, answer_mode: optimisticAnswerMode}};
   renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
   updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
   addMsg(
     'system',
-    'Starting LOCOMO benchmark (' + subset + ', answer=' + answerMode + (generatorModel ? '/' + generatorModel : '') + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
+    'Starting LOCOMO benchmark (' + subset + ', answer=' + optimisticAnswerMode + (generatorModel ? '/' + generatorModel : '') + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
       ', preload=' + (preloadEnabled ? preloadMax : 0) + ')...'
   );
   try {
@@ -4228,7 +4241,6 @@ async function runBenchmark() {
       suite: subset,
       semantic_mode: semanticMode,
       vector_backend: 'local-faiss',
-      answer_mode: answerMode,
       myelination,
       root_mode: rootMode,
       embeddings_provider: embeddingsProvider,
@@ -4236,6 +4248,7 @@ async function runBenchmark() {
       preload_turns_max: preloadMax,
       compare_paths: true,
     };
+    if (answerMode) benchmarkPayload.answer_mode = answerMode;
     if (generatorModel) benchmarkPayload.generator_model = generatorModel;
     if (subset === 'locomo_mini') {
       if (locomoSampleMode === 'single' && locomoSampleId) {
@@ -4273,6 +4286,11 @@ async function runBenchmark() {
     while (!done) {
       const jr = await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobId) + '?cursor=' + encodeURIComponent(String(cursor)));
       const job = await parseApiJsonResponse(jr, 'benchmark-job');
+      // Relay heartbeat stage from the keepalive (no events emitted, just stage string).
+      if (job.stage && !job.done) {
+        lastBenchmarkSummary = { ...(lastBenchmarkSummary || {}), heartbeat_stage: String(job.stage || ''), stage: String(job.stage || '') };
+        renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+      }
       const events = Array.isArray(job.events) ? job.events : [];
       if (events.length) cursor = Number(job.cursor_next || cursor || 0);
       for (const evt of events) {
@@ -4291,6 +4309,11 @@ async function runBenchmark() {
         }
         if (stage === 'failed') {
           addMsg('system', 'Benchmark failed: ' + String(evt.error || evt.message || 'benchmark_failed'));
+        } else if (stage === 'cancelled') {
+          lastBenchmarkSummary = { ...(lastBenchmarkSummary || {}), status: 'cancelled', phase: 'cancelled' };
+          renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+          updateBenchmarkProgressMessage(lastBenchmarkSummary, null);
+          addMsg('system', 'Benchmark cancelled.');
         } else if (stage === 'abandoned') {
           lastBenchmarkSummary = {};
           lastBenchmarkReport = null;

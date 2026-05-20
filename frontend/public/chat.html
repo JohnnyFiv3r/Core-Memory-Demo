@@ -916,8 +916,9 @@
           </select>
           <input id="locomo-max-turns" class="control-input" type="number" min="1" step="10" value="200" style="width:74px" title="Max LoCoMo turns">
           <span class="control-label">answer</span>
-          <select id="bench-answer-mode" class="control-select" title="Answer synthesis mode (none=retrieval only, extractive=top row text, llm=model-generated)">
-            <option value="llm" selected>llm</option>
+          <select id="bench-answer-mode" class="control-select" title="Answer synthesis mode (auto=suite default, none=retrieval only, extractive=top row text, llm=model-generated)">
+            <option value="auto" selected>auto</option>
+            <option value="llm">llm</option>
             <option value="extractive">extractive</option>
             <option value="none">none</option>
           </select>
