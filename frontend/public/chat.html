@@ -1,7 +1,7 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-<script src="/chat-bootstrap.js?v=20260428-locomo-sync-1"></script>
+<script src="/chat-bootstrap.js?v=20260519-locomo-benchmark-ui-1"></script>
 <script src="https://cdn.auth0.com/js/auth0-spa-js/2.1/auth0-spa-js.production.js"></script>
 
 <meta charset="UTF-8">
@@ -915,6 +915,13 @@
             <option value="">loading...</option>
           </select>
           <input id="locomo-max-turns" class="control-input" type="number" min="1" step="10" value="200" style="width:74px" title="Max LoCoMo turns">
+          <span class="control-label">answer</span>
+          <select id="bench-answer-mode" class="control-select" title="Answer synthesis mode (none=retrieval only, extractive=top row text, llm=model-generated)">
+            <option value="llm" selected>llm</option>
+            <option value="extractive">extractive</option>
+            <option value="none">none</option>
+          </select>
+          <input id="bench-generator-model" class="control-input" placeholder="model (auto)" style="width:130px" title="Generator model for LLM answer mode — leave blank to auto-detect from current session">
           <button class="btn" id="btn-seed">Seed</button>
           <button class="btn" id="btn-benchmark">Run LOCOMO Test</button>
         </div>
@@ -947,6 +954,6 @@
   </div>
 </div>
 
-<script src="/chat-app.js?v=20260428-locomo-sync-1"></script>
+<script src="/chat-app.js?v=20260519-locomo-benchmark-ui-1"></script>
 </body>
 </html>

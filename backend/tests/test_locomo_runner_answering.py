@@ -1,7 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -79,6 +79,38 @@ class TestLocomoRunnerAnswering(unittest.TestCase):
         self.assertIn("7 May 2023", out["prediction"])
         self.assertGreater(out["answer_f1"], 0.0)
         self.assertEqual(["D1:3"], out["used_dia_ids"])
+
+
+    def test_hydration_is_always_attempted_not_only_for_three_phase(self):
+        """_hydrate_locomo_rows must run even when pipeline is plain execute_trace."""
+        qa, fake_execute, fake_bead = self._case_inputs()
+        hydrate_called_with = {}
+
+        def fake_hydrate(*, root, rows, sample_id, limit):
+            hydrate_called_with["called"] = True
+            hydrate_called_with["sample_id"] = sample_id
+            return rows, {"used": False, "reason": "no_rows", "hydrated_rows": 0}
+
+        with (
+            patch("app.benchmarks.locomo_runner.memory_tools") as mt,
+            patch("app.benchmarks.locomo_runner.inspect_bead") as ib,
+            patch("app.benchmarks.locomo_runner.trace_request") as tr,
+            patch("app.benchmarks.locomo_runner._hydrate_locomo_rows", side_effect=fake_hydrate),
+        ):
+            mt.execute.return_value = fake_execute
+            ib.return_value = fake_bead
+            tr.return_value = {"results": [], "chains": [], "grounding": {}, "warnings": []}
+            out = run_locomo_retrieval_case(
+                root="/tmp/fake",
+                sample_id="conv-1",
+                qa=qa,
+                retrieval_k=8,
+                retrieval_pipeline="execute_trace",
+            )
+
+        self.assertEqual("ok", out["status"])
+        self.assertTrue(hydrate_called_with.get("called"), "hydration must be attempted for execute_trace pipeline")
+        self.assertEqual("conv-1", hydrate_called_with.get("sample_id"))
 
 
 if __name__ == "__main__":

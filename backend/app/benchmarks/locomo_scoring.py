@@ -125,12 +125,25 @@ def aggregate_case_scores(cases: list[dict[str, Any]]) -> dict[str, Any]:
         by_category.setdefault(str(row.get("category") or "0"), []).append(row)
         by_sample.setdefault(str(row.get("sample_id") or "unknown"), []).append(row)
 
+    # Count questions with empty evidence annotations. compute_evidence_recall
+    # returns recall@k=1.0 for these (vacuous truth), which inflates the aggregate.
+    # Track explicitly so callers can audit or exclude them from recall reporting.
+    no_evidence_count = sum(
+        1 for r in cases
+        if not list((r.get("evidence_recall") or {}).get("gold_evidence_count") or [0])
+        or int((r.get("evidence_recall") or {}).get("gold_evidence_count") or 0) == 0
+    )
+
     overall = {
         "qa_count": len(cases),
         "answer_f1_mean": _avg("answer_f1", cases),
         "evidence_recall@5": _avg_nested(cases, "recall@5"),
         "hit_any": _avg_nested(cases, "hit_any"),
         "mrr": _avg_nested(cases, "mrr"),
+        "questions_no_evidence": no_evidence_count,
+        # Comparable to published systems only when category 5 is excluded and
+        # run on all 10 samples. Multi-run variance not reported (single run).
+        "methodology_note": "single_run_no_variance",
     }
 
     return {

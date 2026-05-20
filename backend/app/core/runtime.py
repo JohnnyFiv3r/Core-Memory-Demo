@@ -3026,10 +3026,24 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             _copy_tree(Path(settings.core_memory_root), base_root)
             snapshot_sanitize_meta = _sanitize_locomo_benchmark_snapshot(base_root)
         ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
-        ingest_path_active = str(settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
+        ingest_path_active = str(settings.locomo_ingest_path or 'canonical_replay').strip().lower() or 'canonical_replay'
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)
         if snapshot_sanitize_meta:
             ingestion_meta["snapshot_sanitize"] = dict(snapshot_sanitize_meta)
+        try:
+            async_jobs_out = run_async_jobs(
+                root=str(base_root),
+                run_semantic=False,
+                max_compaction=2,
+                max_side_effects=8,
+            )
+            ingestion_meta["async_jobs"] = {
+                "ok": bool((async_jobs_out or {}).get("ok")),
+                "compaction_ran": int((async_jobs_out or {}).get("compaction_ran") or 0),
+                "side_effects_ran": int((async_jobs_out or {}).get("side_effects_ran") or 0),
+            }
+        except Exception as exc:
+            ingestion_meta["async_jobs"] = {"ok": False, "error": str(exc)}
 
         resolved_answer_mode = str(answer_mode or ("none" if suite_name == "locomo_retrieval" else "llm"))
         resolved_generator_model = str(generator_model or "").strip()
@@ -3079,6 +3093,14 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             "locomo_repo_commit": str((dataset_meta.get("dataset") or {}).get("repo_commit") or ""),
             "subset": str(subset or "local"),
             "legacy_request": bool(legacy_mode),
+            "methodology": {
+                "categories_scored": sorted((dataset_meta.get("dataset") or {}).get("category_filter") or []),
+                "category_5_excluded": bool((dataset_meta.get("dataset") or {}).get("category_5_excluded", True)),
+                "runs": 1,
+                "variance_reported": False,
+                "questions_no_evidence": int((score_summary.get("overall") or {}).get("questions_no_evidence") or 0),
+                "comparable_to": "Mem0, Zep, ByteRover (categories 1-4 only, single run)",
+            },
         }
         cases_inline = list(retrieval_report.get("cases") or [])[: max(0, int(settings.locomo_case_artifact_limit_inline))]
         benchmark_table = [

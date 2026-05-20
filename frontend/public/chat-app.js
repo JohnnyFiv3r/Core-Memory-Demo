@@ -3584,7 +3584,7 @@ function ensureBenchmarkPaneRenderer() {
   return ensureSliceBinding(
     benchmarkPaneRenderer,
     'benchmarkPaneRenderer',
-    '/chat-slices/benchmark-pane.js',
+    '/chat-slices/benchmark-pane.js?v=20260519-locomo-benchmark-ui-1',
     (mod) => (mod && typeof mod.renderBenchmarkPane === 'function' ? mod.renderBenchmarkPane : null),
     (value) => { benchmarkPaneRenderer = value; }
   );
@@ -4194,6 +4194,8 @@ async function runBenchmark() {
   const locomoSampleId = String(document.getElementById('locomo-sample-id')?.value || '').trim();
   const locomoMaxTurnsRaw = Number(document.getElementById('locomo-max-turns')?.value || 200);
   const locomoMaxTurns = Number.isFinite(locomoMaxTurnsRaw) ? Math.max(1, Math.floor(locomoMaxTurnsRaw)) : 200;
+  const answerMode = document.getElementById('bench-answer-mode')?.value || 'llm';
+  const generatorModel = String(document.getElementById('bench-generator-model')?.value || '').trim();
 
   const prev = btn.textContent;
   btn.dataset.prevLabel = prev;
@@ -4206,18 +4208,19 @@ async function runBenchmark() {
     suite: subset,
     semantic_mode: semanticMode,
     root_mode: rootMode,
+    answer_mode: answerMode,
     status: 'running',
     phase: 'starting',
     samples: 0,
     qa_cases: 0,
     turns_ingested: 0,
   };
-  lastBenchmarkReport = {live: true, active_job_id: optimisticJobId, status: 'running', phase: 'starting', config: {suite: subset, root_mode: rootMode, semantic_mode: semanticMode}};
+  lastBenchmarkReport = {live: true, active_job_id: optimisticJobId, status: 'running', phase: 'starting', config: {suite: subset, root_mode: rootMode, semantic_mode: semanticMode, answer_mode: answerMode}};
   renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
   updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
   addMsg(
     'system',
-    'Starting LOCOMO benchmark (' + subset + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
+    'Starting LOCOMO benchmark (' + subset + ', answer=' + answerMode + (generatorModel ? '/' + generatorModel : '') + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
       ', preload=' + (preloadEnabled ? preloadMax : 0) + ')...'
   );
   try {
@@ -4225,6 +4228,7 @@ async function runBenchmark() {
       suite: subset,
       semantic_mode: semanticMode,
       vector_backend: 'local-faiss',
+      answer_mode: answerMode,
       myelination,
       root_mode: rootMode,
       embeddings_provider: embeddingsProvider,
@@ -4232,6 +4236,7 @@ async function runBenchmark() {
       preload_turns_max: preloadMax,
       compare_paths: true,
     };
+    if (generatorModel) benchmarkPayload.generator_model = generatorModel;
     if (subset === 'locomo_mini') {
       if (locomoSampleMode === 'single' && locomoSampleId) {
         benchmarkPayload.sample_ids = [locomoSampleId];

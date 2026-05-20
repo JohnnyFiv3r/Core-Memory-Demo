@@ -81,6 +81,8 @@ def locomo_crawler_callable(payload: dict[str, Any]) -> dict[str, Any]:
     turn_id = str(req.get('turn_id') or '').strip()
     dia_id = str(md.get('locomo_dia_id') or '').strip()
     speaker = str(md.get('locomo_speaker') or '').strip()
+    session_date_time = str(md.get('locomo_session_date_time') or md.get('session_date_time') or '').strip()
+    blip_caption = str(md.get('blip_caption') or '').strip()
     user_query = str(req.get('user_query') or '')
     assistant_final = str(req.get('assistant_final') or '')
     current_entities = {_entity_key(x) for x in _text_entities(user_query, assistant_final, speaker=speaker)}
@@ -135,12 +137,19 @@ def locomo_crawler_callable(payload: dict[str, Any]) -> dict[str, Any]:
             break
 
     title = (assistant_final or user_query or 'LoCoMo replay turn').splitlines()[0][:160]
+    detail_parts: list[str] = []
+    if session_date_time:
+        detail_parts.append(f'Session date: {session_date_time}')
+    detail_parts.append(assistant_final[:1200] if assistant_final else user_query[:1200])
+    if blip_caption:
+        detail_parts.append(f'Image caption: {blip_caption}')
+    bead_detail = '\n\n'.join(p for p in detail_parts if p)
     return {
         'beads_create': [{
             'type': 'context',
             'title': title or 'LoCoMo replay turn',
             'summary': [(assistant_final or user_query or 'LoCoMo replay turn')[:240]],
-            'detail': assistant_final[:1200] if assistant_final else user_query[:1200],
+            'detail': bead_detail,
             'source_turn_ids': [turn_id] if turn_id else ([dia_id] if dia_id else []),
             'entities': sorted(x for x in current_entities if x)[:12],
             'tags': ['crawler_reviewed', 'turn_finalized', 'locomo_replay'],

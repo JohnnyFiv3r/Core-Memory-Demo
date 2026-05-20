@@ -26,6 +26,13 @@ def _normalize_qa_per_category(raw: dict[int | str, int] | None) -> dict[int, in
     return out
 
 
+# Industry standard: evaluate only categories 1-4. Category 5 (adversarial /
+# unanswerable) is excluded from all published benchmarks (Mem0, Zep, ByteRover)
+# and the original evaluation code has broken answer keys for 444 of 446 cat-5
+# questions (see locomo-audit). Pass category_filter=[1,2,3,4,5] to opt in.
+_OFFICIAL_LOCOMO_CATEGORIES: list[int] = [1, 2, 3, 4]
+
+
 def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
     samples, meta = load_locomo_dataset()
     selected = list(samples)
@@ -38,8 +45,11 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
     if isinstance(sample_limit, int) and sample_limit > 0:
         selected = selected[: sample_limit]
 
+    # Default to official categories 1-4 when the caller provides no filter.
+    # An empty list means "no preference" (not "all"), treated identically to None.
+    effective_filter = list(category_filter) if category_filter else _OFFICIAL_LOCOMO_CATEGORIES
     category_caps = _normalize_qa_per_category(qa_per_category)
-    category_set = {int(x) for x in (category_filter or [])}
+    category_set = {int(x) for x in effective_filter}
     if category_caps:
         category_set = set(category_set or category_caps.keys())
     selected_cases: list[dict[str, Any]] = []
@@ -125,6 +135,8 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
                 for sample_id in [str(s.get("sample_id") or "") for s in selected]
             },
             "category_filter": sorted(category_set),
+            "official_categories": _OFFICIAL_LOCOMO_CATEGORIES,
+            "category_5_excluded": 5 not in category_set,
             "qa_limit": qa_limit,
             "qa_per_category": {str(k): int(v) for k, v in sorted(category_caps.items())},
             "available_qa_by_category": {str(k): int(v) for k, v in sorted(available_by_category.items())},

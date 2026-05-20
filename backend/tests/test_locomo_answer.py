@@ -1,7 +1,7 @@
 import sys
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -61,7 +61,7 @@ class TestLocomoAnswer(unittest.TestCase):
             )
 
     def test_llm_mode_uses_shared_demo_agent_path(self):
-        with patch("app.benchmarks.locomo_answer.run_agent_for_root") as run_agent:
+        with patch("app.benchmarks.locomo_answer.run_agent_for_root", new_callable=AsyncMock) as run_agent:
             run_agent.return_value = {
                 "ok": True,
                 "assistant": '```json\n{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}\n```',
@@ -81,7 +81,7 @@ class TestLocomoAnswer(unittest.TestCase):
         self.assertFalse(out["unsupported"])
 
     def test_llm_mode_reconciles_non_dataset_used_ids_back_to_retrieved_dia_ids(self):
-        with patch("app.benchmarks.locomo_answer.run_agent_for_root") as run_agent:
+        with patch("app.benchmarks.locomo_answer.run_agent_for_root", new_callable=AsyncMock) as run_agent:
             run_agent.return_value = {
                 "ok": True,
                 "assistant": '```json\n{"answer":"7 May 2023","used_dia_ids":["turn-abc123"],"confidence":"high","unsupported":false}\n```',
