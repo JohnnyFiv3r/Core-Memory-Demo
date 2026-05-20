@@ -3653,6 +3653,14 @@ async function refreshMemory() {
   if (authEnabled && !authReady) return;
   if (!modelOptionsHydrated) loadDemoModels();
   refreshSeedStatus();
+
+  // While a LoCoMo seed is actively polling, skip the full state refresh —
+  // the seed poll loop owns progress updates and the rate budget is tight.
+  if (activeSeedJobId) {
+    refreshErrorStreak = 0;
+    return;
+  }
+
   try {
     const activeBenchmarkStatus = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
     const activeBenchmarkJobId = String((lastBenchmarkSummary || {}).job_id || '').trim();
@@ -4011,13 +4019,19 @@ async function seedMemory() {
       // Poll until the background job finishes
       let job = {};
       let cursor = 0;
+      let seedPollBackoffMs = 3000;
       while (true) {
-        await new Promise(r => setTimeout(r, 1200));
+        await new Promise(r => setTimeout(r, seedPollBackoffMs));
         if (activeSeedJobId !== seedJobId) break; // cancelled client-side
         try {
           const pollRes = await fetch(`/api/locomo/replay/job/${seedJobId}?cursor=${cursor}`);
+          if (pollRes.status === 429) {
+            seedPollBackoffMs = Math.min(seedPollBackoffMs * 2, 30000);
+            continue;
+          }
           job = await parseApiJsonResponse(pollRes, 'locomo replay job');
           cursor = Number(job.cursor_next || cursor);
+          seedPollBackoffMs = Math.max(3000, Number(job.poll_after_ms || 3000));
           const stage = String(job.stage || '');
           progressEl.textContent = 'Seeding LoCoMo transcript corpus... ' + stage;
         } catch (_) {
