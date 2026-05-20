@@ -32,6 +32,7 @@ let claimsAsOf = '';
 let claimsDetailOpen = false;
 let seedStatusState = {active: false, kind: '', status: 'idle', message: ''};
 let activeSeedJobId = null;
+let benchmarkProgressEl = null;
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
@@ -968,7 +969,19 @@ function bindUiEventHandlers() {
   });
 
   const benchmarkBtn = document.getElementById('btn-benchmark');
-  if (benchmarkBtn) benchmarkBtn.addEventListener('click', runBenchmark);
+  if (benchmarkBtn) benchmarkBtn.addEventListener('click', () => {
+    const status = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
+    if (status === 'running' || status === 'queued' || status === 'waiting_for_slot') {
+      const jobId = String((lastBenchmarkSummary || {}).job_id || '');
+      if (jobId) {
+        benchmarkBtn.textContent = 'Cancelling...';
+        benchmarkBtn.disabled = true;
+        cancelBenchmarkJob(jobId);
+      }
+    } else {
+      runBenchmark();
+    }
+  });
 
   const modal = document.getElementById('modal');
   if (modal) {
@@ -3664,7 +3677,7 @@ async function refreshMemory() {
   try {
     const activeBenchmarkStatus = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
     const activeBenchmarkJobId = String((lastBenchmarkSummary || {}).job_id || '').trim();
-    const benchmarkRunning = initialStateHydrated && (!!activeBenchmarkJobId || activeBenchmarkStatus === 'running' || activeBenchmarkStatus === 'queued' || activeBenchmarkStatus === 'waiting_for_slot');
+    const benchmarkRunning = initialStateHydrated && (activeBenchmarkStatus === 'running' || activeBenchmarkStatus === 'queued' || activeBenchmarkStatus === 'waiting_for_slot');
 
     if (benchmarkRunning) {
       try {
@@ -3806,10 +3819,14 @@ async function refreshMemory() {
     refreshPauseNoticeShown = false;
     restartRefreshTimer(refreshBackoffMs);
   } catch (err) {
-    refreshErrorStreak += 1;
-    refreshBackoffMs = Math.min(30000, Math.max(2500, refreshBackoffMs * 2));
+    const errMsg = String((err && err.message) || err || '');
+    const isTransientNetwork = /network_changed|network_io_suspended|failed to fetch|networkerror/i.test(errMsg);
+    if (!isTransientNetwork) {
+      refreshErrorStreak += 1;
+      refreshBackoffMs = Math.min(30000, Math.max(2500, refreshBackoffMs * 2));
+    }
     restartRefreshTimer(refreshBackoffMs);
-    if (refreshErrorStreak >= 3 && !refreshPauseNoticeShown) {
+    if (!isTransientNetwork && refreshErrorStreak >= 3 && !refreshPauseNoticeShown) {
       refreshPauseNoticeShown = true;
       addMsg('system', 'Data refresh is degraded due to repeated backend/proxy errors. Retrying automatically with backoff.');
     }
@@ -3861,15 +3878,9 @@ function syncBenchmarkButton(summary) {
   const qaTotal = Number(s.qa_cases || 0);
   const qaDone = Number(s.qa_completed || 0);
   if (status === 'running' || status === 'queued' || status === 'waiting_for_slot') {
-    btn.disabled = true;
-    if (qaTotal > 0) {
-      btn.textContent = 'QA ' + qaDone + '/' + qaTotal;
-    } else if (phase === 'waiting_for_slot' || phase === 'queued') {
-      btn.textContent = 'Queued...';
-    } else if (phase) {
-      btn.textContent = phase.replace(/_/g, ' ') + '...';
-    } else {
-      btn.textContent = 'Running...';
+    if (btn.textContent !== 'Cancelling...') {
+      btn.disabled = false;
+      btn.textContent = 'Cancel';
     }
     return;
   }
@@ -4191,6 +4202,20 @@ function updateBenchmarkProgressMessage(summary, report) {
   const btn = document.getElementById('btn-benchmark');
   if (!btn) return;
   syncBenchmarkButton(summary || {});
+  if (!benchmarkProgressEl) return;
+  const status = String((summary || {}).status || '');
+  if (status !== 'running') return;
+  const stage = String((summary || {}).stage || '');
+  const qa = Number((summary || {}).qa_completed || 0);
+  const qaTotal = Number((summary || {}).qa_cases || 0);
+  let label;
+  if (stage === 'ingesting') label = 'ingesting turns';
+  else if (stage === 'async_jobs') label = 'enriching memory';
+  else if (stage === 'building_index') label = 'building index';
+  else if (stage === 'running_qa') label = 'running QA';
+  else label = stage || 'starting';
+  if (qaTotal > 0) label += ' · ' + qa + '/' + qaTotal + ' QA';
+  benchmarkProgressEl.textContent = 'Benchmark running... ' + label;
 }
 
 function formatBenchmarkSummary(s) {
@@ -4302,6 +4327,7 @@ async function runBenchmark() {
     'Starting LOCOMO benchmark (' + subset + ', answer=' + optimisticAnswerMode + (generatorModel ? '/' + generatorModel : '') + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
       ', preload=' + (preloadEnabled ? preloadMax : 0) + ')...'
   );
+  benchmarkProgressEl = addMsg('system', 'Benchmark running...');
   try {
     const benchmarkPayload = {
       suite: subset,
@@ -4437,6 +4463,7 @@ async function runBenchmark() {
       addMsg('system', 'Benchmark failed: ' + msg);
     }
   } finally {
+    benchmarkProgressEl = null;
     syncBenchmarkButton(lastBenchmarkSummary || {});
   }
 }
