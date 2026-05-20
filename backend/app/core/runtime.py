@@ -487,7 +487,7 @@ def _replay_locomo_row(row: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "session_id": session_id, "turn_id": turn_id, "dia_id": dia_id}
 
 
-def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, replay_mode: str = "transcript_only", max_turns: int | None = None, start_session: int | None = None, max_sessions: int | None = None, wait_for_idle: bool = False, idle_timeout_ms: int = 120000, idle_poll_ms: int = 250, auto_flush: bool = True, flush_threshold_ratio: float = 0.80, flush_every_turns: int = 0, max_compaction_per_pass: int = 2, max_side_effects_per_pass: int = 8, reset_session: bool = False, cancel_event: Any | None = None, progress: Any | None = None) -> dict[str, Any]:
+def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, replay_mode: str = "transcript_only", max_turns: int | None = None, start_session: int | None = None, max_sessions: int | None = None, auto_flush: bool = True, flush_threshold_ratio: float = 0.80, flush_every_turns: int = 0, max_compaction_per_pass: int = 2, max_side_effects_per_pass: int = 8, reset_session: bool = False, drain_after_ingest: bool = True, drain_timeout_ms: int = 600_000, cancel_event: Any | None = None, progress: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
     replay_mode_n = str(replay_mode or "transcript_only").strip().lower()
     if replay_mode_n != "transcript_only":
         raise ValueError("locomo_invalid_replay_mode")
@@ -538,25 +538,6 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
             if callable(progress):
                 progress(seeded, total_rows)
 
-            if wait_for_idle:
-                wait_result = _drain_async_until_idle(
-                    timeout_ms=idle_timeout_ms,
-                    poll_ms=idle_poll_ms,
-                    max_compaction=max_compaction_per_pass,
-                    max_side_effects=max_side_effects_per_pass,
-                )
-                queue_waits.append({"turn": idx, **wait_result})
-                if not bool(wait_result.get("idle")):
-                    errors.append({
-                        "index": idx,
-                        "dia_id": str(row.get("dia_id") or ""),
-                        "error": "locomo_queue_not_idle_timeout",
-                    })
-                    break
-                if cancel_event is not None and cancel_event.is_set():
-                    cancelled = True
-                    break
-
             if _should_flush():
                 f = run_flush(new_session_id=sid or None)
                 flush_events.append(dict(f or {}))
@@ -567,6 +548,17 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
                 "dia_id": str(row.get("dia_id") or ""),
                 "error": str(exc or "locomo_replay_row_failed"),
             })
+
+    post_drain: dict[str, Any] = {}
+    if drain_after_ingest and seeded > 0 and not cancelled:
+        if callable(heartbeat):
+            heartbeat("draining", f"Processing async jobs for {seeded} ingested turn(s)")
+        post_drain = _drain_async_until_idle(
+            timeout_ms=max(60_000, int(drain_timeout_ms)),
+            poll_ms=1000,
+            max_compaction=max(max_compaction_per_pass, 4),
+            max_side_effects=max(max_side_effects_per_pass, 16),
+        )
 
     final_queue = async_jobs_status(root=settings.core_memory_root)
     turn_range = {"first": 1 if seeded > 0 else 0, "last": int(seeded)}
@@ -593,7 +585,7 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
         },
         "queue_idle": bool(_queue_idle(final_queue)),
         "queue": final_queue,
-        "queue_wait_checks": queue_waits[-20:],
+        "post_drain": post_drain,
         "auto_flush": bool(auto_flush),
         "flush_count": len(flush_events),
         "flushes": flush_events[-20:],

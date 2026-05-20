@@ -528,26 +528,35 @@ async def _run_seed_job(job_id: str, kwargs: dict[str, Any]) -> None:
     _seed_event(row, 'starting', 'Seed started')
 
     cancel_event: threading.Event = row.get('cancel_event') or threading.Event()
-    _hb: dict[str, Any] = {'seeded': 0, 'total': 0}
+    _hb: dict[str, Any] = {'seeded': 0, 'total': 0, 'stage': 'seeding', 'message': ''}
 
     def progress(seeded: int, total: int) -> None:
         _hb['seeded'] = int(seeded)
         _hb['total'] = int(total)
+        _hb['stage'] = 'seeding'
 
     async def _keepalive() -> None:
         while True:
             current = SEED_JOBS.get(job_id)
             if not isinstance(current, dict) or bool(current.get('done')):
                 return
+            hb_stage = _hb['stage']
             n, t = _hb['seeded'], _hb['total']
-            current['stage'] = f'seeding {n}/{t}' if t else 'seeding'
+            if hb_stage == 'seeding':
+                current['stage'] = f'seeding {n}/{t}' if t else 'seeding'
+            else:
+                current['stage'] = hb_stage
             current['updated_ms'] = _now_ms()
             await asyncio.sleep(2)
+
+    def heartbeat(stage: str, message: str) -> None:
+        _hb['stage'] = str(stage or '')
+        _hb['message'] = str(message or '')
 
     keepalive_task = asyncio.create_task(_keepalive())
     try:
         _set_seed_status(active=True, kind='locomo', status='running', message='LoCoMo replay in progress')
-        out = await asyncio.to_thread(replay_locomo_corpus, cancel_event=cancel_event, progress=progress, **kwargs)
+        out = await asyncio.to_thread(replay_locomo_corpus, cancel_event=cancel_event, progress=progress, heartbeat=heartbeat, **kwargs)
         current = SEED_JOBS.get(job_id)
         if not isinstance(current, dict):
             return
@@ -1012,15 +1021,13 @@ async def locomo_replay(request: Request):
     max_turns_raw = (body or {}).get('max_turns')
     start_session_raw = (body or {}).get('start_session')
     max_sessions_raw = (body or {}).get('max_sessions')
-    wait_for_idle = bool((body or {}).get('wait_for_idle', True))
-    idle_timeout_ms = int((body or {}).get('idle_timeout_ms') or 120000)
-    idle_poll_ms = int((body or {}).get('idle_poll_ms') or 250)
     auto_flush = bool((body or {}).get('auto_flush', True))
     flush_threshold_ratio = float((body or {}).get('flush_threshold_ratio') or 0.80)
     flush_every_turns = int((body or {}).get('flush_every_turns') or 0)
     max_compaction_per_pass = int((body or {}).get('max_compaction_per_pass') or 2)
     max_side_effects_per_pass = int((body or {}).get('max_side_effects_per_pass') or 8)
     reset_session = bool((body or {}).get('reset_session', False))
+    drain_timeout_ms = int((body or {}).get('drain_timeout_ms') or 600_000)
 
     max_turns = int(max_turns_raw) if isinstance(max_turns_raw, (int, float)) and int(max_turns_raw) > 0 else None
     start_session = int(start_session_raw) if isinstance(start_session_raw, (int, float)) and int(start_session_raw) > 0 else None
@@ -1033,15 +1040,14 @@ async def locomo_replay(request: Request):
         'max_turns': max_turns,
         'start_session': start_session,
         'max_sessions': max_sessions,
-        'wait_for_idle': wait_for_idle,
-        'idle_timeout_ms': idle_timeout_ms,
-        'idle_poll_ms': idle_poll_ms,
         'auto_flush': auto_flush,
         'flush_threshold_ratio': flush_threshold_ratio,
         'flush_every_turns': flush_every_turns,
         'max_compaction_per_pass': max_compaction_per_pass,
         'max_side_effects_per_pass': max_side_effects_per_pass,
         'reset_session': reset_session,
+        'drain_after_ingest': True,
+        'drain_timeout_ms': drain_timeout_ms,
     }
 
     job_id = uuid.uuid4().hex[:12]
