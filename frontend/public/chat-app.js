@@ -3665,7 +3665,7 @@ async function refreshMemory() {
   try {
     const activeBenchmarkStatus = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
     const activeBenchmarkJobId = String((lastBenchmarkSummary || {}).job_id || '').trim();
-    const benchmarkRunning = initialStateHydrated && (!!activeBenchmarkJobId || activeBenchmarkStatus === 'running' || activeBenchmarkStatus === 'queued' || activeBenchmarkStatus === 'waiting_for_slot');
+    const benchmarkRunning = initialStateHydrated && (activeBenchmarkStatus === 'running' || activeBenchmarkStatus === 'queued' || activeBenchmarkStatus === 'waiting_for_slot');
 
     if (benchmarkRunning) {
       try {
