@@ -33,19 +33,21 @@ function BenchmarkPane(props) {
   const history = Array.isArray(benchmarkMeta.history) ? benchmarkMeta.history : []
   const formatIsoShort = typeof props.formatIsoShort === 'function' ? props.formatIsoShort : fmtIso
   const openPayload = typeof props.onOpenPayload === 'function' ? props.onOpenPayload : () => {}
+  const onCancel = typeof props.onCancel === 'function' ? props.onCancel : null
 
   const suite = String((summary || {}).suite || '')
   const isLocomo = suite && suite !== 'fixture_smoke'
   const hasFinishedAt = !!String((summary || {}).finished_at || '').trim()
   const status = String((summary || {}).status || (report || {}).status || (hasFinishedAt ? 'completed' : '')).trim().toLowerCase()
   const phase = String((summary || {}).phase || (report || {}).phase || (hasFinishedAt ? 'done' : '')).trim().toLowerCase()
+  const heartbeatStage = String((summary || {}).heartbeat_stage || (summary || {}).stage || '').trim()
   const runId = String((summary || {}).run_id || (report || {}).run_id || '').trim()
   const activeJobId = String((summary || {}).job_id || (report || {}).active_job_id || '').trim()
   const turnsIngested = Number((summary || {}).turns_ingested || (((report || {}).ingestion || {}).ingested_turns || 0) || 0)
   const qaCases = Number((summary || {}).qa_cases || 0)
   const qaCompleted = Number((summary || {}).qa_completed || (status === 'completed' ? qaCases : 0))
   const activeSampleId = String((summary || {}).sample_id || '').trim()
-  const isActiveRun = !!((runId || activeJobId) && !hasFinishedAt && status !== 'completed' && status !== 'failed')
+  const isActiveRun = !!((runId || activeJobId) && !hasFinishedAt && status !== 'completed' && status !== 'failed' && status !== 'cancelled')
   const runLabel = isActiveRun
     ? (activeJobId ? ('job_id=' + activeJobId) : (runId ? ('run_id=' + runId) : ''))
     : (runId ? ('run_id=' + runId) : '')
@@ -56,16 +58,21 @@ function BenchmarkPane(props) {
     building_suite: 16,
     starting: 22,
     preparing_root: 30,
-    ingesting: 44,
-    ingested: 50,
+    ingesting: 40,
+    async_jobs: 52,
+    ingested: 55,
+    building_index: 65,
     semantic_built: 70,
+    running_qa: 75,
     retrieving: 82,
     scoring: 92,
     writing_artifacts: 97,
     completed: 100,
     failed: 100,
+    cancelled: 100,
   }
-  const progressPct = Number(phaseProgressMap[phase] || (isActiveRun ? 18 : 0))
+  const stageForProgress = heartbeatStage || phase
+  const progressPct = Number(phaseProgressMap[stageForProgress] || (isActiveRun ? 18 : 0))
 
   if (!summary || (!summary.cases && !summary.qa_cases && !isActiveRun)) {
     return React.createElement(
@@ -310,11 +317,33 @@ function BenchmarkPane(props) {
       ? React.createElement(
           'div',
           { className: 'runtime-card' },
-          React.createElement('div', null, React.createElement('strong', null, 'Benchmark in progress')),
+          React.createElement(
+            'div',
+            { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+            React.createElement('strong', null, 'Benchmark in progress'),
+            onCancel && activeJobId
+              ? React.createElement(
+                  'button',
+                  {
+                    onClick: () => onCancel(activeJobId),
+                    style: {
+                      background: 'rgba(248,113,113,0.15)',
+                      border: '1px solid rgba(248,113,113,0.4)',
+                      borderRadius: '4px',
+                      color: '#f87171',
+                      cursor: 'pointer',
+                      fontSize: '11px',
+                      padding: '2px 8px',
+                    },
+                  },
+                  'Cancel'
+                )
+              : null
+          ),
           React.createElement(
             'div',
             { style: { marginTop: '4px', color: 'var(--text-dim)' } },
-            'phase=' + String(phase || 'working') +
+            (heartbeatStage ? ('stage=' + heartbeatStage) : ('phase=' + String(phase || 'working'))) +
               (runLabel ? (' · ' + runLabel) : '') +
               (turnsIngested > 0 ? (' · turns=' + String(turnsIngested)) : '') +
               (qaCases > 0 ? (' · qa=' + String(qaCompleted) + '/' + String(qaCases)) : '') +
@@ -328,6 +357,7 @@ function BenchmarkPane(props) {
                 width: String(Math.max(6, Math.min(100, progressPct))) + '%',
                 height: '100%',
                 background: 'linear-gradient(90deg, #60a5fa, #34d399)',
+                transition: 'width 0.8s ease',
               },
             })
           )

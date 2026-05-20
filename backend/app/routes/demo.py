@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import threading
 import time
 import uuid
 import urllib.error
@@ -17,6 +18,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app.benchmarks import benchmark_store
 from app.benchmarks.locomo_loader import LocomoLoaderError
+from app.benchmarks.locomo_runner import BenchmarkCancelledError
 from app.benchmarks.locomo_suite import build_locomo_suite_metadata
 from app.core.abuse import heavy_operation_slot, rate_limit_chat, rate_limit_general, rate_limit_heavy
 from app.core.auth import auth_meta_payload, require_admin
@@ -477,6 +479,29 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
     row['status'] = 'running'
     _benchmark_event(row, 'starting', 'Benchmark started')
 
+    cancel_event = threading.Event()
+    row['cancel_event'] = cancel_event
+
+    # Heartbeat: run_benchmark calls this from the worker thread to update the
+    # current phase. Written to a plain dict so the keepalive task can relay it
+    # to the job row without adding events (no memory growth).
+    _hb: dict[str, str] = {'stage': 'starting', 'message': ''}
+
+    def heartbeat(stage: str, message: str) -> None:
+        _hb['stage'] = str(stage or '')
+        _hb['message'] = str(message or '')
+
+    async def _keepalive() -> None:
+        while True:
+            current = BENCHMARK_JOBS.get(job_id)
+            if not isinstance(current, dict) or bool(current.get('done')):
+                return
+            current['stage'] = _hb['stage']
+            current['updated_ms'] = _now_ms()
+            await asyncio.sleep(2)
+
+    keepalive_task = asyncio.create_task(_keepalive())
+
     def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
         current = BENCHMARK_JOBS.get(job_id)
         if not isinstance(current, dict):
@@ -495,7 +520,7 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         )
 
     try:
-        out = await asyncio.to_thread(run_benchmark, progress=progress, **kwargs)
+        out = await asyncio.to_thread(run_benchmark, progress=progress, cancel_event=cancel_event, heartbeat=heartbeat, **kwargs)
         current = BENCHMARK_JOBS.get(job_id)
         if not isinstance(current, dict):
             return
@@ -510,6 +535,13 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         else:
             current['error'] = str((out or {}).get('error') or 'benchmark_failed')
             _benchmark_event(current, 'failed', 'Benchmark failed', error=current['error'])
+    except BenchmarkCancelledError:
+        current = BENCHMARK_JOBS.get(job_id)
+        if isinstance(current, dict):
+            current['status'] = 'cancelled'
+            current['done'] = True
+            current['updated_ms'] = _now_ms()
+            _benchmark_event(current, 'cancelled', 'Benchmark cancelled')
     except Exception as exc:
         current = BENCHMARK_JOBS.get(job_id)
         if not isinstance(current, dict):
@@ -520,6 +552,7 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         current['updated_ms'] = _now_ms()
         _benchmark_event(current, 'failed', 'Benchmark failed', error=current['error'])
     finally:
+        keepalive_task.cancel()
         if ACTIVE_BENCHMARK_JOB_ID == job_id:
             ACTIVE_BENCHMARK_JOB_ID = None
 
@@ -1269,6 +1302,23 @@ def benchmark_job_status(job_id: str, cursor: int = 0):
     if not isinstance(row, dict):
         return JSONResponse({'ok': False, 'error': 'benchmark_job_not_found'}, status_code=404)
     return _benchmark_job_payload(row, cursor=max(0, int(cursor)))
+
+
+@router.post('/demo/benchmark/job/{job_id}/cancel')
+async def benchmark_job_cancel(job_id: str):
+    job_id_s = str(job_id or '').strip()
+    row = BENCHMARK_JOBS.get(job_id_s)
+    if not isinstance(row, dict):
+        return JSONResponse({'ok': False, 'error': 'benchmark_job_not_found'}, status_code=404)
+    if bool(row.get('done')):
+        return {'ok': True, 'job_id': job_id_s, 'status': str(row.get('status') or ''), 'already_done': True}
+    cancel_event = row.get('cancel_event')
+    if isinstance(cancel_event, threading.Event):
+        cancel_event.set()
+    row['abandoned'] = True
+    row['updated_ms'] = _now_ms()
+    _benchmark_event(row, 'cancelling', 'Cancel requested')
+    return {'ok': True, 'job_id': job_id_s, 'status': 'cancelling'}
 
 
 @router.get('/demo/benchmark/last')
