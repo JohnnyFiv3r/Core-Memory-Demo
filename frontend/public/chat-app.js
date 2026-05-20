@@ -4063,7 +4063,11 @@ async function seedMemory() {
           (range.first && range.last ? (' · range=' + String(range.first) + '-' + String(range.last)) : '') +
           ' · queue_idle=' + String(queueIdle);
         if (Number(data.failed_turns || 0) > 0) {
-          addMsg('system', 'Warning: LoCoMo replay completed with ' + String(data.failed_turns || 0) + ' failed turn(s).');
+          const turnErrors = Array.isArray(data.errors) ? data.errors : [];
+          const errDetails = turnErrors.slice(0, 3).map(e =>
+            'dia_id=' + String((e || {}).dia_id || '?') + ': ' + String((e || {}).error || 'unknown')
+          ).join('; ');
+          addMsg('system', 'Warning: LoCoMo replay completed with ' + String(data.failed_turns || 0) + ' failed turn(s).' + (errDetails ? ' ' + errDetails : ''));
         }
       }
     } else if (seedSource === 'story_pack' && preloadEnabled) {
