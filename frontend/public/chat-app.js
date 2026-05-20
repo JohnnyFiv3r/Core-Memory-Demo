@@ -4055,7 +4055,10 @@ async function seedMemory() {
           if (activeSeedJobId !== seedJobId) {
             if (!cancellingStartMs) cancellingStartMs = Date.now();
             progressEl.textContent = 'Cancelling LoCoMo seed...';
-            if (Date.now() - cancellingStartMs > 30000) break;
+            if (Date.now() - cancellingStartMs > 30000) {
+              job = { ...(job || {}), status: 'cancelled', done: true };
+              break;
+            }
           } else {
             cancellingStartMs = 0;
             progressEl.textContent = 'Seeding LoCoMo transcript corpus... ' + stage;
