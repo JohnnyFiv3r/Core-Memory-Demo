@@ -63,7 +63,7 @@ BENCHMARK_JOB_MAX_EVENTS = 128
 BENCHMARK_JOBS: dict[str, dict[str, Any]] = {}
 ACTIVE_BENCHMARK_JOB_ID: str | None = None
 SEED_JOB_TTL_SECONDS = 30 * 60
-SEED_JOB_POLL_MS = 1200
+SEED_JOB_POLL_MS = 3000
 SEED_JOB_MAX_EVENTS = 64
 SEED_JOBS: dict[str, dict[str, Any]] = {}
 SEED_STATUS: dict[str, Any] = {
@@ -574,9 +574,15 @@ async def _run_seed_job(job_id: str, kwargs: dict[str, Any]) -> None:
             _set_seed_status(active=False, kind='locomo', status='completed', message=f'LoCoMo replay complete: {seeded} turns')
         else:
             current['status'] = 'failed'
-            err = str((out or {}).get('error') or 'seed_failed')
+            turn_errors = list((out or {}).get('errors') or [])
+            first_err = str((turn_errors[0] or {}).get('error') or '') if turn_errors else ''
+            seeded_count = int((out or {}).get('seeded') or 0)
+            if seeded_count == 0:
+                err = first_err or 'no_turns_seeded'
+            else:
+                err = first_err or 'seed_partial_failure'
             current['error'] = err
-            _seed_event(current, 'failed', f'Seed failed: {err}', error=err)
+            _seed_event(current, 'failed', f'Seed failed: {err}', error=err, seeded=seeded_count, failed_turns=len(turn_errors))
             _set_seed_status(active=False, kind='locomo', status='failed', message=err)
     except Exception as exc:
         current = SEED_JOBS.get(job_id)
@@ -613,11 +619,20 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             return
         await asyncio.sleep(0.25)
 
+    cancel_event = row.get('cancel_event')
+    if not isinstance(cancel_event, threading.Event):
+        cancel_event = threading.Event()
+        row['cancel_event'] = cancel_event
+    if bool(row.get('abandoned')) or cancel_event.is_set():
+        row['status'] = 'cancelled'
+        row['done'] = True
+        row['updated_ms'] = _now_ms()
+        _benchmark_event(row, 'cancelled', 'Benchmark cancelled before start')
+        return
+
     ACTIVE_BENCHMARK_JOB_ID = job_id
     row['status'] = 'running'
     _benchmark_event(row, 'starting', 'Benchmark started')
-
-    cancel_event: threading.Event = row.get('cancel_event') or threading.Event()
 
     # Heartbeat: run_benchmark calls this from the worker thread to update the
     # current phase. Written to a plain dict so the keepalive task can relay it
