@@ -479,8 +479,7 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
     row['status'] = 'running'
     _benchmark_event(row, 'starting', 'Benchmark started')
 
-    cancel_event = threading.Event()
-    row['cancel_event'] = cancel_event
+    cancel_event: threading.Event = row.get('cancel_event') or threading.Event()
 
     # Heartbeat: run_benchmark calls this from the worker thread to update the
     # current phase. Written to a plain dict so the keepalive task can relay it
@@ -1215,6 +1214,7 @@ async def benchmark_run(request: Request):
         'started_ms': _now_ms(),
         'updated_ms': _now_ms(),
         'abandoned': False,
+        'cancel_event': threading.Event(),
     }
     BENCHMARK_JOBS[job_id] = row
     if isinstance(prior_row, dict) and not bool(prior_row.get('done')):
