@@ -62,6 +62,10 @@ BENCHMARK_JOB_POLL_MS = 1200
 BENCHMARK_JOB_MAX_EVENTS = 128
 BENCHMARK_JOBS: dict[str, dict[str, Any]] = {}
 ACTIVE_BENCHMARK_JOB_ID: str | None = None
+SEED_JOB_TTL_SECONDS = 30 * 60
+SEED_JOB_POLL_MS = 1200
+SEED_JOB_MAX_EVENTS = 64
+SEED_JOBS: dict[str, dict[str, Any]] = {}
 SEED_STATUS: dict[str, Any] = {
     'active': False,
     'kind': '',
@@ -172,6 +176,69 @@ def _set_seed_status(*, active: bool, kind: str, status: str, message: str) -> N
         'updated_ms': _now_ms(),
         'message': str(message or ''),
     })
+
+
+def _prune_seed_jobs() -> None:
+    now = _now_ms()
+    ttl_ms = int(SEED_JOB_TTL_SECONDS * 1000)
+    stale: list[str] = []
+    for job_id, row in list(SEED_JOBS.items()):
+        updated = int((row or {}).get('updated_ms') or 0)
+        done = bool((row or {}).get('done'))
+        age_ms = now - updated
+        if done and age_ms > ttl_ms:
+            stale.append(job_id)
+        elif not done and age_ms > max(ttl_ms * 2, 10 * 60_000):
+            stale.append(job_id)
+    for job_id in stale:
+        SEED_JOBS.pop(job_id, None)
+
+
+def _seed_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> None:
+    events = list(row.get('events') or [])
+    seq = int(row.get('seq') or 0) + 1
+    evt: dict[str, Any] = {
+        'seq': seq,
+        'ts_ms': _now_ms(),
+        'stage': str(stage or ''),
+        'message': str(message or ''),
+    }
+    for k, v in dict(extra or {}).items():
+        if v is None:
+            continue
+        evt[str(k)] = v
+    events.append(evt)
+    if len(events) > SEED_JOB_MAX_EVENTS:
+        events = events[-SEED_JOB_MAX_EVENTS:]
+    row['events'] = events
+    row['seq'] = seq
+    row['stage'] = str(stage or '')
+    row['updated_ms'] = _now_ms()
+
+
+def _seed_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
+    events = [e for e in list(row.get('events') or []) if int((e or {}).get('seq') or 0) > int(cursor)]
+    next_cursor = int(cursor)
+    if events:
+        next_cursor = int((events[-1] or {}).get('seq') or cursor)
+    out: dict[str, Any] = {
+        'ok': True,
+        'job_id': str(row.get('job_id') or ''),
+        'status': str(row.get('status') or 'running'),
+        'stage': str(row.get('stage') or ''),
+        'done': bool(row.get('done')),
+        'poll_after_ms': SEED_JOB_POLL_MS,
+        'events': events,
+        'cursor_next': next_cursor,
+        'started_ms': int(row.get('started_ms') or 0),
+        'updated_ms': int(row.get('updated_ms') or 0),
+        'elapsed_ms': max(0, _now_ms() - int(row.get('started_ms') or _now_ms())),
+    }
+    if row.get('error'):
+        out['error'] = str(row['error'])
+    if bool(row.get('done')) and isinstance(row.get('result'), dict):
+        out['result'] = dict(row['result'])
+    return out
 
 
 def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
@@ -451,6 +518,68 @@ async def _run_chat_job(job_id: str, message: str) -> None:
         current['error'] = str(exc or 'chat_failed')
         current['updated_ms'] = _now_ms()
         _chat_event(current, 'failed', 'Chat failed', error=str(exc or 'chat_failed'))
+
+
+async def _run_seed_job(job_id: str, kwargs: dict[str, Any]) -> None:
+    row = SEED_JOBS.get(job_id)
+    if not isinstance(row, dict):
+        return
+    row['status'] = 'running'
+    _seed_event(row, 'starting', 'Seed started')
+
+    cancel_event: threading.Event = row.get('cancel_event') or threading.Event()
+    _hb: dict[str, Any] = {'seeded': 0, 'total': 0}
+
+    def progress(seeded: int, total: int) -> None:
+        _hb['seeded'] = int(seeded)
+        _hb['total'] = int(total)
+
+    async def _keepalive() -> None:
+        while True:
+            current = SEED_JOBS.get(job_id)
+            if not isinstance(current, dict) or bool(current.get('done')):
+                return
+            n, t = _hb['seeded'], _hb['total']
+            current['stage'] = f'seeding {n}/{t}' if t else 'seeding'
+            current['updated_ms'] = _now_ms()
+            await asyncio.sleep(2)
+
+    keepalive_task = asyncio.create_task(_keepalive())
+    try:
+        _set_seed_status(active=True, kind='locomo', status='running', message='LoCoMo replay in progress')
+        out = await asyncio.to_thread(replay_locomo_corpus, cancel_event=cancel_event, progress=progress, **kwargs)
+        current = SEED_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        current['done'] = True
+        current['result'] = dict(out or {})
+        current['updated_ms'] = _now_ms()
+        if bool((out or {}).get('cancelled')):
+            current['status'] = 'cancelled'
+            _seed_event(current, 'cancelled', 'Seed cancelled')
+            _set_seed_status(active=False, kind='locomo', status='cancelled', message='Seed cancelled')
+        elif bool((out or {}).get('ok')):
+            current['status'] = 'completed'
+            seeded = int((out or {}).get('seeded') or 0)
+            _seed_event(current, 'done', f'Seed completed: {seeded} turns ingested', seeded=seeded)
+            _set_seed_status(active=False, kind='locomo', status='completed', message=f'LoCoMo replay complete: {seeded} turns')
+        else:
+            current['status'] = 'failed'
+            err = str((out or {}).get('error') or 'seed_failed')
+            current['error'] = err
+            _seed_event(current, 'failed', f'Seed failed: {err}', error=err)
+            _set_seed_status(active=False, kind='locomo', status='failed', message=err)
+    except Exception as exc:
+        current = SEED_JOBS.get(job_id)
+        if isinstance(current, dict):
+            current['status'] = 'failed'
+            current['done'] = True
+            current['error'] = str(exc)
+            current['updated_ms'] = _now_ms()
+            _seed_event(current, 'failed', f'Seed error: {exc}', error=str(exc))
+        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
+    finally:
+        keepalive_task.cancel()
 
 
 async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
@@ -905,36 +1034,69 @@ async def locomo_replay(request: Request):
     max_turns = int(max_turns_raw) if isinstance(max_turns_raw, (int, float)) and int(max_turns_raw) > 0 else None
     start_session = int(start_session_raw) if isinstance(start_session_raw, (int, float)) and int(start_session_raw) > 0 else None
     max_sessions = int(max_sessions_raw) if isinstance(max_sessions_raw, (int, float)) and int(max_sessions_raw) > 0 else None
-    try:
-        _set_seed_status(active=True, kind='locomo', status='running', message='LoCoMo replay in progress')
-        out = await replay_locomo_corpus(
-            sample_mode=sample_mode,
-            sample_id=str(sample_id).strip() if sample_id is not None else None,
-            replay_mode=replay_mode,
-            max_turns=max_turns,
-            start_session=start_session,
-            max_sessions=max_sessions,
-            wait_for_idle=wait_for_idle,
-            idle_timeout_ms=idle_timeout_ms,
-            idle_poll_ms=idle_poll_ms,
-            auto_flush=auto_flush,
-            flush_threshold_ratio=flush_threshold_ratio,
-            flush_every_turns=flush_every_turns,
-            max_compaction_per_pass=max_compaction_per_pass,
-            max_side_effects_per_pass=max_side_effects_per_pass,
-            reset_session=reset_session,
-        )
-        _set_seed_status(active=False, kind='locomo', status='completed' if bool((out or {}).get('ok')) else 'failed', message=str((out or {}).get('error') or 'LoCoMo replay complete'))
-        return out
-    except FileNotFoundError as exc:
-        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
-        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=404)
-    except ValueError as exc:
-        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
-        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=400)
-    except Exception as exc:
-        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
-        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+
+    kwargs = {
+        'sample_mode': sample_mode,
+        'sample_id': str(sample_id).strip() if sample_id is not None else None,
+        'replay_mode': replay_mode,
+        'max_turns': max_turns,
+        'start_session': start_session,
+        'max_sessions': max_sessions,
+        'wait_for_idle': wait_for_idle,
+        'idle_timeout_ms': idle_timeout_ms,
+        'idle_poll_ms': idle_poll_ms,
+        'auto_flush': auto_flush,
+        'flush_threshold_ratio': flush_threshold_ratio,
+        'flush_every_turns': flush_every_turns,
+        'max_compaction_per_pass': max_compaction_per_pass,
+        'max_side_effects_per_pass': max_side_effects_per_pass,
+        'reset_session': reset_session,
+    }
+
+    job_id = uuid.uuid4().hex[:12]
+    row: dict[str, Any] = {
+        'job_id': job_id,
+        'status': 'queued',
+        'stage': 'queued',
+        'done': False,
+        'error': None,
+        'result': None,
+        'events': [],
+        'seq': 0,
+        'started_ms': _now_ms(),
+        'updated_ms': _now_ms(),
+        'cancel_event': threading.Event(),
+    }
+    SEED_JOBS[job_id] = row
+    _seed_event(row, 'queued', 'Seed request accepted')
+    asyncio.create_task(_run_seed_job(job_id, kwargs))
+    return {'ok': True, 'job_id': job_id, 'status': 'queued'}
+
+
+@router.get('/locomo/replay/job/{job_id}')
+def locomo_replay_job_status(job_id: str, cursor: int = 0):
+    _prune_seed_jobs()
+    job_id_s = str(job_id or '').strip()
+    row = SEED_JOBS.get(job_id_s)
+    if not isinstance(row, dict):
+        return JSONResponse({'ok': False, 'error': 'seed_job_not_found'}, status_code=404)
+    return _seed_job_payload(row, cursor=max(0, int(cursor)))
+
+
+@router.post('/locomo/replay/job/{job_id}/cancel')
+async def locomo_replay_job_cancel(job_id: str):
+    job_id_s = str(job_id or '').strip()
+    row = SEED_JOBS.get(job_id_s)
+    if not isinstance(row, dict):
+        return JSONResponse({'ok': False, 'error': 'seed_job_not_found'}, status_code=404)
+    if bool(row.get('done')):
+        return {'ok': True, 'job_id': job_id_s, 'status': str(row.get('status') or ''), 'already_done': True}
+    cancel_event = row.get('cancel_event')
+    if isinstance(cancel_event, threading.Event):
+        cancel_event.set()
+    row['updated_ms'] = _now_ms()
+    _seed_event(row, 'cancelling', 'Cancel requested')
+    return {'ok': True, 'job_id': job_id_s, 'status': 'cancelling'}
 
 
 @router.post('/story-pack/replay')

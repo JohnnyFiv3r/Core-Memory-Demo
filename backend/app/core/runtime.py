@@ -487,7 +487,7 @@ def _replay_locomo_row(row: dict[str, Any]) -> dict[str, Any]:
     return {"ok": True, "session_id": session_id, "turn_id": turn_id, "dia_id": dia_id}
 
 
-async def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, replay_mode: str = "transcript_only", max_turns: int | None = None, start_session: int | None = None, max_sessions: int | None = None, wait_for_idle: bool = False, idle_timeout_ms: int = 120000, idle_poll_ms: int = 250, auto_flush: bool = True, flush_threshold_ratio: float = 0.80, flush_every_turns: int = 0, max_compaction_per_pass: int = 2, max_side_effects_per_pass: int = 8, reset_session: bool = False) -> dict[str, Any]:
+def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, replay_mode: str = "transcript_only", max_turns: int | None = None, start_session: int | None = None, max_sessions: int | None = None, wait_for_idle: bool = False, idle_timeout_ms: int = 120000, idle_poll_ms: int = 250, auto_flush: bool = True, flush_threshold_ratio: float = 0.80, flush_every_turns: int = 0, max_compaction_per_pass: int = 2, max_side_effects_per_pass: int = 8, reset_session: bool = False, cancel_event: Any | None = None, progress: Any | None = None) -> dict[str, Any]:
     replay_mode_n = str(replay_mode or "transcript_only").strip().lower()
     if replay_mode_n != "transcript_only":
         raise ValueError("locomo_invalid_replay_mode")
@@ -499,6 +499,7 @@ async def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None
         start_session=start_session,
         max_sessions=max_sessions,
     )
+    total_rows = len(rows)
 
     if reset_session and meta.get("sample_ids"):
         SESSION.session_id = _locomo_core_session_id(str((meta.get("sample_ids") or [""])[0]))
@@ -520,7 +521,11 @@ async def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None
         usage_ratio = float(SESSION.token_usage) / float(budget)
         return usage_ratio >= max(0.1, float(flush_threshold_ratio))
 
+    cancelled = False
     for idx, row in enumerate(rows, start=1):
+        if cancel_event is not None and cancel_event.is_set():
+            cancelled = True
+            break
         try:
             replayed = _replay_locomo_row(row)
             seeded += 1
@@ -529,6 +534,9 @@ async def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None
             if sid and sid not in session_ids_seen:
                 session_ids_seen.append(sid)
             record_turn_tokens("[LoCoMo transcript replay]", str(row.get("text") or ""), model_id=detect_model())
+
+            if callable(progress):
+                progress(seeded, total_rows)
 
             if wait_for_idle:
                 wait_result = _drain_async_until_idle(
@@ -545,6 +553,9 @@ async def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None
                         "error": "locomo_queue_not_idle_timeout",
                     })
                     break
+                if cancel_event is not None and cancel_event.is_set():
+                    cancelled = True
+                    break
 
             if _should_flush():
                 f = run_flush(new_session_id=sid or None)
@@ -560,7 +571,8 @@ async def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None
     final_queue = async_jobs_status(root=settings.core_memory_root)
     turn_range = {"first": 1 if seeded > 0 else 0, "last": int(seeded)}
     return {
-        "ok": seeded > 0 and not errors,
+        "ok": seeded > 0 and not errors and not cancelled,
+        "cancelled": cancelled,
         "seeded": int(seeded),
         "seeded_turns": int(seeded),
         "requested_turns": int(len(rows)),
