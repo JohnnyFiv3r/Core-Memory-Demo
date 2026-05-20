@@ -4055,7 +4055,10 @@ async function seedMemory() {
           if (activeSeedJobId !== seedJobId) {
             if (!cancellingStartMs) cancellingStartMs = Date.now();
             progressEl.textContent = 'Cancelling LoCoMo seed...';
-            if (Date.now() - cancellingStartMs > 30000) break;
+            if (Date.now() - cancellingStartMs > 30000) {
+              job = { ...(job || {}), status: 'cancelled', done: true };
+              break;
+            }
           } else {
             cancellingStartMs = 0;
             progressEl.textContent = 'Seeding LoCoMo transcript corpus... ' + stage;
@@ -4319,6 +4322,7 @@ async function runBenchmark() {
   btn.dataset.prevLabel = prev;
   btn.disabled = true;
   btn.textContent = 'Starting...';
+  completedBenchmarkRunId = null;
   const optimisticJobId = 'pending-job-' + Date.now().toString(36);
   const optimisticAnswerMode = answerMode || 'auto';
   lastBenchmarkSummary = {
@@ -4389,11 +4393,22 @@ async function runBenchmark() {
       phase: 'queued',
     };
     renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+    syncBenchmarkButton(lastBenchmarkSummary);
     let cursor = 0;
     let done = false;
     while (!done) {
-      const jr = await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobId) + '?cursor=' + encodeURIComponent(String(cursor)));
-      const job = await parseApiJsonResponse(jr, 'benchmark-job');
+      let jr, job;
+      try {
+        jr = await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobId) + '?cursor=' + encodeURIComponent(String(cursor)));
+        job = await parseApiJsonResponse(jr, 'benchmark-job');
+      } catch (pollErr) {
+        const pollErrMsg = String((pollErr && pollErr.message) || pollErr || '');
+        if (/network_changed|network_io_suspended|failed to fetch|networkerror/i.test(pollErrMsg)) {
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+        throw pollErr;
+      }
       // Relay heartbeat stage from the keepalive (no events emitted, just stage string).
       if (job.stage && !job.done) {
         lastBenchmarkSummary = { ...(lastBenchmarkSummary || {}), heartbeat_stage: String(job.stage || ''), stage: String(job.stage || '') };
