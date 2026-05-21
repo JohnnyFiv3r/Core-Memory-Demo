@@ -1306,9 +1306,10 @@ async def benchmark_run(request: Request):
     run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
     prior_job_id = ACTIVE_BENCHMARK_JOB_ID
     prior_row = BENCHMARK_JOBS.get(prior_job_id or '') if prior_job_id else None
-    if run_mode not in {'inline', 'local', 'sync'} and isinstance(prior_row, dict) and not bool(prior_row.get('done')):
+    if run_mode in {'disabled', 'off'}:
+        return JSONResponse({'ok': False, 'job_id': None, 'status': 'failed', 'error': 'benchmark_run_disabled'}, status_code=503)
+    if run_mode in {'queue', 'queued', 'cron', 'external', 'dispatch'} and isinstance(prior_row, dict) and not bool(prior_row.get('done')):
         prior_row['updated_ms'] = _now_ms()
-        _benchmark_event(prior_row, 'running', 'Benchmark request reused active job')
         return {
             'ok': True,
             'job_id': prior_job_id,
@@ -1317,7 +1318,7 @@ async def benchmark_run(request: Request):
             'already_running': True,
             'superseded_job_id': None,
         }
-    if run_mode not in {'inline', 'local', 'sync'}:
+    if run_mode in {'queue', 'queued', 'cron', 'external', 'dispatch'}:
         stored_active = benchmark_store.read_active_job()
         if isinstance(stored_active, dict):
             active_job_id = str(stored_active.get('job_id') or '').strip()
@@ -1390,12 +1391,6 @@ async def benchmark_run(request: Request):
             'external_job_id': row['external_job_id'],
             'superseded_job_id': prior_job_id,
         }
-    if run_mode in {'disabled', 'off'}:
-        row['status'] = 'failed'
-        row['done'] = True
-        row['error'] = 'benchmark_run_disabled'
-        _benchmark_event(row, 'failed', 'Benchmark run disabled')
-        return JSONResponse({'ok': False, 'job_id': job_id, 'status': 'failed', 'error': row['error']}, status_code=503)
     if run_mode in {'inline', 'local', 'sync'}:
         await _run_benchmark_job(job_id, kwargs)
         result = row.get('result') if isinstance(row.get('result'), dict) else None
