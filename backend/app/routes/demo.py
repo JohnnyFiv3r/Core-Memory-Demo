@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import functools
 import json
 import threading
 import time
@@ -63,6 +65,20 @@ BENCHMARK_JOB_MAX_EVENTS = 128
 BENCHMARK_MAX_RUNTIME_SECONDS = 30 * 60
 BENCHMARK_JOBS: dict[str, dict[str, Any]] = {}
 ACTIVE_BENCHMARK_JOB_ID: str | None = None
+# Dedicated, bounded executor for benchmark worker threads. run_benchmark()
+# issues external calls (embeddings / LLM) with no client-side timeout, so a
+# hung run leaves an un-killable thread pinned to its slot even after the
+# watchdog force-finalizes the job. Isolating those threads here keeps a hang
+# from starving the shared default executor that serves chat, recall, flush and
+# seed jobs. _BENCHMARK_INFLIGHT_WORKERS tracks how many slots are occupied so a
+# new run can fail fast instead of queueing forever behind a fully-leaked pool.
+BENCHMARK_EXECUTOR_MAX_WORKERS = 4
+_BENCHMARK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=BENCHMARK_EXECUTOR_MAX_WORKERS,
+    thread_name_prefix='benchmark-worker',
+)
+_BENCHMARK_INFLIGHT_WORKERS = 0
+_BENCHMARK_INFLIGHT_LOCK = threading.Lock()
 SEED_JOB_TTL_SECONDS = 30 * 60
 SEED_JOB_POLL_MS = 3000
 SEED_JOB_MAX_EVENTS = 64
@@ -78,6 +94,25 @@ SEED_STATUS: dict[str, Any] = {
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _benchmark_inflight_count() -> int:
+    with _BENCHMARK_INFLIGHT_LOCK:
+        return _BENCHMARK_INFLIGHT_WORKERS
+
+
+def _adjust_benchmark_inflight(delta: int) -> None:
+    """Track occupied slots in the benchmark executor.
+
+    Incremented when a run_benchmark() call is submitted, decremented by the
+    worker future's done-callback when the thread finally returns — including
+    long after the watchdog abandoned the job. The count therefore reflects
+    real OS threads, not job rows, so a leaked (hung) thread keeps its slot
+    counted until it actually unwinds.
+    """
+    global _BENCHMARK_INFLIGHT_WORKERS
+    with _BENCHMARK_INFLIGHT_LOCK:
+        _BENCHMARK_INFLIGHT_WORKERS = max(0, _BENCHMARK_INFLIGHT_WORKERS + int(delta))
 
 
 def _prune_chat_jobs() -> None:
@@ -156,6 +191,13 @@ def _prune_benchmark_jobs() -> None:
         BENCHMARK_JOBS.pop(job_id, None)
         if ACTIVE_BENCHMARK_JOB_ID == job_id:
             ACTIVE_BENCHMARK_JOB_ID = None
+    # Mirror the in-memory zombie recovery to the durable Postgres store so that
+    # stale `status='running'` rows don't block new benchmark runs via
+    # benchmark_store.read_active_job().
+    try:
+        benchmark_store.timeout_stale_jobs(max_runtime_seconds=BENCHMARK_MAX_RUNTIME_SECONDS + 5 * 60)
+    except Exception:
+        pass
 
 
 def _strip_benchmark_case_payloads(value: Any) -> Any:
@@ -740,7 +782,24 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         )
 
     try:
-        out = await asyncio.to_thread(run_benchmark, progress=progress, ingest_progress=ingest_progress, cancel_event=cancel_event, heartbeat=heartbeat, **kwargs)
+        # Run on the dedicated benchmark executor (not the shared default pool).
+        # The done-callback decrements the inflight count whenever the thread
+        # returns — even if the watchdog already abandoned the job and this
+        # coroutine resumed late — so a thread hung in an un-timed external call
+        # keeps its slot counted until it genuinely unwinds.
+        loop = asyncio.get_running_loop()
+        worker_fn = functools.partial(
+            run_benchmark,
+            progress=progress,
+            ingest_progress=ingest_progress,
+            cancel_event=cancel_event,
+            heartbeat=heartbeat,
+            **kwargs,
+        )
+        worker_future = loop.run_in_executor(_BENCHMARK_EXECUTOR, worker_fn)
+        _adjust_benchmark_inflight(1)
+        worker_future.add_done_callback(lambda _f: _adjust_benchmark_inflight(-1))
+        out = await worker_future
         current = BENCHMARK_JOBS.get(job_id)
         if not isinstance(current, dict) or bool(current.get('done')):
             # Force-finalized by the watchdog, cancel, or supersede while the
@@ -1459,6 +1518,30 @@ async def benchmark_run(request: Request):
                     'superseded_job_id': None,
                 }
 
+    # A worker thread hung inside an un-timed external call cannot be killed; it
+    # keeps its slot in the dedicated benchmark executor until (if ever) the
+    # call returns. For modes that run the benchmark in-process, refuse a new
+    # run once every slot is occupied rather than queueing a job that would
+    # block indefinitely behind the leaked threads.
+    if run_mode not in {'queue', 'queued', 'cron', 'external', 'dispatch'}:
+        inflight = _benchmark_inflight_count()
+        if inflight >= BENCHMARK_EXECUTOR_MAX_WORKERS:
+            return JSONResponse(
+                {
+                    'ok': False,
+                    'job_id': None,
+                    'status': 'failed',
+                    'error': 'benchmark_workers_exhausted',
+                    'detail': (
+                        f'{inflight} benchmark worker thread(s) are stuck in un-timed '
+                        'external calls and cannot be reclaimed. New runs are blocked '
+                        'until those calls unwind or the service is restarted.'
+                    ),
+                    'inflight_workers': inflight,
+                },
+                status_code=503,
+            )
+
     job_id = uuid.uuid4().hex[:12]
     row = {
         'job_id': job_id,
@@ -1574,7 +1657,26 @@ async def benchmark_force_clear():
             cleared.append(job_id)
     prior_active = ACTIVE_BENCHMARK_JOB_ID
     ACTIVE_BENCHMARK_JOB_ID = None
-    return {'ok': True, 'cleared': cleared, 'prior_active_job_id': prior_active}
+    # Also finalize any zombie rows in the durable Postgres store so they don't
+    # surface as a ghost active job on the next benchmark attempt.
+    store_cleared: list[str] = []
+    try:
+        store_cleared = benchmark_store.timeout_stale_jobs(
+            max_runtime_seconds=0,
+            error_reason='force_cleared_by_admin',
+        )
+    except Exception:
+        pass
+    # force-clear frees the slot and Postgres rows, but it cannot kill a worker
+    # thread stuck in an un-timed external call. Surface the still-occupied slot
+    # count so the admin knows whether a restart is still needed.
+    return {
+        'ok': True,
+        'cleared': cleared,
+        'store_cleared': store_cleared,
+        'prior_active_job_id': prior_active,
+        'inflight_workers': _benchmark_inflight_count(),
+    }
 
 
 @router.post('/demo/benchmark/job/{job_id}/cancel')
