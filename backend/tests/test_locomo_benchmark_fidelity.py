@@ -66,6 +66,27 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
         self.assertFalse(out['ok'])
         self.assertEqual('boom', out['result']['error'])
 
+    def test_evidence_dedupe_requires_full_sample_scoped_turn_id(self):
+        if runtime_mod is None:
+            self.skipTest('runtime unavailable')
+        row1 = self._row(dia_id='D1:1')
+        row2 = dict(row1)
+        row2['sample_id'] = 'conv-2'
+        with tempfile.TemporaryDirectory() as td, \
+             patch.object(runtime_mod, 'process_turn_finalized', return_value={'ok': True, 'processed': 1}):
+            out1 = runtime_mod._replay_locomo_row(row1, root=td)
+            out2 = runtime_mod._replay_locomo_row(row2, root=td)
+            corpus = runtime_mod.build_visible_corpus(Path(td))
+
+        self.assertTrue(out1['ok'])
+        self.assertTrue(out2['ok'])
+        self.assertNotEqual(out1.get('evidence_bead_id'), out2.get('evidence_bead_id'))
+        evidence_rows = [r for r in corpus if 'locomo_turn_evidence' in list(((r.get('bead') or {}).get('tags') or []))]
+        self.assertEqual(2, len(evidence_rows))
+        source_sets = {tuple(r.get('source_turn_ids') or []) for r in evidence_rows}
+        self.assertIn(('locomo:conv-1:D1:1', 'D1:1'), source_sets)
+        self.assertIn(('locomo:conv-2:D1:1', 'D1:1'), source_sets)
+
     def test_ingest_replay_flushes_each_locomo_session_before_post_flush_drain(self):
         if runtime_mod is None:
             self.skipTest('runtime unavailable')

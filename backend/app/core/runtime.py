@@ -476,7 +476,10 @@ def _ensure_locomo_evidence_bead(*, root: str, row: dict[str, Any], session_id: 
         existing = store._read_json(store.beads_dir / "index.json")
         for bid, bead in dict((existing.get("beads") or {})).items():
             source_ids = {str(x).strip() for x in (bead or {}).get("source_turn_ids") or [] if str(x).strip()}
-            if turn_id in source_ids or dia_id in source_ids:
+            # LoCoMo dia_id values (for example D1:1) are reused across
+            # conversations, so idempotency must be scoped to the full
+            # sample-qualified turn_id.
+            if turn_id in source_ids:
                 tags = {str(x) for x in (bead or {}).get("tags") or []}
                 if "locomo_turn_evidence" in tags:
                     return str(bid)
