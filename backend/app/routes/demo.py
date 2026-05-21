@@ -355,11 +355,17 @@ def _dispatch_benchmark_job(job_id: str, body: dict[str, Any], kwargs: dict[str,
 def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
     events = list(row.get('events') or [])
     latest = dict(events[-1] or {}) if events else {}
+    stage = str(row.get('stage') or latest.get('stage') or 'working')
     return {
         'run_id': '',
         'job_id': str(row.get('job_id') or ''),
         'status': str(row.get('status') or 'running'),
-        'phase': str(row.get('stage') or latest.get('stage') or 'working'),
+        'phase': stage,
+        'stage': stage,
+        'stage_message': str(row.get('stage_message') or ''),
+        'ingest_n': int(row.get('ingest_n') or 0),
+        'ingest_total': int(row.get('ingest_total') or 0),
+        'elapsed_ms': max(0, _now_ms() - int(row.get('started_ms') or _now_ms())),
         'started_at': datetime.fromtimestamp(int(row.get('started_ms') or _now_ms()) / 1000, timezone.utc).isoformat(),
         'updated_at': datetime.fromtimestamp(int(row.get('updated_ms') or _now_ms()) / 1000, timezone.utc).isoformat(),
         'qa_completed': int(latest.get('qa_completed') or 0),
