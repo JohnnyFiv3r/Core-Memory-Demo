@@ -3608,7 +3608,7 @@ function ensureBenchmarkPaneRenderer() {
   return ensureSliceBinding(
     benchmarkPaneRenderer,
     'benchmarkPaneRenderer',
-    '/chat-slices/benchmark-pane.js?v=20260521-live-job-guard-1',
+    '/chat-slices/benchmark-pane.js?v=20260521-rich-progress-1',
     (mod) => (mod && typeof mod.renderBenchmarkPane === 'function' ? mod.renderBenchmarkPane : null),
     (value) => { benchmarkPaneRenderer = value; }
   );
@@ -4416,9 +4416,17 @@ async function runBenchmark() {
         }
         throw pollErr;
       }
-      // Relay heartbeat stage from the keepalive (no events emitted, just stage string).
+      // Relay heartbeat stage + message + ingest progress + elapsed from the keepalive.
       if (job.stage && !job.done) {
-        lastBenchmarkSummary = { ...(lastBenchmarkSummary || {}), heartbeat_stage: String(job.stage || ''), stage: String(job.stage || '') };
+        lastBenchmarkSummary = {
+          ...(lastBenchmarkSummary || {}),
+          heartbeat_stage: String(job.stage || ''),
+          stage: String(job.stage || ''),
+          stage_message: String(job.stage_message || ''),
+          ingest_n: Number(job.ingest_n || 0),
+          ingest_total: Number(job.ingest_total || 0),
+          elapsed_ms: Number(job.elapsed_ms || 0),
+        };
         renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
       }
       const events = Array.isArray(job.events) ? job.events : [];
