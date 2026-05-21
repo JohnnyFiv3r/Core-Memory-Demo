@@ -299,11 +299,25 @@ def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[st
         raw_dia_ids.extend([str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip()])
         if raw_dia_ids:
             dia_id_source = "row.dia_ids"
+    source_turn_ids = [str(x).strip() for x in (bead.get("source_turn_ids") or []) if str(x).strip()]
     if not raw_dia_ids:
-        raw_dia_ids.extend([str(x).strip() for x in (bead.get("source_turn_ids") or []) if str(x).strip().startswith("D")])
+        for source_turn_id in source_turn_ids:
+            if source_turn_id.startswith("locomo:"):
+                parts = source_turn_id.split(":", 2)
+                if len(parts) == 3 and parts[2]:
+                    raw_dia_ids.append(parts[2])
+            elif source_turn_id.startswith("D"):
+                raw_dia_ids.append(source_turn_id)
         if raw_dia_ids:
             dia_id_source = "bead.source_turn_ids"
     dia_ids = sorted(set(x for x in raw_dia_ids if x))
+    sample_from_source_turn = ""
+    for source_turn_id in source_turn_ids:
+        if source_turn_id.startswith("locomo:"):
+            parts = source_turn_id.split(":", 2)
+            if len(parts) == 3 and parts[1]:
+                sample_from_source_turn = parts[1]
+                break
     return {
         "rank": rank,
         "bead_id": bead_id,
@@ -317,10 +331,10 @@ def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[st
         "claim_status": str(row.get("claim_status") or "").strip(),
         "claim_value": row.get("claim_value"),
         "dia_ids": dia_ids,
-        "sample_id": str(metadata.get("sample_id") or "").strip(),
-        "session_index": int(metadata.get("session_index") or 0),
-        "speaker": str(metadata.get("speaker") or "").strip(),
-        "session_date_time": str(metadata.get("session_date_time") or "").strip(),
+        "sample_id": str(metadata.get("sample_id") or metadata.get("locomo_sample_id") or sample_from_source_turn or "").strip(),
+        "session_index": int(metadata.get("session_index") or metadata.get("locomo_session_index") or 0),
+        "speaker": str(metadata.get("speaker") or metadata.get("locomo_speaker") or "").strip(),
+        "session_date_time": str(metadata.get("session_date_time") or metadata.get("locomo_session_date_time") or "").strip(),
         "text": str(bead.get("detail") or "").strip(),
         "projection": {
             "bead_id_source": bead_id_source or "missing",
@@ -329,7 +343,7 @@ def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[st
             "inspect_bead_found": bool(bead),
             "row_keys": sorted(str(k) for k in row.keys()),
             "metadata_keys": sorted(str(k) for k in metadata.keys()),
-            "source_turn_ids": [str(x).strip() for x in (bead.get("source_turn_ids") or []) if str(x).strip()],
+            "source_turn_ids": source_turn_ids,
         },
     }
 
@@ -357,7 +371,6 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         "facets": _locomo_facets(sample_id=sample_id, question=str(qa.get("question") or "")),
         "constraints": {
             "sample_id": sample_id,
-            "session_id": f"locomo:{sample_id}",
         },
     }
     try:
