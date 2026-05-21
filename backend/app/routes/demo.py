@@ -156,6 +156,13 @@ def _prune_benchmark_jobs() -> None:
         BENCHMARK_JOBS.pop(job_id, None)
         if ACTIVE_BENCHMARK_JOB_ID == job_id:
             ACTIVE_BENCHMARK_JOB_ID = None
+    # Mirror the in-memory zombie recovery to the durable Postgres store so that
+    # stale `status='running'` rows don't block new benchmark runs via
+    # benchmark_store.read_active_job().
+    try:
+        benchmark_store.timeout_stale_jobs(max_runtime_seconds=BENCHMARK_MAX_RUNTIME_SECONDS + 5 * 60)
+    except Exception:
+        pass
 
 
 def _strip_benchmark_case_payloads(value: Any) -> Any:
@@ -1507,7 +1514,17 @@ async def benchmark_force_clear():
             cleared.append(job_id)
     prior_active = ACTIVE_BENCHMARK_JOB_ID
     ACTIVE_BENCHMARK_JOB_ID = None
-    return {'ok': True, 'cleared': cleared, 'prior_active_job_id': prior_active}
+    # Also finalize any zombie rows in the durable Postgres store so they don't
+    # surface as a ghost active job on the next benchmark attempt.
+    store_cleared: list[str] = []
+    try:
+        store_cleared = benchmark_store.timeout_stale_jobs(
+            max_runtime_seconds=0,
+            error_reason='force_cleared_by_admin',
+        )
+    except Exception:
+        pass
+    return {'ok': True, 'cleared': cleared, 'store_cleared': store_cleared, 'prior_active_job_id': prior_active}
 
 
 @router.post('/demo/benchmark/job/{job_id}/cancel')

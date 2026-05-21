@@ -260,7 +260,13 @@ def read_job(job_id: str) -> dict[str, Any] | None:
     return out
 
 
-def read_active_job() -> dict[str, Any] | None:
+def read_active_job(max_age_seconds: int = 35 * 60) -> dict[str, Any] | None:
+    """Return the oldest queued/running benchmark job, or None.
+
+    Jobs whose ``started_at`` (or ``created_at`` if never started) is older
+    than *max_age_seconds* are excluded — they are zombie rows that should be
+    reclaimed by ``timeout_stale_jobs`` rather than treated as active.
+    """
     if not enabled():
         return None
     ensure_schema()
@@ -271,9 +277,11 @@ def read_active_job() -> dict[str, Any] | None:
             FROM benchmarks.jobs
             WHERE status IN ('queued', 'running')
               AND COALESCE(request->>'kind', 'benchmark') != 'transcript_ingest'
+              AND COALESCE(started_at, created_at) > now() - (%s * interval '1 second')
             ORDER BY created_at ASC
             LIMIT 1
-            """
+            """,
+            (int(max_age_seconds),),
         ).fetchone()
     if not row:
         return None
@@ -282,6 +290,37 @@ def read_active_job() -> dict[str, Any] | None:
         if out.get(key) is not None:
             out[key] = out[key].isoformat()
     return out
+
+
+def timeout_stale_jobs(max_runtime_seconds: int = 35 * 60, *, error_reason: str = 'benchmark_runtime_exceeded') -> list[str]:
+    """Mark long-running or stuck Postgres benchmark jobs as failed.
+
+    Any queued/running row whose ``started_at`` (falling back to ``created_at``)
+    is older than *max_runtime_seconds* is flipped to ``status='failed'``.
+    Pass ``max_runtime_seconds=0`` to finalize **all** active jobs (used by the
+    admin force-clear endpoint).
+
+    Returns the list of job_ids that were finalized.
+    """
+    if not enabled():
+        return []
+    ensure_schema()
+    with psycopg.connect(_database_url(), autocommit=True, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            UPDATE benchmarks.jobs
+            SET status    = 'failed',
+                finished_at = now(),
+                error     = %s,
+                updated_at  = now()
+            WHERE status IN ('queued', 'running')
+              AND COALESCE(request->>'kind', 'benchmark') != 'transcript_ingest'
+              AND COALESCE(started_at, created_at) < now() - (%s * interval '1 second')
+            RETURNING job_id
+            """,
+            (str(error_reason), int(max_runtime_seconds)),
+        ).fetchall()
+    return [str(row['job_id']) for row in rows]
 
 
 def claim_next_job() -> dict[str, Any] | None:
