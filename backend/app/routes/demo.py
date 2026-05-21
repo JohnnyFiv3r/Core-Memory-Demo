@@ -60,6 +60,7 @@ CHAT_JOBS: dict[str, dict[str, Any]] = {}
 BENCHMARK_JOB_TTL_SECONDS = 30 * 60
 BENCHMARK_JOB_POLL_MS = 1200
 BENCHMARK_JOB_MAX_EVENTS = 128
+BENCHMARK_MAX_RUNTIME_SECONDS = 30 * 60
 BENCHMARK_JOBS: dict[str, dict[str, Any]] = {}
 ACTIVE_BENCHMARK_JOB_ID: str | None = None
 SEED_JOB_TTL_SECONDS = 30 * 60
@@ -96,16 +97,57 @@ def _prune_chat_jobs() -> None:
 
 
 
+def _force_finalize_benchmark_job(row: dict[str, Any], *, status: str, message: str, error: str | None = None) -> None:
+    """Mark a benchmark job done and free the active slot without waiting on its
+    worker thread.
+
+    A worker hung inside an un-timed external call (embeddings / LLM) never
+    observes ``cancel_event``, so a cooperative-only cancel leaves the job — and
+    ``ACTIVE_BENCHMARK_JOB_ID`` — stuck forever. Cancel, supersede, the runtime
+    watchdog and the zombie pruner all reclaim the slot through here. The
+    orphaned worker has ``cancel_event`` set and exits at its next checkpoint;
+    its late result is discarded because ``done`` is already True.
+    """
+    global ACTIVE_BENCHMARK_JOB_ID
+
+    cancel_event = row.get('cancel_event')
+    if isinstance(cancel_event, threading.Event):
+        cancel_event.set()
+    row['abandoned'] = True
+    row['status'] = str(status)
+    row['done'] = True
+    row['updated_ms'] = _now_ms()
+    if error:
+        row['error'] = str(error)
+    _benchmark_event(row, status, message, **({'error': error} if error else {}))
+    if ACTIVE_BENCHMARK_JOB_ID == str(row.get('job_id') or ''):
+        ACTIVE_BENCHMARK_JOB_ID = None
+
+
 def _prune_benchmark_jobs() -> None:
     global ACTIVE_BENCHMARK_JOB_ID
 
     now = _now_ms()
     ttl_ms = int(BENCHMARK_JOB_TTL_SECONDS * 1000)
+    # Backstop for the keepalive runtime watchdog: if the keepalive task itself
+    # died, updated_ms stops advancing and the age check below would only catch
+    # the job after 60 min. A not-done job whose worker has been alive (by
+    # started_ms) past the runtime limit plus a grace window is force-failed.
+    runtime_cap_ms = int((BENCHMARK_MAX_RUNTIME_SECONDS + 5 * 60) * 1000)
     stale: list[str] = []
     for job_id, row in list(BENCHMARK_JOBS.items()):
         updated = int((row or {}).get('updated_ms') or 0)
+        started = int((row or {}).get('started_ms') or 0)
         done = bool((row or {}).get('done'))
         age_ms = now - updated
+        if not done and started and (now - started) > runtime_cap_ms:
+            _force_finalize_benchmark_job(
+                row,
+                status='failed',
+                message='Benchmark exceeded max runtime; abandoned',
+                error='benchmark_runtime_exceeded',
+            )
+            continue
         if done and age_ms > ttl_ms:
             stale.append(job_id)
         elif not done and age_ms > max(ttl_ms * 2, 10 * 60_000):
@@ -634,6 +676,9 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
 
     ACTIVE_BENCHMARK_JOB_ID = job_id
     row['status'] = 'running'
+    # Reset started_ms to the actual worker start so the runtime watchdog and
+    # elapsed_ms measure execution time, not time spent waiting for the slot.
+    row['started_ms'] = _now_ms()
     _benchmark_event(row, 'starting', 'Benchmark started')
 
     # Heartbeat: run_benchmark calls this from the worker thread to update the
@@ -651,9 +696,22 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         _hb['message'] = f'Ingested {n}/{total} turns'
 
     async def _keepalive() -> None:
+        deadline_ms = int(BENCHMARK_MAX_RUNTIME_SECONDS * 1000)
         while True:
             current = BENCHMARK_JOBS.get(job_id)
             if not isinstance(current, dict) or bool(current.get('done')):
+                return
+            started = int(current.get('started_ms') or 0)
+            if started and (_now_ms() - started) > deadline_ms:
+                # Runtime watchdog: the worker thread is hung (most likely in an
+                # un-timed external call). Free the slot now — the orphaned
+                # thread keeps cancel_event set and exits at its next checkpoint.
+                _force_finalize_benchmark_job(
+                    current,
+                    status='failed',
+                    message=f'Benchmark exceeded {BENCHMARK_MAX_RUNTIME_SECONDS // 60}m runtime limit',
+                    error='benchmark_timeout',
+                )
                 return
             current['stage'] = _hb['stage']
             current['stage_message'] = _hb['message']
@@ -666,7 +724,7 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
 
     def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
         current = BENCHMARK_JOBS.get(job_id)
-        if not isinstance(current, dict):
+        if not isinstance(current, dict) or bool(current.get('done')):
             return
         current['status'] = 'running'
         current['updated_ms'] = _now_ms()
@@ -684,7 +742,9 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
     try:
         out = await asyncio.to_thread(run_benchmark, progress=progress, ingest_progress=ingest_progress, cancel_event=cancel_event, heartbeat=heartbeat, **kwargs)
         current = BENCHMARK_JOBS.get(job_id)
-        if not isinstance(current, dict):
+        if not isinstance(current, dict) or bool(current.get('done')):
+            # Force-finalized by the watchdog, cancel, or supersede while the
+            # worker ran — discard the late result, the slot is already freed.
             return
         current['status'] = 'completed' if bool((out or {}).get('ok')) else 'failed'
         current['done'] = True
@@ -699,14 +759,14 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             _benchmark_event(current, 'failed', 'Benchmark failed', error=current['error'])
     except BenchmarkCancelledError:
         current = BENCHMARK_JOBS.get(job_id)
-        if isinstance(current, dict):
+        if isinstance(current, dict) and not bool(current.get('done')):
             current['status'] = 'cancelled'
             current['done'] = True
             current['updated_ms'] = _now_ms()
             _benchmark_event(current, 'cancelled', 'Benchmark cancelled')
     except Exception as exc:
         current = BENCHMARK_JOBS.get(job_id)
-        if not isinstance(current, dict):
+        if not isinstance(current, dict) or bool(current.get('done')):
             return
         current['status'] = 'failed'
         current['done'] = True
@@ -1417,9 +1477,10 @@ async def benchmark_run(request: Request):
     BENCHMARK_JOBS[job_id] = row
     if isinstance(prior_row, dict) and not bool(prior_row.get('done')):
         prior_row['superseded_by'] = job_id
-        prior_cancel = prior_row.get('cancel_event')
-        if isinstance(prior_cancel, threading.Event):
-            prior_cancel.set()
+        # Force-finalize the prior job so the new run never queues behind a hung
+        # worker. _run_benchmark_job's slot-wait loop exits as soon as
+        # ACTIVE_BENCHMARK_JOB_ID is cleared.
+        _force_finalize_benchmark_job(prior_row, status='cancelled', message='Benchmark superseded by a newer run')
     if run_mode in {'queue', 'queued', 'cron'}:
         try:
             queued = benchmark_store.enqueue_job(job_id=job_id, request=dict(body or {}), kwargs=kwargs)
@@ -1499,6 +1560,23 @@ def benchmark_job_status(job_id: str, cursor: int = 0):
     return _benchmark_job_payload(row, cursor=max(0, int(cursor)))
 
 
+@router.post('/demo/benchmark/force-clear')
+async def benchmark_force_clear():
+    """Admin escape hatch: force-finalize every in-flight benchmark job and free
+    the active slot. For recovering from a worker hung inside an un-timed
+    external call when the per-job Cancel could not reach a checkpoint."""
+    global ACTIVE_BENCHMARK_JOB_ID
+
+    cleared: list[str] = []
+    for job_id, row in list(BENCHMARK_JOBS.items()):
+        if isinstance(row, dict) and not bool(row.get('done')):
+            _force_finalize_benchmark_job(row, status='cancelled', message='Benchmark force-cleared by admin')
+            cleared.append(job_id)
+    prior_active = ACTIVE_BENCHMARK_JOB_ID
+    ACTIVE_BENCHMARK_JOB_ID = None
+    return {'ok': True, 'cleared': cleared, 'prior_active_job_id': prior_active}
+
+
 @router.post('/demo/benchmark/job/{job_id}/cancel')
 async def benchmark_job_cancel(job_id: str):
     job_id_s = str(job_id or '').strip()
@@ -1507,13 +1585,11 @@ async def benchmark_job_cancel(job_id: str):
         return JSONResponse({'ok': False, 'error': 'benchmark_job_not_found'}, status_code=404)
     if bool(row.get('done')):
         return {'ok': True, 'job_id': job_id_s, 'status': str(row.get('status') or ''), 'already_done': True}
-    cancel_event = row.get('cancel_event')
-    if isinstance(cancel_event, threading.Event):
-        cancel_event.set()
-    row['abandoned'] = True
-    row['updated_ms'] = _now_ms()
-    _benchmark_event(row, 'cancelling', 'Cancel requested')
-    return {'ok': True, 'job_id': job_id_s, 'status': 'cancelling'}
+    # Authoritative cancel: finalize the job and free the slot immediately
+    # rather than waiting for the worker to observe cancel_event. A worker hung
+    # inside an un-timed external call never reaches a checkpoint.
+    _force_finalize_benchmark_job(row, status='cancelled', message='Benchmark cancelled')
+    return {'ok': True, 'job_id': job_id_s, 'status': 'cancelled'}
 
 
 @router.get('/demo/benchmark/last')
