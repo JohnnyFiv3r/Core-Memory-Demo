@@ -3645,6 +3645,7 @@ function renderBenchmark(summary, report, benchmarkMeta) {
       report: safeReport,
       benchmarkMeta: safeMeta,
       formatIsoShort,
+      liveJobId: activeBenchmarkPollJobId || null,
       onOpenPayload: (title, payload) => {
         openJsonModal(String(title || 'Benchmark detail'), payload || {});
       },
@@ -3795,17 +3796,19 @@ async function refreshMemory() {
     safeRenderSection('rolling', () => renderRolling(mem.rolling_window || data.rolling_window || []));
 
     const inspectBenchmarkSummary = (data.benchmark || {}).last_summary || null;
-    const liveBenchmarkPinned = benchmarkSummaryHasLiveJob(lastBenchmarkSummary, lastBenchmarkReport);
-    if (!liveBenchmarkPinned && inspectBenchmarkSummary) {
-      const incomingRunId = String(inspectBenchmarkSummary.run_id || '');
-      // Only overwrite if: no prior completed run (initial load), or the backend has
-      // caught up and is returning the run we just completed.
-      if (!completedBenchmarkRunId || incomingRunId === completedBenchmarkRunId) {
-        lastBenchmarkSummary = inspectBenchmarkSummary;
+    if (!activeBenchmarkPollJobId) {
+      const liveBenchmarkPinned = benchmarkSummaryHasLiveJob(lastBenchmarkSummary, lastBenchmarkReport);
+      if (!liveBenchmarkPinned && inspectBenchmarkSummary) {
+        const incomingRunId = String(inspectBenchmarkSummary.run_id || '');
+        // Only overwrite if: no prior completed run (initial load), or the backend has
+        // caught up and is returning the run we just completed.
+        if (!completedBenchmarkRunId || incomingRunId === completedBenchmarkRunId) {
+          lastBenchmarkSummary = inspectBenchmarkSummary;
+        }
       }
     }
     lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
-    if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
+    if (!activeBenchmarkPollJobId && (data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
       try {
         const rb = await fetch('/api/demo/benchmark/last');
         const jb = await parseApiJsonResponse(rb, 'benchmark-last');
@@ -3925,8 +3928,10 @@ async function refreshSeedStatus() {
         message: String(seed.message || ''),
       };
       const bench = control.benchmark || {};
-      if (bench.summary) lastBenchmarkSummary = bench.summary || lastBenchmarkSummary;
-      if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
+      if (!activeBenchmarkPollJobId) {
+        if (bench.summary) lastBenchmarkSummary = bench.summary || lastBenchmarkSummary;
+        if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
+      }
       if (bench.history) lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
       updateBenchmarkButtonGate();
       syncBenchmarkButton(lastBenchmarkSummary || {});
@@ -4445,20 +4450,6 @@ async function runBenchmark() {
           updateBenchmarkProgressMessage({}, null);
           addMsg('system', 'Benchmark attempt was abandoned in favor of a newer run.');
         }
-      }
-      try {
-        const rb = await fetch('/api/demo/benchmark/last');
-        const jb = await parseApiJsonResponse(rb, 'benchmark-last');
-        if (jb && jb.summary) {
-          lastBenchmarkSummary = jb.summary || lastBenchmarkSummary;
-          lastBenchmarkReport = jb.report || lastBenchmarkReport;
-          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
-          updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
-          renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
-          syncBenchmarkButton(lastBenchmarkSummary || {});
-        }
-      } catch (_) {
-        // best effort only
       }
       done = !!job.done;
       if (!done) {

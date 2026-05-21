@@ -34,6 +34,10 @@ function BenchmarkPane(props) {
   const formatIsoShort = typeof props.formatIsoShort === 'function' ? props.formatIsoShort : fmtIso
   const openPayload = typeof props.onOpenPayload === 'function' ? props.onOpenPayload : () => {}
   const onCancel = typeof props.onCancel === 'function' ? props.onCancel : null
+  // liveJobId is the authoritative signal that a poll loop owns the benchmark state.
+  // When set, treat the run as active regardless of what summary says — prevents stale
+  // finished_at / status from the previous run making isActiveRun flip to false.
+  const liveJobId = String(props.liveJobId || '').trim()
 
   const suite = String((summary || {}).suite || '')
   const isLocomo = suite && suite !== 'fixture_smoke'
@@ -42,12 +46,13 @@ function BenchmarkPane(props) {
   const phase = String((summary || {}).phase || (report || {}).phase || (hasFinishedAt ? 'done' : '')).trim().toLowerCase()
   const heartbeatStage = String((summary || {}).heartbeat_stage || (summary || {}).stage || '').trim()
   const runId = String((summary || {}).run_id || (report || {}).run_id || '').trim()
-  const activeJobId = String((summary || {}).job_id || (report || {}).active_job_id || '').trim()
+  const activeJobId = liveJobId || String((summary || {}).job_id || (report || {}).active_job_id || '').trim()
   const turnsIngested = Number((summary || {}).turns_ingested || (((report || {}).ingestion || {}).ingested_turns || 0) || 0)
   const qaCases = Number((summary || {}).qa_cases || 0)
   const qaCompleted = Number((summary || {}).qa_completed || (status === 'completed' ? qaCases : 0))
   const activeSampleId = String((summary || {}).sample_id || '').trim()
-  const isActiveRun = !!((runId || activeJobId) && !hasFinishedAt && status !== 'completed' && status !== 'failed' && status !== 'cancelled')
+  // liveJobId overrides any stale finished_at / status that may have leaked from the previous run.
+  const isActiveRun = !!liveJobId || !!((runId || activeJobId) && !hasFinishedAt && status !== 'completed' && status !== 'failed' && status !== 'cancelled')
   const runLabel = isActiveRun
     ? (activeJobId ? ('job_id=' + activeJobId) : (runId ? ('run_id=' + runId) : ''))
     : (runId ? ('run_id=' + runId) : '')
@@ -310,59 +315,110 @@ function BenchmarkPane(props) {
     }
   }
 
+  // When a run is actively in flight, render ONLY the progress banner + history.
+  // Never show cards or run-config during an active run — they would show either
+  // zeros (optimistic reset) or stale values from the previous completed run.
+  if (isActiveRun) {
+    const progressBanner = React.createElement(
+      'div',
+      { className: 'runtime-card' },
+      React.createElement(
+        'div',
+        { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('strong', null, 'Benchmark in progress'),
+        onCancel && activeJobId
+          ? React.createElement(
+              'button',
+              {
+                onClick: () => onCancel(activeJobId),
+                style: {
+                  background: 'rgba(248,113,113,0.15)',
+                  border: '1px solid rgba(248,113,113,0.4)',
+                  borderRadius: '4px',
+                  color: '#f87171',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                  padding: '2px 8px',
+                },
+              },
+              'Cancel'
+            )
+          : null
+      ),
+      React.createElement(
+        'div',
+        { style: { marginTop: '4px', color: 'var(--text-dim)' } },
+        (heartbeatStage ? ('stage=' + heartbeatStage) : ('phase=' + String(phase || 'working'))) +
+          (runLabel ? (' · ' + runLabel) : '') +
+          (turnsIngested > 0 ? (' · turns=' + String(turnsIngested)) : '') +
+          (qaCases > 0 ? (' · qa=' + String(qaCompleted) + '/' + String(qaCases)) : '') +
+          (activeSampleId ? (' · sample=' + activeSampleId) : '')
+      ),
+      React.createElement(
+        'div',
+        { style: { marginTop: '8px', height: '8px', borderRadius: '999px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' } },
+        React.createElement('div', {
+          style: {
+            width: String(Math.max(6, Math.min(100, progressPct))) + '%',
+            height: '100%',
+            background: 'linear-gradient(90deg, #60a5fa, #34d399)',
+            transition: 'width 0.8s ease',
+          },
+        })
+      )
+    )
+    return React.createElement(
+      React.Fragment,
+      null,
+      progressBanner,
+      history.length
+        ? React.createElement(
+            React.Fragment,
+            null,
+            React.createElement(
+              'div',
+              { className: 'runtime-card' },
+              React.createElement('strong', null, 'Recent runs'),
+              React.createElement(
+                'div',
+                { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+                'Click a row for full payload.'
+              )
+            ),
+            ...history.slice(0, 12).map((rowData, idx) => {
+              const s = rowData.summary || {}
+              const hs = String(s.suite || '')
+              const hIsLocomo = hs && hs !== 'fixture_smoke'
+              return React.createElement(
+                'div',
+                {
+                  className: 'bench-bucket',
+                  key: String(s.run_id || rowData.run_id || idx),
+                  onClick: () => openPayload('Benchmark run', rowData),
+                },
+                React.createElement('div', null, React.createElement('strong', null, String(s.run_id || rowData.run_id || ('run-' + idx)))),
+                React.createElement(
+                  'div',
+                  { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+                  hIsLocomo
+                    ? ('f1=' + Number(s.answer_f1_mean || 0).toFixed(4) + ' · recall@5=' + Number(s.evidence_recall_at_5 || 0).toFixed(4))
+                    : ('acc=' + Number(s.accuracy || 0).toFixed(4) + ' · pass/fail=' + String((s.pass || 0) + '/' + (s.fail || 0)))
+                ),
+                React.createElement(
+                  'div',
+                  { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+                  'at=' + formatIsoShort(String(s.finished_at || rowData.created_at || ''))
+                )
+              )
+            })
+          )
+        : null
+    )
+  }
+
   return React.createElement(
     React.Fragment,
     null,
-    isActiveRun
-      ? React.createElement(
-          'div',
-          { className: 'runtime-card' },
-          React.createElement(
-            'div',
-            { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
-            React.createElement('strong', null, 'Benchmark in progress'),
-            onCancel && activeJobId
-              ? React.createElement(
-                  'button',
-                  {
-                    onClick: () => onCancel(activeJobId),
-                    style: {
-                      background: 'rgba(248,113,113,0.15)',
-                      border: '1px solid rgba(248,113,113,0.4)',
-                      borderRadius: '4px',
-                      color: '#f87171',
-                      cursor: 'pointer',
-                      fontSize: '11px',
-                      padding: '2px 8px',
-                    },
-                  },
-                  'Cancel'
-                )
-              : null
-          ),
-          React.createElement(
-            'div',
-            { style: { marginTop: '4px', color: 'var(--text-dim)' } },
-            (heartbeatStage ? ('stage=' + heartbeatStage) : ('phase=' + String(phase || 'working'))) +
-              (runLabel ? (' · ' + runLabel) : '') +
-              (turnsIngested > 0 ? (' · turns=' + String(turnsIngested)) : '') +
-              (qaCases > 0 ? (' · qa=' + String(qaCompleted) + '/' + String(qaCases)) : '') +
-              (activeSampleId ? (' · sample=' + activeSampleId) : '')
-          ),
-          React.createElement(
-            'div',
-            { style: { marginTop: '8px', height: '8px', borderRadius: '999px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' } },
-            React.createElement('div', {
-              style: {
-                width: String(Math.max(6, Math.min(100, progressPct))) + '%',
-                height: '100%',
-                background: 'linear-gradient(90deg, #60a5fa, #34d399)',
-                transition: 'width 0.8s ease',
-              },
-            })
-          )
-        )
-      : null,
     React.createElement(
       'div',
       { className: 'bench-grid' },
@@ -382,9 +438,7 @@ function BenchmarkPane(props) {
       React.createElement(
         'div',
         { style: { marginTop: '2px', color: 'var(--text-dim)' } },
-        (isActiveRun
-          ? ('job_id: ' + String(activeJobId || 'n/a'))
-          : ('run_id: ' + String(summary.run_id || 'n/a'))) +
+        'run_id: ' + String(summary.run_id || 'n/a') +
           ' · at: ' +
           formatIsoShort(String(summary.finished_at || summary.started_at || ''))
       ),
@@ -392,8 +446,7 @@ function BenchmarkPane(props) {
         'div',
         { style: { marginTop: '4px', color: 'var(--text-dim)' } },
         isLocomo
-          ? ((isActiveRun && runId ? ('pending run_id: ' + String(runId) + ' · ') : '') +
-            'root mode: ' + String(summary.root_mode || 'n/a') +
+          ? ('root mode: ' + String(summary.root_mode || 'n/a') +
             ' · answer mode: ' + String(summary.answer_mode || 'n/a') +
             ' · model: ' + String(summary.generator_model || 'auto') +
             ' · retrieval k: ' + String(summary.retrieval_k || 'n/a'))
