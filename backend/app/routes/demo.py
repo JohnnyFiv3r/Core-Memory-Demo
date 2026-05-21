@@ -275,23 +275,86 @@ def _stored_benchmark_job_payload(stored: dict[str, Any], *, cursor: int = 0) ->
     status = str((stored or {}).get('status') or '')
     done = status in {'completed', 'failed'}
     result = stored.get('result') if isinstance(stored.get('result'), dict) else None
+    progress = dict(stored.get('progress') or {}) if isinstance(stored.get('progress'), dict) else {}
+    all_events = list(stored.get('events') or []) if isinstance(stored.get('events'), list) else []
+    events = [e for e in all_events if int((e or {}).get('seq') or 0) > int(cursor)]
+    next_cursor = int(cursor)
+    if events:
+        next_cursor = int((events[-1] or {}).get('seq') or cursor)
+    stage = str(progress.get('stage') or status or '')
     out: dict[str, Any] = {
         'ok': True,
         'job_id': str((stored or {}).get('job_id') or ''),
         'status': status,
-        'stage': status,
+        'stage': stage,
+        'stage_message': str(progress.get('stage_message') or ''),
+        'ingest_n': int(progress.get('ingest_n') or 0),
+        'ingest_total': int(progress.get('ingest_total') or 0),
         'done': done,
         'error': (stored or {}).get('error'),
         'result': result,
-        'events': [],
+        'events': events,
         'cursor': int(cursor),
-        'cursor_next': int(cursor),
+        'cursor_next': next_cursor,
+        'poll_after_ms': BENCHMARK_JOB_POLL_MS,
     }
+    if progress.get('updated_ms'):
+        out['updated_ms'] = int(progress.get('updated_ms') or 0)
+    started_at_raw = str((stored or {}).get('started_at') or '').strip()
+    if started_at_raw and not out.get('elapsed_ms'):
+        try:
+            started_dt = datetime.fromisoformat(started_at_raw.replace('Z', '+00:00'))
+            out['elapsed_ms'] = max(0, int((datetime.now(timezone.utc) - started_dt).total_seconds() * 1000))
+        except Exception:
+            pass
     for key in ('created_at', 'updated_at', 'started_at', 'finished_at'):
         value = (stored or {}).get(key)
         if value:
             out[key] = value
     return out
+
+
+def _stored_active_benchmark_state(stored: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    job = _stored_benchmark_job_payload(stored, cursor=0)
+    kwargs = dict((stored or {}).get('kwargs') or {}) if isinstance((stored or {}).get('kwargs'), dict) else {}
+    request = dict((stored or {}).get('request') or {}) if isinstance((stored or {}).get('request'), dict) else {}
+    latest = dict((list((stored or {}).get('events') or []) or [{}])[-1] or {})
+    stage = str(job.get('stage') or job.get('status') or 'working')
+    job_id = str(job.get('job_id') or '')
+    summary = {
+        'run_id': '',
+        'job_id': job_id,
+        'status': str(job.get('status') or 'running'),
+        'phase': stage,
+        'stage': stage,
+        'stage_message': str(job.get('stage_message') or ''),
+        'ingest_n': int(job.get('ingest_n') or 0),
+        'ingest_total': int(job.get('ingest_total') or 0),
+        'elapsed_ms': int(job.get('elapsed_ms') or 0),
+        'started_at': str(job.get('started_at') or ''),
+        'updated_at': str(job.get('updated_at') or ''),
+        'suite': str(kwargs.get('suite') or request.get('suite') or ''),
+        'semantic_mode': str(kwargs.get('semantic_mode_name') or request.get('semantic_mode') or ''),
+        'root_mode': str(kwargs.get('root_mode') or request.get('root_mode') or ''),
+        'answer_mode': str(kwargs.get('answer_mode') or request.get('answer_mode') or ''),
+        'qa_completed': int(latest.get('qa_completed') or 0),
+        'qa_cases': int(latest.get('qa_total') or 0),
+        'sample_id': str(latest.get('sample_id') or ''),
+        'qa_id': str(latest.get('qa_id') or ''),
+        'case_status': str(latest.get('case_status') or ''),
+        'warnings': [],
+        'active': True,
+    }
+    report = {
+        'live': True,
+        'run_id': '',
+        'status': str(job.get('status') or 'running'),
+        'phase': stage,
+        'active_job_id': job_id,
+        'active': True,
+        'config': request,
+    }
+    return summary, report, job
 
 
 def _benchmark_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> None:
@@ -951,6 +1014,7 @@ def demo_control_state():
     _prune_benchmark_jobs()
     active_job = BENCHMARK_JOBS.get(str(ACTIVE_BENCHMARK_JOB_ID or '').strip()) if ACTIVE_BENCHMARK_JOB_ID else None
     benchmark_job = _benchmark_job_payload(active_job, cursor=0) if isinstance(active_job, dict) else None
+    stored_active = None if isinstance(active_job, dict) and not bool(active_job.get('done')) else benchmark_store.read_active_job()
     snapshot = get_last_benchmark_snapshot(history_limit=3)
     benchmark_summary = dict(snapshot.get('summary') or {})
     benchmark_report = _strip_benchmark_case_payloads(dict(snapshot.get('report') or {}))
@@ -958,12 +1022,15 @@ def demo_control_state():
     if isinstance(active_job, dict):
         benchmark_summary, benchmark_report = _active_benchmark_state(active_job, snapshot)
         benchmark_history = benchmark_history[:2]
+    elif isinstance(stored_active, dict):
+        benchmark_summary, benchmark_report, benchmark_job = _stored_active_benchmark_state(stored_active)
+        benchmark_history = benchmark_history[:2]
     return {
         'ok': True,
         'seed': dict(SEED_STATUS),
         'benchmark': {
-            'active_job_id': str(ACTIVE_BENCHMARK_JOB_ID or ''),
-            'active': bool(isinstance(active_job, dict) and not bool(active_job.get('done'))),
+            'active_job_id': str((benchmark_job or {}).get('job_id') or ACTIVE_BENCHMARK_JOB_ID or ''),
+            'active': bool((isinstance(active_job, dict) and not bool(active_job.get('done'))) or isinstance(stored_active, dict)),
             'job': benchmark_job,
             'summary': benchmark_summary,
             'report': benchmark_report,
@@ -1456,6 +1523,7 @@ def benchmark_last():
     history = list(snapshot.get('history') or [])
     latest_compare = None
     active_job = next((row for row in BENCHMARK_JOBS.values() if isinstance(row, dict) and not bool(row.get('done'))), None)
+    stored_active = None if isinstance(active_job, dict) else benchmark_store.read_active_job()
 
     summary = dict(snapshot.get('summary') or {})
     report = dict(snapshot.get('report') or {})
@@ -1463,6 +1531,9 @@ def benchmark_last():
 
     if isinstance(active_job, dict):
         summary, report = _active_benchmark_state(active_job, snapshot)
+        ok = True
+    elif isinstance(stored_active, dict):
+        summary, report, _job = _stored_active_benchmark_state(stored_active)
         ok = True
 
     if len(history) >= 2:
@@ -1474,7 +1545,7 @@ def benchmark_last():
                 latest_compare = cmp.get('compare') if cmp.get('ok') else None
             except Exception:
                 latest_compare = None
-    if isinstance(active_job, dict):
+    if isinstance(active_job, dict) or isinstance(stored_active, dict):
         history = history[:2]
     history = _slim_benchmark_history(history)
     report = _strip_benchmark_case_payloads(report) if isinstance(report, dict) else report
