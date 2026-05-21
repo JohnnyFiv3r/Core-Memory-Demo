@@ -3608,7 +3608,7 @@ function ensureBenchmarkPaneRenderer() {
   return ensureSliceBinding(
     benchmarkPaneRenderer,
     'benchmarkPaneRenderer',
-    '/chat-slices/benchmark-pane.js?v=20260521-rich-progress-1',
+    '/chat-slices/benchmark-pane.js?v=20260521-rich-progress-2',
     (mod) => (mod && typeof mod.renderBenchmarkPane === 'function' ? mod.renderBenchmarkPane : null),
     (value) => { benchmarkPaneRenderer = value; }
   );
@@ -3687,15 +3687,37 @@ async function refreshMemory() {
         const controlRes = await fetch('/api/demo/control-state');
         const control = await parseApiJsonResponse(controlRes, 'control-state');
         const bench = control.benchmark || {};
-        // While the poll loop owns the benchmark state, don't let control-state overwrite
-        // it — the backend returns the previous run's summary as the "live" summary.
+        const benchJob = bench.job || {};
+        lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
         if (!activeBenchmarkPollJobId) {
-          if (bench.summary) lastBenchmarkSummary = bench.summary || lastBenchmarkSummary;
+          // No dedicated poll loop — use control-state as the complete source of truth.
+          if (bench.summary) {
+            lastBenchmarkSummary = {
+              ...(bench.summary || {}),
+              heartbeat_stage: String(benchJob.stage || ''),
+              stage: String(benchJob.stage || ''),
+              stage_message: String(benchJob.stage_message || ''),
+              ingest_n: Number(benchJob.ingest_n || 0),
+              ingest_total: Number(benchJob.ingest_total || 0),
+              elapsed_ms: Number(benchJob.elapsed_ms || 0),
+            };
+          }
           if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
-          if (bench.history) lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
-          updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
-          renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
+        } else if (benchJob.stage && !benchJob.done) {
+          // Poll loop owns the summary — only spread the job's live stage fields so the
+          // pane repaints every refreshMemory tick even between poll responses.
+          lastBenchmarkSummary = {
+            ...(lastBenchmarkSummary || {}),
+            heartbeat_stage: String(benchJob.stage || ''),
+            stage: String(benchJob.stage || ''),
+            stage_message: String(benchJob.stage_message || ''),
+            ingest_n: Number(benchJob.ingest_n || 0),
+            ingest_total: Number(benchJob.ingest_total || 0),
+            elapsed_ms: Number(benchJob.elapsed_ms || 0),
+          };
         }
+        updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
+        renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
       } catch (_) {
         // best effort only
       }
