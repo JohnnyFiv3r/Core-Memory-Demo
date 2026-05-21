@@ -35,10 +35,12 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
             captured.update(kwargs)
             return {'ok': True, 'processed': 1}
 
-        with patch.object(runtime_mod, 'process_turn_finalized', side_effect=fake_finalize):
-            out = runtime_mod._replay_locomo_row(self._row(), root='/tmp/fake')
+        with tempfile.TemporaryDirectory() as td, patch.object(runtime_mod, 'process_turn_finalized', side_effect=fake_finalize):
+            out = runtime_mod._replay_locomo_row(self._row(), root=td)
+            corpus = runtime_mod.build_visible_corpus(Path(td))
 
         self.assertTrue(out['ok'])
+        self.assertTrue(out.get('evidence_bead_id'))
         self.assertEqual('locomo:conv-1:session:2', out['session_id'])
         self.assertEqual('locomo:conv-1:session:2', captured['session_id'])
         self.assertEqual('locomo:conv-1:D2:7', captured['turn_id'])
@@ -50,6 +52,11 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
         self.assertEqual('I went to the support group on 7 May 2023.', turns[0].content)
         self.assertNotEqual('[LoCoMo transcript replay]', turns[0].content)
         self.assertEqual(['locomo:conv-1:D2:7', 'D2:7'], captured['metadata']['crawler_updates']['beads_create'][0]['source_turn_ids'])
+        evidence_rows = [r for r in corpus if 'locomo_turn_evidence' in list(((r.get('bead') or {}).get('tags') or []))]
+        self.assertEqual(1, len(evidence_rows))
+        self.assertEqual('promoted', (evidence_rows[0].get('bead') or {}).get('status'))
+        self.assertEqual(['locomo:conv-1:D2:7', 'D2:7'], evidence_rows[0].get('source_turn_ids'))
+        self.assertEqual('D2:7', ((evidence_rows[0].get('bead') or {}).get('metadata') or {}).get('locomo_dia_id'))
 
     def test_replay_turn_reports_process_turn_failure(self):
         if runtime_mod is None:
@@ -102,12 +109,23 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
             self.skipTest('runtime unavailable')
         rows = [
             {'bead_id': f'b{i}', 'source_turn_ids': [f'locomo:conv-1:D1:{i}']}
-            for i in range(1, 12)
+            for i in range(1, 86)
         ]
         with patch.object(runtime_mod, 'build_visible_corpus', return_value=rows):
-            out = runtime_mod._validate_locomo_benchmark_corpus(root='/tmp/fake', turns_ingested=100, semantic_build={'entries': 11})
+            out = runtime_mod._validate_locomo_benchmark_corpus(root='/tmp/fake', turns_ingested=100, semantic_build={'entries': 85})
         self.assertTrue(out['ok'])
-        self.assertEqual(11, out['distinct_dia_ids_visible'])
+        self.assertEqual(85, out['distinct_dia_ids_visible'])
+
+    def test_corpus_validation_rejects_session_head_only_corpus(self):
+        if runtime_mod is None:
+            self.skipTest('runtime unavailable')
+        rows = [
+            {'bead_id': f'b{i}', 'source_turn_ids': [f'locomo:conv-41:D{i}:1']}
+            for i in range(1, 33)
+        ]
+        with patch.object(runtime_mod, 'build_visible_corpus', return_value=rows):
+            with self.assertRaisesRegex(RuntimeError, 'invalid_benchmark_corpus'):
+                runtime_mod._validate_locomo_benchmark_corpus(root='/tmp/fake', turns_ingested=663, semantic_build={'entries': 32})
 
 
 if __name__ == '__main__':
