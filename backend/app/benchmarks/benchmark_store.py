@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import time
 from functools import lru_cache
 from pathlib import Path
 from typing import Any
@@ -27,6 +28,12 @@ _ALLOWED_ARTIFACTS = {
     'cases.jsonl': 'application/x-ndjson',
     'failures.jsonl': 'application/x-ndjson',
 }
+
+_MAX_JOB_EVENTS = 200
+
+
+def _now_ms() -> int:
+    return int(time.time() * 1000)
 
 
 def _database_url() -> str:
@@ -223,18 +230,96 @@ def enqueue_job(*, job_id: str, request: dict[str, Any], kwargs: dict[str, Any])
     with psycopg.connect(_database_url(), autocommit=True) as conn:
         conn.execute(
             """
-            INSERT INTO benchmarks.jobs (job_id, status, request, kwargs, updated_at)
-            VALUES (%s, 'queued', %s, %s, now())
+            INSERT INTO benchmarks.jobs (job_id, status, request, kwargs, progress, events, updated_at)
+            VALUES (%s, 'queued', %s, %s, %s, '[]'::jsonb, now())
             ON CONFLICT (job_id) DO UPDATE SET
                 request = EXCLUDED.request,
                 kwargs = EXCLUDED.kwargs,
                 status = 'queued',
+                progress = EXCLUDED.progress,
+                events = '[]'::jsonb,
                 error = NULL,
                 result = NULL,
                 updated_at = now()
             """,
-            (str(job_id), Jsonb(dict(request or {})), Jsonb(dict(kwargs or {}))),
+            (
+                str(job_id),
+                Jsonb(dict(request or {})),
+                Jsonb(dict(kwargs or {})),
+                Jsonb({'stage': 'queued', 'stage_message': 'Benchmark queued', 'updated_ms': _now_ms()}),
+            ),
         )
+    return True
+
+
+def update_job_progress(
+    job_id: str,
+    *,
+    status: str | None = None,
+    stage: str | None = None,
+    message: str | None = None,
+    ingest_n: int | None = None,
+    ingest_total: int | None = None,
+    event: dict[str, Any] | None = None,
+) -> bool:
+    """Persist live worker progress for the web process to poll.
+
+    Hosted benchmark runs are executed by a separate worker process, so the
+    in-memory route-level heartbeat never reaches `/demo/benchmark/job/{id}`.
+    Store a compact progress object plus a bounded event stream in Postgres so
+    the UI can show real stages instead of collapsing everything to `running`.
+    """
+
+    if not enabled():
+        return False
+    ensure_schema()
+    job_id_s = str(job_id or '').strip()
+    if not job_id_s:
+        return False
+    progress: dict[str, Any] = {'updated_ms': _now_ms()}
+    if stage is not None:
+        progress['stage'] = str(stage or '')
+    if message is not None:
+        progress['stage_message'] = str(message or '')
+    if ingest_n is not None:
+        progress['ingest_n'] = int(ingest_n)
+    if ingest_total is not None:
+        progress['ingest_total'] = int(ingest_total)
+    evt = dict(event or {}) if isinstance(event, dict) else None
+    with psycopg.connect(_database_url(), autocommit=True, row_factory=dict_row) as conn:
+        row = conn.execute(
+            "SELECT progress, events FROM benchmarks.jobs WHERE job_id = %s",
+            (job_id_s,),
+        ).fetchone()
+        if not row:
+            return False
+        merged_progress = dict(row.get('progress') or {})
+        merged_progress.update(progress)
+        events = list(row.get('events') or [])
+        if evt:
+            seq = int((events[-1] or {}).get('seq') or 0) + 1 if events else 1
+            evt.setdefault('seq', seq)
+            evt.setdefault('ts_ms', _now_ms())
+            events.append(evt)
+            events = events[-_MAX_JOB_EVENTS:]
+        if status is None:
+            conn.execute(
+                """
+                UPDATE benchmarks.jobs
+                SET progress = %s, events = %s, updated_at = now()
+                WHERE job_id = %s
+                """,
+                (Jsonb(merged_progress), Jsonb(events), job_id_s),
+            )
+        else:
+            conn.execute(
+                """
+                UPDATE benchmarks.jobs
+                SET status = %s, progress = %s, events = %s, updated_at = now()
+                WHERE job_id = %s
+                """,
+                (str(status or ''), Jsonb(merged_progress), Jsonb(events), job_id_s),
+            )
     return True
 
 
@@ -245,7 +330,7 @@ def read_job(job_id: str) -> dict[str, Any] | None:
     with psycopg.connect(_database_url(), row_factory=dict_row) as conn:
         row = conn.execute(
             """
-            SELECT job_id, status, request, kwargs, result, error, attempts, created_at, updated_at, started_at, finished_at
+            SELECT job_id, status, request, kwargs, progress, events, result, error, attempts, created_at, updated_at, started_at, finished_at
             FROM benchmarks.jobs
             WHERE job_id = %s
             """,
@@ -267,7 +352,7 @@ def read_active_job() -> dict[str, Any] | None:
     with psycopg.connect(_database_url(), row_factory=dict_row) as conn:
         row = conn.execute(
             """
-            SELECT job_id, status, request, kwargs, result, error, attempts, created_at, updated_at, started_at, finished_at
+            SELECT job_id, status, request, kwargs, progress, events, result, error, attempts, created_at, updated_at, started_at, finished_at
             FROM benchmarks.jobs
             WHERE status IN ('queued', 'running')
               AND COALESCE(request->>'kind', 'benchmark') != 'transcript_ingest'
@@ -300,7 +385,12 @@ def claim_next_job() -> dict[str, Any] | None:
                 FOR UPDATE SKIP LOCKED
             )
             UPDATE benchmarks.jobs j
-            SET status = 'running', attempts = attempts + 1, claimed_at = now(), started_at = COALESCE(started_at, now()), updated_at = now()
+            SET status = 'running',
+                attempts = attempts + 1,
+                claimed_at = now(),
+                started_at = COALESCE(started_at, now()),
+                progress = COALESCE(j.progress, '{}'::jsonb) || '{"stage":"starting","stage_message":"Benchmark worker claimed job"}'::jsonb,
+                updated_at = now()
             FROM picked
             WHERE j.job_id = picked.job_id
             RETURNING j.job_id, j.request, j.kwargs, j.attempts
@@ -314,14 +404,27 @@ def finish_job(job_id: str, *, result: dict[str, Any] | None = None, error: str 
         return False
     ensure_schema()
     status = 'failed' if error else 'completed'
+    stage = 'failed' if error else 'completed'
+    message = str(error or 'Benchmark completed')
     with psycopg.connect(_database_url(), autocommit=True) as conn:
         conn.execute(
             """
             UPDATE benchmarks.jobs
-            SET status = %s, result = %s, error = %s, finished_at = now(), updated_at = now()
+            SET status = %s,
+                result = %s,
+                error = %s,
+                progress = COALESCE(progress, '{}'::jsonb) || %s::jsonb,
+                finished_at = now(),
+                updated_at = now()
             WHERE job_id = %s
             """,
-            (status, Jsonb(dict(result or {})) if result is not None else None, error, str(job_id)),
+            (
+                status,
+                Jsonb(dict(result or {})) if result is not None else None,
+                error,
+                Jsonb({'stage': stage, 'stage_message': message, 'updated_ms': _now_ms()}),
+                str(job_id),
+            ),
         )
     return True
 

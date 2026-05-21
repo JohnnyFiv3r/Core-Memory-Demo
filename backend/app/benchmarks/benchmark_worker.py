@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import sys
+import time
 from typing import Any
 
 from app.core.semantic_env import configure_shared_semantic_backend_env
@@ -28,7 +29,59 @@ def run_once() -> int:
         if kind == 'transcript_ingest':
             out = run_transcript_ingest_job(**kwargs)
         else:
-            out = run_benchmark(**kwargs)
+            last_heartbeat_write = 0.0
+            last_ingest_write = 0.0
+
+            def heartbeat(stage: str, message: str) -> None:
+                nonlocal last_heartbeat_write
+                now = time.monotonic()
+                stage_s = str(stage or '')
+                message_s = str(message or '')
+                if now - last_heartbeat_write < 1.5:
+                    return
+                last_heartbeat_write = now
+                benchmark_store.update_job_progress(
+                    job_id,
+                    status='running',
+                    stage=stage_s,
+                    message=message_s,
+                    event={'stage': stage_s, 'message': message_s},
+                )
+
+            def ingest_progress(n: int, total: int) -> None:
+                nonlocal last_ingest_write
+                now = time.monotonic()
+                if now - last_ingest_write < 1.5 and int(n) < int(total):
+                    return
+                last_ingest_write = now
+                benchmark_store.update_job_progress(
+                    job_id,
+                    status='running',
+                    stage='ingesting',
+                    message=f'Ingested {int(n)}/{int(total)} turns',
+                    ingest_n=int(n),
+                    ingest_total=int(total),
+                )
+
+            def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
+                benchmark_store.update_job_progress(
+                    job_id,
+                    status='running',
+                    stage='retrieving',
+                    message=f'QA {int(completed)}/{int(total)}',
+                    event={
+                        'stage': 'retrieving',
+                        'message': f'QA {int(completed)}/{int(total)}',
+                        'qa_completed': int(completed),
+                        'qa_total': int(total),
+                        'sample_id': str((case or {}).get('sample_id') or ''),
+                        'qa_id': str((case or {}).get('qa_id') or ''),
+                        'case_status': str((result or {}).get('status') or ''),
+                    },
+                )
+
+            benchmark_store.update_job_progress(job_id, status='running', stage='starting', message='Benchmark started')
+            out = run_benchmark(**kwargs, progress=progress, ingest_progress=ingest_progress, heartbeat=heartbeat)
     except Exception as exc:
         benchmark_store.finish_job(job_id, error=str(exc))
         print(f'benchmark_worker: failed {job_id}: {exc}', file=sys.stderr)
