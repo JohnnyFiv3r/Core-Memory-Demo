@@ -3608,7 +3608,7 @@ function ensureBenchmarkPaneRenderer() {
   return ensureSliceBinding(
     benchmarkPaneRenderer,
     'benchmarkPaneRenderer',
-    '/chat-slices/benchmark-pane.js?v=20260520-heartbeat-cancel-1',
+    '/chat-slices/benchmark-pane.js?v=20260521-live-job-guard-1',
     (mod) => (mod && typeof mod.renderBenchmarkPane === 'function' ? mod.renderBenchmarkPane : null),
     (value) => { benchmarkPaneRenderer = value; }
   );
@@ -4391,6 +4391,7 @@ async function runBenchmark() {
       job_id: jobId,
       status: 'queued',
       phase: 'queued',
+      finished_at: '',
     };
     lastBenchmarkReport = {
       ...(lastBenchmarkReport || {}),
