@@ -1343,6 +1343,9 @@ async def benchmark_run(request: Request):
     BENCHMARK_JOBS[job_id] = row
     if isinstance(prior_row, dict) and not bool(prior_row.get('done')):
         prior_row['superseded_by'] = job_id
+        prior_cancel = prior_row.get('cancel_event')
+        if isinstance(prior_cancel, threading.Event):
+            prior_cancel.set()
     if run_mode in {'queue', 'queued', 'cron'}:
         try:
             queued = benchmark_store.enqueue_job(job_id=job_id, request=dict(body or {}), kwargs=kwargs)
