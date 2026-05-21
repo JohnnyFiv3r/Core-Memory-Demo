@@ -55,6 +55,40 @@ class TestLocomoRunnerRetrieval(unittest.TestCase):
         self.assertEqual(1.0, out["evidence_recall"]["mrr"])
         self.assertEqual(["D1:3"], out["retrieved"][0]["dia_ids"])
 
+    def test_retrieval_projects_locomo_source_turn_ids(self):
+        qa = {
+            "qa_id": "conv-1:q0001",
+            "question": "When did Caroline go to the support group?",
+            "answer": "7 May 2023",
+            "category": 2,
+            "evidence": ["D1:3"],
+        }
+
+        fake_execute = {
+            "results": [
+                {"bead_id": "bead-1", "title": "turn", "snippet": "support group", "score": 0.91, "source_surface": "archive"}
+            ],
+            "warnings": [],
+            "backend": "semantic",
+        }
+        fake_bead = {
+            "id": "bead-1",
+            "detail": "Caroline went to the support group on 7 May 2023",
+            "source_turn_ids": ["locomo:conv-1:D1:3"],
+            "metadata": {},
+        }
+
+        with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib, patch("app.benchmarks.locomo_runner.trace_request") as tr:
+            mt.execute.return_value = fake_execute
+            ib.return_value = fake_bead
+            tr.return_value = {"results": [], "chains": [], "grounding": {}, "warnings": []}
+            out = run_locomo_retrieval_case(root="/tmp/fake", sample_id="conv-1", qa=qa, retrieval_k=8)
+
+        self.assertEqual("ok", out["status"])
+        self.assertEqual(["D1:3"], out["retrieved"][0]["dia_ids"])
+        self.assertEqual("conv-1", out["retrieved"][0]["sample_id"])
+        self.assertEqual(1.0, out["evidence_recall"]["recall@1"])
+
     def test_retrieval_request_includes_general_facets(self):
         qa = {
             "qa_id": "conv-1:q0000",
