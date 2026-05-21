@@ -45,6 +45,10 @@ function BenchmarkPane(props) {
   const status = String((summary || {}).status || (report || {}).status || (hasFinishedAt ? 'completed' : '')).trim().toLowerCase()
   const phase = String((summary || {}).phase || (report || {}).phase || (hasFinishedAt ? 'done' : '')).trim().toLowerCase()
   const heartbeatStage = String((summary || {}).heartbeat_stage || (summary || {}).stage || '').trim()
+  const stageMessage = String((summary || {}).stage_message || '').trim()
+  const ingestN = Number((summary || {}).ingest_n || 0)
+  const ingestTotal = Number((summary || {}).ingest_total || 0)
+  const elapsedMs = Number((summary || {}).elapsed_ms || 0)
   const runId = String((summary || {}).run_id || (report || {}).run_id || '').trim()
   const activeJobId = liveJobId || String((summary || {}).job_id || (report || {}).active_job_id || '').trim()
   const turnsIngested = Number((summary || {}).turns_ingested || (((report || {}).ingestion || {}).ingested_turns || 0) || 0)
@@ -56,6 +60,42 @@ function BenchmarkPane(props) {
   const runLabel = isActiveRun
     ? (activeJobId ? ('job_id=' + activeJobId) : (runId ? ('run_id=' + runId) : ''))
     : (runId ? ('run_id=' + runId) : '')
+
+  // Human-readable stage label
+  const stageLabels = {
+    waiting_for_slot: 'Waiting for slot',
+    queued: 'Queued',
+    resolving_dataset: 'Loading dataset',
+    building_suite: 'Building suite',
+    starting: 'Starting',
+    preparing_root: 'Preparing memory root',
+    ingesting: 'Ingesting turns',
+    draining: 'Enriching memory',
+    async_jobs: 'Enriching memory',
+    ingested: 'Ingested',
+    building_index: 'Building semantic index',
+    semantic_built: 'Index built',
+    running_qa: 'Running QA',
+    retrieving: 'Retrieving',
+    scoring: 'Scoring results',
+    writing_artifacts: 'Writing artifacts',
+    completed: 'Done',
+    failed: 'Failed',
+    cancelled: 'Cancelled',
+  }
+  const stageForProgress = heartbeatStage || phase
+  const stageLabel = stageLabels[stageForProgress] || stageForProgress || 'Working'
+
+  // Elapsed timer formatted as m:ss
+  function fmtElapsed(ms) {
+    if (!ms || ms < 1000) return ''
+    const s = Math.floor(ms / 1000)
+    const m = Math.floor(s / 60)
+    const ss = String(s % 60).padStart(2, '0')
+    return m + ':' + ss
+  }
+  const elapsedLabel = fmtElapsed(elapsedMs)
+
   const phaseProgressMap = {
     waiting_for_slot: 4,
     queued: 6,
@@ -63,20 +103,20 @@ function BenchmarkPane(props) {
     building_suite: 16,
     starting: 22,
     preparing_root: 30,
-    ingesting: 40,
-    async_jobs: 52,
-    ingested: 55,
+    ingesting: ingestTotal > 0 ? Math.max(32, Math.min(55, 32 + Math.round((ingestN / ingestTotal) * 23))) : 40,
+    draining: 56,
+    async_jobs: 56,
+    ingested: 58,
     building_index: 65,
     semantic_built: 70,
-    running_qa: 75,
-    retrieving: 82,
-    scoring: 92,
+    running_qa: qaCases > 0 ? Math.max(72, Math.min(92, 72 + Math.round((qaCompleted / qaCases) * 20))) : 75,
+    retrieving: qaCases > 0 ? Math.max(72, Math.min(92, 72 + Math.round((qaCompleted / qaCases) * 20))) : 82,
+    scoring: 93,
     writing_artifacts: 97,
     completed: 100,
     failed: 100,
     cancelled: 100,
   }
-  const stageForProgress = heartbeatStage || phase
   const progressPct = Number(phaseProgressMap[stageForProgress] || (isActiveRun ? 18 : 0))
 
   if (!summary || (!summary.cases && !summary.qa_cases && !isActiveRun)) {
@@ -347,12 +387,20 @@ function BenchmarkPane(props) {
       ),
       React.createElement(
         'div',
-        { style: { marginTop: '4px', color: 'var(--text-dim)' } },
-        (heartbeatStage ? ('stage=' + heartbeatStage) : ('phase=' + String(phase || 'working'))) +
-          (runLabel ? (' · ' + runLabel) : '') +
-          (turnsIngested > 0 ? (' · turns=' + String(turnsIngested)) : '') +
-          (qaCases > 0 ? (' · qa=' + String(qaCompleted) + '/' + String(qaCases)) : '') +
-          (activeSampleId ? (' · sample=' + activeSampleId) : '')
+        { style: { marginTop: '6px', fontSize: '13px', fontWeight: '600', color: 'var(--text-main, #e2e8f0)' } },
+        stageLabel
+      ),
+      React.createElement(
+        'div',
+        { style: { marginTop: '3px', color: 'var(--text-dim)', fontSize: '12px' } },
+        [
+          stageMessage || null,
+          ingestTotal > 0 && stageForProgress === 'ingesting' ? (ingestN + '/' + ingestTotal + ' turns') : null,
+          qaCases > 0 ? ('QA ' + qaCompleted + '/' + qaCases) : null,
+          activeSampleId ? ('sample=' + activeSampleId) : null,
+          elapsedLabel ? (elapsedLabel + ' elapsed') : null,
+          runLabel || null,
+        ].filter(Boolean).join(' · ') || 'Starting…'
       ),
       React.createElement(
         'div',

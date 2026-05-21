@@ -252,6 +252,9 @@ def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str,
         'job_id': str(row.get('job_id') or ''),
         'status': str(row.get('status') or 'running'),
         'stage': str(row.get('stage') or ''),
+        'stage_message': str(row.get('stage_message') or ''),
+        'ingest_n': int(row.get('ingest_n') or 0),
+        'ingest_total': int(row.get('ingest_total') or 0),
         'done': bool(row.get('done')),
         'poll_after_ms': BENCHMARK_JOB_POLL_MS,
         'events': events,
@@ -567,11 +570,16 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
     # Heartbeat: run_benchmark calls this from the worker thread to update the
     # current phase. Written to a plain dict so the keepalive task can relay it
     # to the job row without adding events (no memory growth).
-    _hb: dict[str, str] = {'stage': 'starting', 'message': ''}
+    _hb: dict[str, Any] = {'stage': 'starting', 'message': '', 'ingest_n': 0, 'ingest_total': 0}
 
     def heartbeat(stage: str, message: str) -> None:
         _hb['stage'] = str(stage or '')
         _hb['message'] = str(message or '')
+
+    def ingest_progress(n: int, total: int) -> None:
+        _hb['ingest_n'] = int(n)
+        _hb['ingest_total'] = int(total)
+        _hb['message'] = f'Ingested {n}/{total} turns'
 
     async def _keepalive() -> None:
         while True:
@@ -579,6 +587,9 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             if not isinstance(current, dict) or bool(current.get('done')):
                 return
             current['stage'] = _hb['stage']
+            current['stage_message'] = _hb['message']
+            current['ingest_n'] = _hb['ingest_n']
+            current['ingest_total'] = _hb['ingest_total']
             current['updated_ms'] = _now_ms()
             await asyncio.sleep(2)
 
@@ -602,7 +613,7 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         )
 
     try:
-        out = await asyncio.to_thread(run_benchmark, progress=progress, cancel_event=cancel_event, heartbeat=heartbeat, **kwargs)
+        out = await asyncio.to_thread(run_benchmark, progress=progress, ingest_progress=ingest_progress, cancel_event=cancel_event, heartbeat=heartbeat, **kwargs)
         current = BENCHMARK_JOBS.get(job_id)
         if not isinstance(current, dict):
             return
@@ -1332,6 +1343,9 @@ async def benchmark_run(request: Request):
     BENCHMARK_JOBS[job_id] = row
     if isinstance(prior_row, dict) and not bool(prior_row.get('done')):
         prior_row['superseded_by'] = job_id
+        prior_cancel = prior_row.get('cancel_event')
+        if isinstance(prior_cancel, threading.Event):
+            prior_cancel.set()
     if run_mode in {'queue', 'queued', 'cron'}:
         try:
             queued = benchmark_store.enqueue_job(job_id=job_id, request=dict(body or {}), kwargs=kwargs)
