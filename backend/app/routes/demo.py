@@ -370,87 +370,17 @@ def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    summary = dict(snapshot.get('summary') or {})
-    report = dict(snapshot.get('report') or {})
-    live_run_id = str(summary.get('run_id') or report.get('run_id') or '').strip()
+    # When a benchmark job is in flight, never merge in the previous run's
+    # snapshot: doing so leaks stale run_id, scores, and config into the live
+    # state and forces the frontend to fight it with workaround flags. The
+    # active job has its own progress (stage, qa_completed/qa_total via
+    # _active_benchmark_summary). The previous run's data belongs in a
+    # separate "last completed run" panel, not in the live state.
     active_job_id = str(active_job.get('job_id') or '')
-    if live_run_id:
-        summary['job_id'] = active_job_id
-        summary['active'] = True
-        compact_report: dict[str, Any] = {
-            'live': True,
-            'run_id': live_run_id,
-            'status': str(report.get('status') or summary.get('status') or active_job.get('status') or 'running'),
-            'phase': str(report.get('phase') or summary.get('phase') or active_job.get('stage') or 'working'),
-            'active_job_id': active_job_id,
-            'active': True,
-        }
-        for key in (
-            'started_at',
-            'finished_at',
-            'suite',
-            'root_mode',
-            'semantic_mode',
-            'answer_mode',
-            'retrieval_k',
-            'artifact_path',
-            'warnings',
-            'samples',
-            'qa_cases',
-            'turns_ingested',
-            'preload_turn_count',
-            'backend_modes',
-        ):
-            if key in summary:
-                compact_report[key] = summary.get(key)
-        config = report.get('config')
-        if isinstance(config, dict) and config:
-            compact_report['config'] = {
-                'suite': str(config.get('suite') or summary.get('suite') or ''),
-                'root_mode': str(config.get('root_mode') or summary.get('root_mode') or ''),
-                'semantic_mode': str(config.get('semantic_mode') or summary.get('semantic_mode') or ''),
-                'answer_mode': str(config.get('answer_mode') or summary.get('answer_mode') or ''),
-                'retrieval_k': int(config.get('retrieval_k') or summary.get('retrieval_k') or 0),
-            }
-        elif summary:
-            compact_report['config'] = {
-                'suite': str(summary.get('suite') or ''),
-                'root_mode': str(summary.get('root_mode') or ''),
-                'semantic_mode': str(summary.get('semantic_mode') or ''),
-                'answer_mode': str(summary.get('answer_mode') or ''),
-                'retrieval_k': int(summary.get('retrieval_k') or 0),
-            }
-        dataset = report.get('dataset')
-        if isinstance(dataset, dict) and dataset:
-            compact_report['dataset'] = {
-                'dataset_path': str(dataset.get('dataset_path') or summary.get('dataset_path') or ''),
-                'samples': int(dataset.get('samples') or summary.get('samples') or 0),
-                'qa_total': int(dataset.get('qa_total') or summary.get('qa_cases') or 0),
-                'turns_total': int(dataset.get('turns_total') or summary.get('turns_ingested') or 0),
-                'selected_samples': int(dataset.get('selected_samples') or summary.get('samples') or 0),
-                'selected_qa_cases': int(dataset.get('selected_qa_cases') or summary.get('qa_cases') or 0),
-                'python_version': str(dataset.get('python_version') or ''),
-            }
-            sample_ids = dataset.get('selected_sample_ids')
-            if isinstance(sample_ids, list) and sample_ids:
-                compact_report['dataset']['selected_sample_ids'] = [str(x) for x in sample_ids[:10] if str(x).strip()]
-        environment = report.get('environment')
-        if isinstance(environment, dict) and environment:
-            compact_report['environment'] = {
-                'embeddings_provider': str(environment.get('embeddings_provider') or ''),
-                'embeddings_model': str(environment.get('embeddings_model') or ''),
-            }
-        semantic_build = report.get('semantic_build')
-        if isinstance(semantic_build, dict) and semantic_build:
-            compact_report['semantic_build'] = {
-                'ok': bool(semantic_build.get('ok')),
-                'backend': semantic_build.get('backend'),
-                'entries': semantic_build.get('entries'),
-                'error': semantic_build.get('error'),
-            }
-        return summary, compact_report
     summary = _active_benchmark_summary(active_job)
     report = {
+        'live': True,
+        'run_id': '',
         'status': str(active_job.get('status') or 'running'),
         'phase': str(active_job.get('stage') or 'working'),
         'active_job_id': active_job_id,
