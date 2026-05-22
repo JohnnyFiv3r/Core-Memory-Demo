@@ -1,8 +1,64 @@
 # LoCoMo Faithful Lifecycle Benchmark Plan
 
-Status: PRD-level implementation guidance  
+Status: implemented with validation notes; authoritative lifecycle path is available as `locomo_native_lifecycle`  
 Scope: Core Memory Demo benchmark harness; LoCoMo first, LongMemEval and other long-context memory benchmarks later  
 Audience: benchmark, backend, runtime, and demo implementation agents
+
+## Implementation Status
+
+Current implementation status:
+
+- **Phase 0 — Documentation and fencing:** implemented. `fixture_smoke` remains non-authoritative; `locomo_native_lifecycle` reports lifecycle fidelity and shortcut guards.
+- **Phase 1 — Normalized contracts:** implemented via benchmark-agnostic conversation/turn/QA dataclasses.
+- **Phase 2 — LoCoMo native adapter:** implemented. Turn and QA IDs are sample-scoped, including bare QA IDs such as `q0001`.
+- **Phase 3 — Lifecycle replay runner:** implemented. Source turns replay through `process_turn_finalized`; capture calls and replay counts are reported.
+- **Phase 4 — Pre-QA flush:** implemented. `process_flush` runs after replay and before QA; pre-QA corpus snapshots are reported.
+- **Phase 5 — Multi-effort QA:** implemented. Every QA runs `low`, `medium`, and `high` in order and reports/scored efforts independently.
+- **Phase 6 — QA bead lifecycle:** implemented. Shared QA mode and isolated QA mode are both available; reports identify `qa_session_mode`.
+- **Phase 7 — UI and artifact compatibility:** implemented for report/artifact visibility and live progress; fixture reports remain compatible.
+
+Validation notes from a real native LoCoMo smoke run (`sample_limit=1`, `qa_limit=2`):
+
+- Shared mode completed and proved lifecycle invariants, but QA bead writes dirtied the shared root between QA cases and produced `semantic_index_stale` warnings on later QA retrieval. Retrieval rows were not contaminated by `claim_state` or previous answer JSON.
+- Isolated mode completed with the same lifecycle invariants and **no `semantic_index_stale` warnings**. For clean benchmark evaluation, prefer `qa_session_mode=isolated`; shared mode remains useful when intentionally measuring continuous QA-session effects.
+- The small local environment used degraded/hash semantic mode, so retrieval quality was not meaningful (`semantic_backend_unavailable_degraded` warnings and zero retrieved rows). Use a real semantic backend for score-bearing runs.
+
+## Operator Instructions
+
+Recommended clean lifecycle run:
+
+```bash
+python - <<'PY'
+from app.core.runtime import run_benchmark
+
+out = run_benchmark(
+    semantic_mode_name="required",          # or degraded_allowed for plumbing-only smoke
+    root_mode="clean",
+    preload_from_demo=False,
+    preload_turns_max=0,
+    suite="locomo_native_lifecycle",
+    sample_limit=1,                         # raise for real runs
+    qa_limit=2,                             # raise for real runs
+    retrieval_k=8,
+    qa_session_mode="isolated",            # recommended for clean eval
+    embeddings_provider="openai",          # use configured production provider
+)
+print(out["summary"])
+print(out["report"].get("artifact_download_url"))
+PY
+```
+
+Checklist for accepting a lifecycle run artifact:
+
+- `report.lifecycle.lifecycle_faithful == true`
+- `report.lifecycle.turns_replayed == report.lifecycle.capture_hook_calls`
+- `report.lifecycle.pre_qa_flush_ran == true`
+- `report.lifecycle.retrieval_efforts_per_qa == ["low", "medium", "high"]`
+- all `report.shortcut_guards` values are `false`
+- `report.corpus_after_replay`, `report.corpus_after_pre_qa_flush`, `report.corpus_after_qa`, and `report.corpus_after_suite` are present
+- case `retrieval_order` is exactly `["low", "medium", "high"]`
+- retrieved evidence rows, if any, are transcript evidence rows, not `claim_state` or previous QA-answer artifacts
+- no `semantic_index_stale` warnings for clean isolated runs
 
 ## Executive Summary
 

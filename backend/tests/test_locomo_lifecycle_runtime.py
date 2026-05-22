@@ -48,6 +48,13 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
             "corpus_after_qa": {"beads": 3, "associations": 0, "semantic_associations": 0, "entities": 0, "claims": 0},
             "corpus_after_suite": {"beads": 3, "associations": 0, "semantic_associations": 0, "entities": 0, "claims": 0},
             "corpus_snapshots": {"per_conversation": [{"conversation_id": "locomo:conv-1"}]},
+            "scores": {
+                "overall": {"answer_f1_mean": 1.0, "evidence_recall@5": 1.0},
+                "by_effort": {"low": {}, "medium": {}, "high": {}},
+                "accuracy_by_effort": {"low": 0.0, "medium": 0.0, "high": 1.0},
+                "evidence_recall_by_effort": {"low": 0.0, "medium": 0.0, "high": 1.0},
+                "latency_by_effort_ms": {"low": {}, "medium": {}, "high": {}},
+            },
             "cases": [
                 {
                     "qa_id": "locomo:conv-1:q0001",
@@ -94,6 +101,18 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
         self.assertEqual("isolated", out["report"]["config"]["qa_session_mode"])
         self.assertEqual(["low", "medium", "high"], out["report"]["config"]["retrieval_efforts"])
         self.assertTrue(out["report"]["lifecycle"]["lifecycle_faithful"])
+        self.assertEqual(2, out["report"]["lifecycle"]["turns_replayed"])
+        self.assertEqual(2, out["report"]["lifecycle"]["capture_hook_calls"])
+        self.assertEqual(1, out["report"]["lifecycle"]["qa_cases"])
+        self.assertEqual(["low", "medium", "high"], out["report"]["lifecycle"]["retrieval_efforts_per_qa"])
+        self.assertFalse(any(bool(v) for v in out["report"]["shortcut_guards"].values()))
+        self.assertIn("by_effort", out["report"]["scores"])
+        for effort in ["low", "medium", "high"]:
+            self.assertIn(effort, out["report"]["scores"].get("by_effort", {}))
+        self.assertIn("corpus_after_replay", out["report"])
+        self.assertIn("corpus_after_pre_qa_flush", out["report"])
+        self.assertIn("corpus_after_qa", out["report"])
+        self.assertIn("corpus_snapshots", out["report"])
         self.assertEqual(1, len(out["report"]["benchmark_table"]))
         self.assertEqual(1.0, out["report"]["benchmark_table"][0]["answer_f1"])
         self.assertTrue(out["report"]["benchmark_table"][0]["hit_any"])
