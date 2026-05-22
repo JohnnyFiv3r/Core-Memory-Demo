@@ -4186,6 +4186,7 @@ async function runBenchmark() {
   const semanticMode = document.getElementById('bench-semantic')?.value || 'required';
   const myelination = document.getElementById('bench-myelination')?.value || 'off';
   const rootMode = document.getElementById('bench-root-mode')?.value || 'snapshot';
+  const qaSessionMode = document.getElementById('bench-qa-session-mode')?.value || 'shared';
   const embeddingsProvider = document.getElementById('bench-embeddings-provider')?.value || 'hash';
   const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
   const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
@@ -4227,6 +4228,7 @@ async function runBenchmark() {
       vector_backend: 'local-faiss',
       myelination,
       root_mode: rootMode,
+      qa_session_mode: qaSessionMode,
       embeddings_provider: embeddingsProvider,
       preload_from_demo: preloadEnabled,
       preload_turns_max: preloadMax,

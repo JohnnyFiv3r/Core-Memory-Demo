@@ -1106,6 +1106,9 @@ async def benchmark_run(request: Request):
     retrieval_pipeline = str((body or {}).get('retrieval_pipeline') or 'execute_trace').strip().lower() or 'execute_trace'
     if retrieval_pipeline not in {'execute_trace', 'execute_trace_hydrate', 'forced_three_phase', 'three_phase'}:
         retrieval_pipeline = 'execute_trace'
+    qa_session_mode = str((body or {}).get('qa_session_mode') or 'shared').strip().lower() or 'shared'
+    if qa_session_mode not in {'shared', 'isolated'}:
+        qa_session_mode = 'shared'
 
     kwargs = dict(
         suite=suite,
@@ -1131,6 +1134,7 @@ async def benchmark_run(request: Request):
         compare_paths=compare_paths,
         compare_retrieval_modes=compare_retrieval_modes,
         retrieval_pipeline=retrieval_pipeline,
+        qa_session_mode=qa_session_mode,
     )
 
     _prune_benchmark_jobs()

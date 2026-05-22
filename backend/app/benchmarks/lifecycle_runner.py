@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import shutil
 import time
 from pathlib import Path
 from typing import Any, Callable
@@ -425,6 +426,22 @@ def write_qa_turn(
     return {"qa_bead_written": bool((out or {}).get("ok", True)), "turn_id": turn_id, "result": dict(out or {})}
 
 
+def _safe_path_part(value: str) -> str:
+    cleaned = "".join(ch if ch.isalnum() or ch in {"-", "_", "."} else "-" for ch in str(value or "").strip())
+    return cleaned.strip(".-") or "qa"
+
+
+def _isolated_qa_root(*, root: str | Path, conversation: BenchmarkConversation, qa: BenchmarkQA) -> Path:
+    base = Path(root)
+    parent = base.parent
+    out = parent / f"{base.name}-qa-isolated" / _safe_path_part(conversation.conversation_id) / _safe_path_part(qa.qa_id)
+    if out.exists():
+        shutil.rmtree(out)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    shutil.copytree(base, out, ignore=shutil.ignore_patterns("*-qa-isolated"))
+    return out
+
+
 def run_lifecycle_conversation(
     *,
     root: str | Path,
@@ -443,8 +460,9 @@ def run_lifecycle_conversation(
 
     flags = shortcut_flags or BenchmarkShortcutFlags()
     assert_lifecycle_faithful_mode(dataset_mode=dataset_mode, shortcut_flags=flags)
-    if str(qa_session_mode or "shared") != "shared":
-        raise BenchmarkLifecycleError("only shared QA session mode is implemented in this phase")
+    qa_session_mode_name = str(qa_session_mode or "shared").strip().lower() or "shared"
+    if qa_session_mode_name not in {"shared", "isolated"}:
+        raise BenchmarkLifecycleError("qa_session_mode must be shared or isolated")
 
     replay = replay_conversation_turns(root=root, conversation=conversation, process_turn_finalized_fn=process_turn_finalized_fn)
     pre_qa_flush = run_pre_qa_flush(
@@ -457,12 +475,29 @@ def run_lifecycle_conversation(
     qa_session_id = conversation.session_id.replace(":replay", ":qa") if conversation.session_id.endswith(":replay") else f"{conversation.session_id}:qa"
     qa_results: list[dict[str, Any]] = []
     for qa in conversation.qa_cases:
-        qa_result = run_qa_efforts(root=root, conversation=conversation, qa=qa, recall_fn=recall_fn, k=retrieval_k)
+        qa_root: str | Path = root
+        qa_session_id_for_case = qa_session_id
+        isolated_meta: dict[str, Any] = {"enabled": False}
+        if qa_session_mode_name == "isolated":
+            isolated_path = _isolated_qa_root(root=root, conversation=conversation, qa=qa)
+            qa_root = isolated_path
+            qa_session_id_for_case = f"{qa_session_id}:{_safe_path_part(qa.qa_id)}"
+            isolated_meta = {
+                "enabled": True,
+                "root": str(isolated_path),
+                "corpus_before_qa": corpus_snapshot(isolated_path),
+            }
+
+        qa_result = run_qa_efforts(root=qa_root, conversation=conversation, qa=qa, recall_fn=recall_fn, k=retrieval_k)
         if write_qa_beads:
-            qa_result.update(write_qa_turn(root=root, conversation=conversation, qa=qa, qa_result=qa_result, qa_session_id=qa_session_id, process_turn_finalized_fn=process_turn_finalized_fn))
+            qa_result.update(write_qa_turn(root=qa_root, conversation=conversation, qa=qa, qa_result=qa_result, qa_session_id=qa_session_id_for_case, process_turn_finalized_fn=process_turn_finalized_fn))
         else:
             qa_result["qa_bead_written"] = False
-        qa_result["qa_session_id"] = qa_session_id
+        if isolated_meta.get("enabled"):
+            isolated_meta["corpus_after_qa"] = corpus_snapshot(qa_root)
+        qa_result["qa_session_id"] = qa_session_id_for_case
+        qa_result["qa_session_mode"] = qa_session_mode_name
+        qa_result["isolated_qa"] = isolated_meta
         qa_results.append(qa_result)
 
     scores = aggregate_lifecycle_effort_scores(qa_results)
@@ -477,7 +512,7 @@ def run_lifecycle_conversation(
             "turns_replayed": int(replay.get("turns_replayed") or 0),
             "capture_hook_calls": int(replay.get("capture_hook_calls") or 0),
             "pre_qa_flush_ran": bool(pre_qa_flush.get("ran")),
-            "qa_session_mode": qa_session_mode,
+            "qa_session_mode": qa_session_mode_name,
             "qa_cases": len(conversation.qa_cases),
             "retrieval_efforts_per_qa": list(RETRIEVAL_EFFORT_ORDER),
         },

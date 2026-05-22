@@ -79,11 +79,13 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
                 preload_turns_max=1,
                 suite="locomo_native_lifecycle",
                 qa_limit=1,
+                qa_session_mode="isolated",
             )
 
         self.assertTrue(out["ok"])
         self.assertEqual("locomo_native_lifecycle", out["suite"])
         self.assertEqual("locomo_native_lifecycle", out["report"]["config"]["dataset_mode"])
+        self.assertEqual("isolated", out["report"]["config"]["qa_session_mode"])
         self.assertEqual(["low", "medium", "high"], out["report"]["config"]["retrieval_efforts"])
         self.assertTrue(out["report"]["lifecycle"]["lifecycle_faithful"])
         self.assertEqual(1, len(out["report"]["benchmark_table"]))
@@ -93,6 +95,7 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
         kwargs = lifecycle_mock.call_args.kwargs
         self.assertEqual(selected_samples, kwargs["samples"])
         self.assertEqual(selected_cases, kwargs["qa_cases"])
+        self.assertEqual("isolated", kwargs["qa_session_mode"])
 
 
 if __name__ == "__main__":

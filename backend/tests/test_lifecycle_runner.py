@@ -209,6 +209,40 @@ class TestLifecycleRunner(unittest.TestCase):
             events,
         )
 
+    def test_lifecycle_conversation_isolated_qa_clones_post_flush_root_per_case(self):
+        events = []
+
+        def fake_process_turn_finalized(**kwargs):
+            events.append((kwargs["origin"], kwargs["turn_id"], Path(kwargs["root"]).name))
+            marker = Path(kwargs["root"]) / ".beads"
+            marker.mkdir(parents=True, exist_ok=True)
+            (marker / "index.json").write_text('{"beads":{},"associations":[]}', encoding="utf-8")
+            return {"ok": True}
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            events.append(("recall", effort, Path(root).name))
+            return {"answer": f"answer-{effort}", "warnings": []}
+
+        with tempfile.TemporaryDirectory() as td:
+            out = run_lifecycle_conversation(
+                root=td,
+                conversation=_conversation(),
+                qa_session_mode="isolated",
+                process_turn_finalized_fn=fake_process_turn_finalized,
+                process_flush_fn=lambda **kwargs: {"ok": True},
+                run_async_jobs_fn=lambda **kwargs: {"ok": True},
+                recall_fn=fake_recall,
+            )
+
+        self.assertTrue(out["ok"])
+        self.assertEqual("isolated", out["lifecycle"]["qa_session_mode"])
+        self.assertTrue(out["cases"][0]["isolated_qa"]["enabled"])
+        self.assertNotEqual(td, out["cases"][0]["isolated_qa"]["root"])
+        self.assertIn(":qa:", out["cases"][0]["qa_session_id"])
+        recall_roots = [name for kind, _effort, name in events if kind == "recall"]
+        self.assertEqual(1, len(set(recall_roots)))
+        self.assertNotEqual(Path(td).name, recall_roots[0])
+
     def test_lifecycle_conversation_rejects_shortcuts_in_faithful_mode(self):
         with tempfile.TemporaryDirectory() as td:
             with self.assertRaisesRegex(BenchmarkLifecycleError, "bead_direct_ingest"):

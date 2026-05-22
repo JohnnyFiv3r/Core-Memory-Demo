@@ -365,6 +365,7 @@ function BenchmarkPane(props) {
         isLocomo
           ? ((isActiveRun && runId ? ('pending run_id: ' + String(runId) + ' · ') : '') +
             'root mode: ' + String(summary.root_mode || 'n/a') +
+            ' · qa mode: ' + String((((r || {}).config || {}).qa_session_mode) || 'n/a') +
             ' · answer mode: ' + String(summary.answer_mode || 'n/a') +
             ' · retrieval k: ' + String(summary.retrieval_k || 'n/a'))
           : ('root mode: ' + String(summary.root_mode || 'n/a') + ' · preload turns: ' + String(summary.preload_turn_count || 0))

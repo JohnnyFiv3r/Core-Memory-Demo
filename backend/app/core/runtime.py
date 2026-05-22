@@ -2944,7 +2944,7 @@ def _resolve_benchmark_embeddings_provider(explicit_provider: str | None = None)
     return "hash"
 
 
-def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", progress: Any | None = None) -> dict[str, Any]:
+def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", qa_session_mode: str = "shared", progress: Any | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini", "locomo_native_lifecycle"}:
         try:
@@ -2988,6 +2988,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     root=str(base_root),
                     samples=selected_samples,
                     qa_cases=selected_cases,
+                    qa_session_mode=qa_session_mode,
                     retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
                     progress=progress,
                 )
@@ -3074,7 +3075,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
                     "retrieval_efforts": ["low", "medium", "high"],
                     "recall_scope": "full_bead_corpus",
-                    "qa_session_mode": "shared",
+                    "qa_session_mode": str(qa_session_mode or "shared"),
                     "dataset_mode": "locomo_native_lifecycle",
                 },
                 "dataset": dict((dataset_meta.get("dataset") or {})),
