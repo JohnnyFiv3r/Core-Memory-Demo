@@ -85,7 +85,14 @@ def locomo_crawler_callable(payload: dict[str, Any]) -> dict[str, Any]:
     blip_caption = str(md.get('blip_caption') or '').strip()
     user_query = str(req.get('user_query') or '')
     assistant_final = str(req.get('assistant_final') or '')
-    current_entities = {_entity_key(x) for x in _text_entities(user_query, assistant_final, speaker=speaker)}
+    # LoCoMo replay rows are multi-speaker dialogue turns with role="other",
+    # so the canonical user/assistant compatibility fields are often empty.
+    # Use turn_text as the semantic source; otherwise every replay row degrades
+    # to the same generic "LoCoMo replay turn" bead and write de-dupe collapses
+    # the corpus to a single bead.
+    turn_text = str(req.get('turn_text') or '')
+    source_text = assistant_final or user_query or turn_text
+    current_entities = {_entity_key(x) for x in _text_entities(source_text, speaker=speaker)}
 
     rows = [dict(r or {}) for r in list(ctx.get('beads') or []) if isinstance(r, dict)]
     current = None
@@ -136,11 +143,11 @@ def locomo_crawler_callable(payload: dict[str, Any]) -> dict[str, Any]:
         if linked >= 3:
             break
 
-    title = (assistant_final or user_query or 'LoCoMo replay turn').splitlines()[0][:160]
+    title = (source_text or 'LoCoMo replay turn').splitlines()[0][:160]
     detail_parts: list[str] = []
     if session_date_time:
         detail_parts.append(f'Session date: {session_date_time}')
-    detail_parts.append(assistant_final[:1200] if assistant_final else user_query[:1200])
+    detail_parts.append(source_text[:1200])
     if blip_caption:
         detail_parts.append(f'Image caption: {blip_caption}')
     bead_detail = '\n\n'.join(p for p in detail_parts if p)
@@ -148,10 +155,13 @@ def locomo_crawler_callable(payload: dict[str, Any]) -> dict[str, Any]:
         'beads_create': [{
             'type': 'context',
             'title': title or 'LoCoMo replay turn',
-            'summary': [(assistant_final or user_query or 'LoCoMo replay turn')[:240]],
+            'summary': [(source_text or 'LoCoMo replay turn')[:240]],
             'detail': bead_detail,
             'source_turn_ids': [turn_id] if turn_id else ([dia_id] if dia_id else []),
             'entities': sorted(x for x in current_entities if x)[:12],
+            'retrieval_eligible': True,
+            'retrieval_title': title or 'LoCoMo replay turn',
+            'retrieval_facts': [source_text[:240]] if source_text else [],
             'tags': ['crawler_reviewed', 'turn_finalized', 'locomo_replay'],
         }],
         'associations': associations,

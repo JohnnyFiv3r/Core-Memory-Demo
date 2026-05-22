@@ -1,3 +1,4 @@
+import os
 import sys
 import tempfile
 import unittest
@@ -70,22 +71,39 @@ class TestLifecycleRunner(unittest.TestCase):
     def test_replay_calls_capture_once_per_turn(self):
         calls = []
         progress_events = []
+        seen_invoke = []
+        seen_callable = []
+        seen_enrichment_queue = []
 
         def fake_process_turn_finalized(**kwargs):
             calls.append(kwargs)
+            seen_invoke.append(os.environ.get("CORE_MEMORY_AGENT_CRAWLER_INVOKE"))
+            seen_callable.append(os.environ.get("CORE_MEMORY_AGENT_CRAWLER_CALLABLE"))
+            seen_enrichment_queue.append(os.environ.get("CORE_MEMORY_ENRICHMENT_QUEUE"))
             return {"ok": True, "turn_id": kwargs["turn_id"]}
 
         with tempfile.TemporaryDirectory() as td:
-            out = replay_conversation_turns(
-                root=td,
-                conversation=_conversation(),
-                process_turn_finalized_fn=fake_process_turn_finalized,
-                progress=lambda completed, total, case, result: progress_events.append((completed, total, case, result)),
-                progress_completed=4,
-                progress_total=9,
-                conversation_index=2,
-                conversation_total=3,
-            )
+            old_invoke = os.environ.pop("CORE_MEMORY_AGENT_CRAWLER_INVOKE", None)
+            old_callable = os.environ.pop("CORE_MEMORY_AGENT_CRAWLER_CALLABLE", None)
+            old_enrichment_queue = os.environ.pop("CORE_MEMORY_ENRICHMENT_QUEUE", None)
+            try:
+                out = replay_conversation_turns(
+                    root=td,
+                    conversation=_conversation(),
+                    process_turn_finalized_fn=fake_process_turn_finalized,
+                    progress=lambda completed, total, case, result: progress_events.append((completed, total, case, result)),
+                    progress_completed=4,
+                    progress_total=9,
+                    conversation_index=2,
+                    conversation_total=3,
+                )
+            finally:
+                if old_invoke is not None:
+                    os.environ["CORE_MEMORY_AGENT_CRAWLER_INVOKE"] = old_invoke
+                if old_callable is not None:
+                    os.environ["CORE_MEMORY_AGENT_CRAWLER_CALLABLE"] = old_callable
+                if old_enrichment_queue is not None:
+                    os.environ["CORE_MEMORY_ENRICHMENT_QUEUE"] = old_enrichment_queue
 
         self.assertTrue(out["ok"])
         self.assertEqual(2, out["turns_replayed"])
@@ -93,7 +111,11 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertIn("after_replay:no_associations_produced", out["warnings"])
         self.assertEqual("BENCHMARK_REPLAY", calls[0]["origin"])
         self.assertEqual("conversation_replay", calls[0]["metadata"]["benchmark_phase"])
+        self.assertEqual("locomo", calls[0]["metadata"]["replay_source"])
         self.assertEqual("locomo:conv-1:D1:1:1", calls[0]["metadata"]["source_turn_id"])
+        self.assertTrue(all(value == "1" for value in seen_invoke))
+        self.assertTrue(all(value == "app.benchmarks.locomo_turn_crawler:locomo_crawler_callable" for value in seen_callable))
+        self.assertTrue(all(value == "off" for value in seen_enrichment_queue))
         self.assertEqual(4, progress_events[0][0])
         self.assertEqual(9, progress_events[0][1])
         self.assertEqual("conv-1", progress_events[0][2]["sample_id"])
@@ -104,6 +126,28 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual(2, progress_events[0][3]["replay_turn_total"])
         self.assertEqual("locomo:conv-1:D1:1:1", progress_events[0][3]["turn_id"])
         self.assertEqual(2, progress_events[-1][3]["replay_turn_completed"])
+
+    def test_replay_fails_if_crawler_invocation_is_disabled(self):
+        def fake_process_turn_finalized(**kwargs):
+            return {
+                "ok": True,
+                "crawler_handoff": {
+                    "agent_authored_gate": {
+                        "error_code": "agent_updates_missing",
+                        "agent_invocation": {"reason": "invocation_disabled"},
+                    }
+                },
+            }
+
+        with tempfile.TemporaryDirectory() as td:
+            out = replay_conversation_turns(
+                root=td,
+                conversation=_conversation(),
+                process_turn_finalized_fn=fake_process_turn_finalized,
+            )
+
+        self.assertFalse(out["ok"])
+        self.assertEqual("locomo_crawler_not_invoked", out["errors"][0]["error"])
 
     def test_pre_qa_flush_runs_after_replay_boundary_shape(self):
         flush_calls = []
