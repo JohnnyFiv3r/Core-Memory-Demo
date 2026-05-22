@@ -13,6 +13,7 @@ from app.benchmarks.contracts import (
     assert_lifecycle_faithful_mode,
 )
 from app.benchmarks.locomo_loader import locomo_samples_to_benchmark_conversations
+from app.benchmarks.locomo_scoring import compute_evidence_recall, score_answer
 
 RETRIEVAL_EFFORT_ORDER = ("low", "medium", "high")
 
@@ -56,6 +57,106 @@ def _as_dict(value: Any) -> dict[str, Any]:
         out = to_dict()
         return dict(out or {}) if isinstance(out, dict) else {"value": out}
     return {"value": value}
+
+
+def _result_prediction(payload: dict[str, Any]) -> str:
+    for key in ("answer", "prediction", "text", "final", "output"):
+        value = str((payload or {}).get(key) or "").strip()
+        if value:
+            return value
+    return ""
+
+
+def _result_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    for key in ("results", "retrieved", "rows", "beads"):
+        rows = (payload or {}).get(key)
+        if isinstance(rows, list):
+            return [dict(row or {}) for row in rows if isinstance(row, dict)]
+    return []
+
+
+def _normalize_retrieved_row(row: dict[str, Any], *, rank: int) -> dict[str, Any]:
+    metadata = dict((row or {}).get("metadata") or {})
+    dia_values: list[str] = []
+    for source in (row, metadata):
+        for key in ("dia_ids", "dia_id", "locomo_dia_ids", "locomo_dia_id"):
+            value = source.get(key) if isinstance(source, dict) else None
+            if isinstance(value, list):
+                dia_values.extend(str(x).strip() for x in value if str(x).strip())
+            elif str(value or "").strip():
+                dia_values.append(str(value).strip())
+    bead_id = ""
+    for key in ("bead_id", "id", "result_id", "source_id"):
+        value = str((row or {}).get(key) or "").strip()
+        if value:
+            bead_id = value
+            break
+    return {
+        "rank": int((row or {}).get("rank") or rank),
+        "bead_id": bead_id,
+        "dia_ids": sorted(set(dia_values)),
+        "score": float((row or {}).get("score") or 0.0),
+        "snippet": str((row or {}).get("snippet") or (row or {}).get("text") or "").strip(),
+        "source_surface": str((row or {}).get("source_surface") or "").strip(),
+    }
+
+
+def _score_effort_payload(*, qa: BenchmarkQA, payload: dict[str, Any], latency_ms: float) -> dict[str, Any]:
+    retrieved = [_normalize_retrieved_row(row, rank=idx) for idx, row in enumerate(_result_rows(payload), start=1)]
+    prediction = _result_prediction(payload)
+    category_raw = (qa.metadata or {}).get("category") or qa.category or 0
+    try:
+        category = int(category_raw or 0)
+    except Exception:
+        category = 0
+    answer_f1 = score_answer(category=category, prediction=prediction, answer=str(qa.expected_answer or "")) if qa.expected_answer is not None else 0.0
+    evidence = compute_evidence_recall(gold_evidence=list(qa.gold_evidence or []), retrieved=retrieved, ks=[1, 3, 5, 8, 10])
+    return {
+        "prediction": prediction,
+        "answer_f1": float(answer_f1),
+        "retrieved": retrieved,
+        "retrieved_count": len(retrieved),
+        "evidence_recall": evidence,
+        "latency_ms": float(latency_ms),
+    }
+
+
+def _percentile(values: list[float], percentile: float) -> float:
+    if not values:
+        return 0.0
+    ordered = sorted(float(v) for v in values)
+    if len(ordered) == 1:
+        return round(ordered[0], 3)
+    idx = min(len(ordered) - 1, max(0, int(round((len(ordered) - 1) * float(percentile)))))
+    return round(ordered[idx], 3)
+
+
+def aggregate_lifecycle_effort_scores(cases: list[dict[str, Any]]) -> dict[str, Any]:
+    by_effort: dict[str, dict[str, Any]] = {}
+    for effort in RETRIEVAL_EFFORT_ORDER:
+        rows = [dict(((case.get("efforts") or {}).get(effort) or {})) for case in cases]
+        rows = [row for row in rows if row]
+        latencies = [float(row.get("latency_ms") or 0.0) for row in rows]
+        answer_scores = [float(row.get("answer_f1") or 0.0) for row in rows]
+        recall5 = [float((row.get("evidence_recall") or {}).get("recall@5") or 0.0) for row in rows]
+        hit_any = [1.0 if bool((row.get("evidence_recall") or {}).get("hit_any")) else 0.0 for row in rows]
+        by_effort[effort] = {
+            "qa_count": len(rows),
+            "answer_f1_mean": round(sum(answer_scores) / len(answer_scores), 4) if answer_scores else 0.0,
+            "evidence_recall@5": round(sum(recall5) / len(recall5), 4) if recall5 else 0.0,
+            "hit_any": round(sum(hit_any) / len(hit_any), 4) if hit_any else 0.0,
+            "latency_ms": {
+                "p50": _percentile(latencies, 0.50),
+                "p95": _percentile(latencies, 0.95),
+            },
+        }
+    return {
+        "overall": dict(by_effort.get("high") or {}),
+        "by_effort": by_effort,
+        "accuracy_by_effort": {effort: float((by_effort.get(effort) or {}).get("answer_f1_mean") or 0.0) for effort in RETRIEVAL_EFFORT_ORDER},
+        "evidence_recall_by_effort": {effort: float((by_effort.get(effort) or {}).get("evidence_recall@5") or 0.0) for effort in RETRIEVAL_EFFORT_ORDER},
+        "latency_by_effort_ms": {effort: dict((by_effort.get(effort) or {}).get("latency_ms") or {}) for effort in RETRIEVAL_EFFORT_ORDER},
+    }
 
 
 def corpus_snapshot(root: str | Path) -> dict[str, int]:
@@ -259,12 +360,15 @@ def run_qa_efforts(
         t0 = time.perf_counter()
         raw = recall_fn(dict(req), effort=effort, root=str(root), explain=True, include_raw=True)
         payload = _as_dict(raw)
+        latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
+        score_meta = _score_effort_payload(qa=qa, payload=payload, latency_ms=latency_ms)
         results[effort] = {
             "effort": effort,
-            "latency_ms": round((time.perf_counter() - t0) * 1000.0, 3),
+            "latency_ms": latency_ms,
             "request": req,
             "result": payload,
             "warnings": list(payload.get("warnings") or []),
+            **score_meta,
         }
         order.append(effort)
 
@@ -274,6 +378,7 @@ def run_qa_efforts(
         "question": qa.question,
         "expected_answer": qa.expected_answer,
         "gold_evidence": list(qa.gold_evidence or []),
+        "category": qa.category,
         "bucket_labels": list(qa.bucket_labels or []),
         "retrieval_order": order,
         "efforts": results,
@@ -360,6 +465,8 @@ def run_lifecycle_conversation(
         qa_result["qa_session_id"] = qa_session_id
         qa_results.append(qa_result)
 
+    scores = aggregate_lifecycle_effort_scores(qa_results)
+
     return {
         "ok": bool(replay.get("ok")) and bool(pre_qa_flush.get("ok", True)),
         "dataset_mode": dataset_mode,
@@ -380,6 +487,7 @@ def run_lifecycle_conversation(
         "qa_session_id": qa_session_id,
         "replay": replay,
         "pre_qa_flush": pre_qa_flush,
+        "scores": scores,
         "cases": qa_results,
         "corpus_after_qa": corpus_snapshot(root),
     }
@@ -469,6 +577,7 @@ def run_locomo_lifecycle_suite(
     cases: list[dict[str, Any]] = []
     for result in results:
         cases.extend(list(result.get("cases") or []))
+    scores = aggregate_lifecycle_effort_scores(cases)
 
     return {
         "ok": failed == 0,
@@ -487,6 +596,7 @@ def run_locomo_lifecycle_suite(
         "shortcut_guards": flags.to_dict(),
         "completed": completed_qa,
         "failed_conversations": failed,
+        "scores": scores,
         "conversations": results,
         "cases": cases,
         "corpus_after_suite": corpus_snapshot(root),

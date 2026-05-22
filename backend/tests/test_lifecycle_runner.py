@@ -134,6 +134,31 @@ class TestLifecycleRunner(unittest.TestCase):
                     retrieval_efforts=("high",),
                 )
 
+    def test_qa_efforts_score_each_effort(self):
+        conv = _conversation()
+        qa = BenchmarkQA(
+            qa_id="qa-1",
+            question="who likes pizza?",
+            expected_answer="Alice likes pizza",
+            gold_evidence=["D1:1"],
+            category="2",
+            bucket_labels=(),
+            metadata={"category": 2},
+        )
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            return {
+                "answer": "Alice likes pizza" if effort == "high" else "Alice",
+                "results": [{"bead_id": "b1", "dia_ids": ["D1:1"], "score": 0.9}],
+            }
+
+        with tempfile.TemporaryDirectory() as td:
+            out = run_qa_efforts(root=td, conversation=conv, qa=qa, recall_fn=fake_recall)
+
+        self.assertEqual(1.0, out["efforts"]["high"]["answer_f1"])
+        self.assertEqual(1.0, out["efforts"]["high"]["evidence_recall"]["recall@5"])
+        self.assertEqual(["D1:1"], out["efforts"]["high"]["retrieved"][0]["dia_ids"])
+
     def test_lifecycle_conversation_orchestrates_replay_flush_qa_and_qa_bead(self):
         events = []
 
@@ -238,6 +263,7 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual(1, out["lifecycle"]["qa_cases"])
         self.assertEqual(1, len(out["cases"]))
         self.assertEqual("locomo:conv-1:q0001", out["cases"][0]["qa_id"])
+        self.assertIn("by_effort", out["scores"])
         self.assertEqual(
             [("recall", "low", "locomo:conv-1:q0001"), ("recall", "medium", "locomo:conv-1:q0001"), ("recall", "high", "locomo:conv-1:q0001")],
             events,

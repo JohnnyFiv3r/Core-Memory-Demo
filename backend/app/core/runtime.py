@@ -2993,6 +2993,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 )
             if snapshot_sanitize_meta:
                 lifecycle_report["snapshot_sanitize"] = dict(snapshot_sanitize_meta)
+            lifecycle_scores = dict(lifecycle_report.get("scores") or {})
+            lifecycle_overall = dict(lifecycle_scores.get("overall") or {})
 
             finished_at = _utc_now_iso()
             duration_ms = max(0, int((datetime.fromisoformat(finished_at.replace('Z', '+00:00')) - datetime.fromisoformat(started.replace('Z', '+00:00'))).total_seconds() * 1000)) if started else 0
@@ -3009,8 +3011,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "qa_cases": selected_qa_total,
                 "qa_completed": int(lifecycle_report.get("completed") or 0),
                 "turns_ingested": int((lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
-                "answer_f1_mean": 0.0,
-                "evidence_recall_at_5": 0.0,
+                "answer_f1_mean": float(lifecycle_overall.get("answer_f1_mean") or 0.0),
+                "evidence_recall_at_5": float(lifecycle_overall.get("evidence_recall@5") or 0.0),
                 "semantic_mode": semantic_mode_name,
                 "answer_mode": "lifecycle_effort_recall",
                 "generator_model": "",
@@ -3041,7 +3043,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "dataset": dict((dataset_meta.get("dataset") or {})),
                 "lifecycle": dict(lifecycle_report.get("lifecycle") or {}),
                 "shortcut_guards": dict(lifecycle_report.get("shortcut_guards") or {}),
-                "scores": {},
+                "scores": lifecycle_scores,
                 "environment": {
                     "python_version": platform.python_version(),
                     "semantic_mode": semantic_mode_name,
