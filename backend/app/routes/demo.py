@@ -503,6 +503,7 @@ def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
     events = list(row.get('events') or [])
     latest = dict(events[-1] or {}) if events else {}
     stage = str(row.get('stage') or latest.get('stage') or 'working')
+    kwargs = dict(row.get('kwargs') or {})
     return {
         'run_id': '',
         'job_id': str(row.get('job_id') or ''),
@@ -515,11 +516,22 @@ def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
         'elapsed_ms': max(0, _now_ms() - int(row.get('started_ms') or _now_ms())),
         'started_at': datetime.fromtimestamp(int(row.get('started_ms') or _now_ms()) / 1000, timezone.utc).isoformat(),
         'updated_at': datetime.fromtimestamp(int(row.get('updated_ms') or _now_ms()) / 1000, timezone.utc).isoformat(),
+        'suite': str(kwargs.get('suite') or ''),
+        'root_mode': str(kwargs.get('root_mode') or ''),
+        'semantic_mode': str(kwargs.get('semantic_mode_name') or ''),
+        'answer_mode': str(kwargs.get('answer_mode') or ''),
+        'retrieval_k': int(kwargs.get('retrieval_k') or 0),
         'qa_completed': int(latest.get('qa_completed') or 0),
         'qa_cases': int(latest.get('qa_total') or 0),
         'sample_id': str(latest.get('sample_id') or ''),
         'qa_id': str(latest.get('qa_id') or ''),
         'case_status': str(latest.get('case_status') or ''),
+        'conversation_id': str(latest.get('conversation_id') or ''),
+        'conversation_index': int(latest.get('conversation_index') or 0),
+        'conversations': int(latest.get('conversations') or 0),
+        'replay_turn_completed': int(latest.get('replay_turn_completed') or 0),
+        'replay_turn_total': int(latest.get('replay_turn_total') or 0),
+        'turn_id': str(latest.get('turn_id') or ''),
         'warnings': [],
         'active': True,
     }
@@ -541,6 +553,25 @@ def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]
         'phase': str(active_job.get('stage') or 'working'),
         'active_job_id': active_job_id,
         'active': True,
+        'qa_completed': int(summary.get('qa_completed') or 0),
+        'qa_cases': int(summary.get('qa_cases') or 0),
+        'sample_id': str(summary.get('sample_id') or ''),
+        'qa_id': str(summary.get('qa_id') or ''),
+        'case_status': str(summary.get('case_status') or ''),
+        'conversation_id': str(summary.get('conversation_id') or ''),
+        'conversation_index': int(summary.get('conversation_index') or 0),
+        'conversations': int(summary.get('conversations') or 0),
+        'replay_turn_completed': int(summary.get('replay_turn_completed') or 0),
+        'replay_turn_total': int(summary.get('replay_turn_total') or 0),
+        'turn_id': str(summary.get('turn_id') or ''),
+        'config': {
+            'suite': str((active_job.get('kwargs') or {}).get('suite') or ''),
+            'root_mode': str((active_job.get('kwargs') or {}).get('root_mode') or ''),
+            'semantic_mode': str((active_job.get('kwargs') or {}).get('semantic_mode_name') or ''),
+            'answer_mode': str((active_job.get('kwargs') or {}).get('answer_mode') or ''),
+            'retrieval_k': int((active_job.get('kwargs') or {}).get('retrieval_k') or 0),
+            'qa_session_mode': str((active_job.get('kwargs') or {}).get('qa_session_mode') or ''),
+        },
     }
     return summary, report
 
@@ -770,15 +801,23 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             return
         current['status'] = 'running'
         current['updated_ms'] = _now_ms()
+        stage = str((result or {}).get('phase') or 'retrieving').strip().lower() or 'retrieving'
+        status = str((result or {}).get('status') or '').strip()
         _benchmark_event(
             current,
-            'retrieving',
+            stage,
             f'QA {int(completed)}/{int(total)}',
             qa_completed=int(completed),
             qa_total=int(total),
             sample_id=str((case or {}).get('sample_id') or ''),
             qa_id=str((case or {}).get('qa_id') or ''),
-            case_status=str((result or {}).get('status') or ''),
+            case_status=status,
+            conversation_id=str((result or {}).get('conversation_id') or ''),
+            conversation_index=int((result or {}).get('conversation_index') or 0),
+            conversations=int((result or {}).get('conversations') or 0),
+            replay_turn_completed=int((result or {}).get('replay_turn_completed') or 0),
+            replay_turn_total=int((result or {}).get('replay_turn_total') or 0),
+            turn_id=str((result or {}).get('turn_id') or ''),
         )
 
     try:
@@ -1409,7 +1448,7 @@ async def benchmark_run(request: Request):
     subset = str((body or {}).get('subset') or 'local').strip().lower() or 'local'
     if subset not in {'local', 'full'}:
         subset = 'local'
-    if suite not in {'fixture_smoke', 'locomo_qa', 'locomo_retrieval', 'locomo_mini'}:
+    if suite not in {'fixture_smoke', 'locomo_qa', 'locomo_retrieval', 'locomo_mini', 'locomo_native_lifecycle'}:
         suite = 'fixture_smoke'
     legacy_mode = not bool((body or {}).get('suite'))
     if legacy_mode and subset == 'full':
@@ -1458,6 +1497,9 @@ async def benchmark_run(request: Request):
     persist_case_artifacts = bool((body or {}).get('persist_case_artifacts', True))
     compare_paths = bool((body or {}).get('compare_paths', False))
     compare_retrieval_modes = bool((body or {}).get('compare_retrieval_modes', False))
+    qa_session_mode = str((body or {}).get('qa_session_mode') or 'shared').strip().lower() or 'shared'
+    if qa_session_mode not in {'shared', 'isolated'}:
+        qa_session_mode = 'shared'
     retrieval_pipeline = str((body or {}).get('retrieval_pipeline') or 'execute_trace').strip().lower() or 'execute_trace'
     if retrieval_pipeline not in {'execute_trace', 'execute_trace_hydrate', 'forced_three_phase', 'three_phase'}:
         retrieval_pipeline = 'execute_trace'
@@ -1486,6 +1528,7 @@ async def benchmark_run(request: Request):
         compare_paths=compare_paths,
         compare_retrieval_modes=compare_retrieval_modes,
         retrieval_pipeline=retrieval_pipeline,
+        qa_session_mode=qa_session_mode,
     )
 
     _prune_benchmark_jobs()
@@ -1545,6 +1588,7 @@ async def benchmark_run(request: Request):
     job_id = uuid.uuid4().hex[:12]
     row = {
         'job_id': job_id,
+        'kwargs': dict(kwargs),
         'status': 'queued',
         'stage': 'queued',
         'done': False,

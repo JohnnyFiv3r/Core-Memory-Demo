@@ -55,6 +55,14 @@ function BenchmarkPane(props) {
   const qaCases = Number((summary || {}).qa_cases || 0)
   const qaCompleted = Number((summary || {}).qa_completed || (status === 'completed' ? qaCases : 0))
   const activeSampleId = String((summary || {}).sample_id || '').trim()
+  const activeQaId = String((summary || {}).qa_id || '').trim()
+  const activeCaseStatus = String((summary || {}).case_status || '').trim()
+  const activeConversationId = String((summary || {}).conversation_id || '').trim()
+  const conversationIndex = Number((summary || {}).conversation_index || 0)
+  const conversationTotal = Number((summary || {}).conversations || 0)
+  const replayTurnCompleted = Number((summary || {}).replay_turn_completed || 0)
+  const replayTurnTotal = Number((summary || {}).replay_turn_total || 0)
+  const activeTurnId = String((summary || {}).turn_id || '').trim()
   // liveJobId overrides any stale finished_at / status that may have leaked from the previous run.
   const isActiveRun = !!liveJobId || !!((runId || activeJobId) && !hasFinishedAt && status !== 'completed' && status !== 'failed' && status !== 'cancelled')
   const runLabel = isActiveRun
@@ -76,6 +84,8 @@ function BenchmarkPane(props) {
     building_index: 'Building semantic index',
     semantic_built: 'Index built',
     running_qa: 'Running QA',
+    locomo_lifecycle: 'Replaying lifecycle',
+    lifecycle_qa: 'Running lifecycle QA',
     retrieving: 'Retrieving',
     scoring: 'Scoring results',
     writing_artifacts: 'Writing artifacts',
@@ -110,6 +120,8 @@ function BenchmarkPane(props) {
     building_index: 65,
     semantic_built: 70,
     running_qa: qaCases > 0 ? Math.max(72, Math.min(92, 72 + Math.round((qaCompleted / qaCases) * 20))) : 75,
+    locomo_lifecycle: replayTurnTotal > 0 ? Math.max(24, Math.min(58, 24 + Math.round((replayTurnCompleted / replayTurnTotal) * 34))) : 58,
+    lifecycle_qa: qaCases > 0 ? Math.max(72, Math.min(92, 72 + Math.round((qaCompleted / qaCases) * 20))) : 82,
     retrieving: qaCases > 0 ? Math.max(72, Math.min(92, 72 + Math.round((qaCompleted / qaCases) * 20))) : 82,
     scoring: 93,
     writing_artifacts: 97,

@@ -4389,7 +4389,7 @@ async function runBenchmark() {
     };
     if (answerMode) benchmarkPayload.answer_mode = answerMode;
     if (generatorModel) benchmarkPayload.generator_model = generatorModel;
-    if (subset === 'locomo_mini') {
+    if (subset === 'locomo_mini' || subset === 'locomo_native_lifecycle') {
       if (locomoSampleMode === 'single' && locomoSampleId) {
         benchmarkPayload.sample_ids = [locomoSampleId];
         benchmarkPayload.sample_limit = 1;
@@ -4463,6 +4463,14 @@ async function runBenchmark() {
             qa_cases: Number(evt.qa_total || (lastBenchmarkSummary || {}).qa_cases || 0),
             qa_completed: Number(evt.qa_completed || 0),
             sample_id: String(evt.sample_id || ''),
+            qa_id: String(evt.qa_id || ''),
+            case_status: String(evt.case_status || ''),
+            conversation_id: String(evt.conversation_id || ''),
+            conversation_index: Number(evt.conversation_index || 0),
+            conversations: Number(evt.conversations || 0),
+            replay_turn_completed: Number(evt.replay_turn_completed || 0),
+            replay_turn_total: Number(evt.replay_turn_total || 0),
+            turn_id: String(evt.turn_id || ''),
           };
           updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
           renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});

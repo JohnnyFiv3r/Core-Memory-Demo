@@ -1,6 +1,8 @@
 # LoCoMo replay adapter design
 
 Status: design/research checkpoint
+
+> Phase 0 fencing note: this is a historical design/research checkpoint. For implementation, use `../../docs/locomo-lifecycle-benchmark-prd.md` as the authoritative plan and `locomo-benchmark-mode-matrix.md` for mode boundaries. Any replay shortcut described here is fixture/demo-only unless it satisfies `locomo_native_lifecycle` guardrails.
 Depends on:
 - `backend/docs/adapter-only-integration-research.md`
 - `backend/docs/locomo-integration-research.md`

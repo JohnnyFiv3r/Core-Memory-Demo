@@ -1,5 +1,7 @@
 # LoCoMo seed-source contract for benchmark tab
 
+> Phase 0 fencing note: seed-source contracts are fixture/demo plumbing unless explicitly routed through `locomo_native_lifecycle` guardrails. See `../../docs/locomo-lifecycle-benchmark-prd.md` and `locomo-benchmark-mode-matrix.md`.
+
 Status: design/spec
 Depends on:
 - `backend/docs/adapter-only-integration-research.md`
