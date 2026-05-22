@@ -1,9 +1,7 @@
 from __future__ import annotations
 
-import os
 import shutil
 import time
-from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -17,6 +15,7 @@ from app.benchmarks.contracts import (
 )
 from app.benchmarks.locomo_loader import locomo_samples_to_benchmark_conversations
 from app.benchmarks.locomo_scoring import compute_evidence_recall, score_answer
+from app.benchmarks.locomo_turn_crawler import locomo_crawler_callable
 
 RETRIEVAL_EFFORT_ORDER = ("low", "medium", "high")
 
@@ -25,51 +24,58 @@ ProcessFlush = Callable[..., dict[str, Any]]
 RunAsyncJobs = Callable[..., dict[str, Any]]
 RecallFunc = Callable[..., Any]
 
-_LOCOMO_CRAWLER_CALLABLE = "app.benchmarks.locomo_turn_crawler:locomo_crawler_callable"
+def _turn_text(turn: BenchmarkTurn) -> str:
+    return f"{turn.speaker} [{turn.role}]: {turn.content}"
 
 
-@contextmanager
-def _locomo_lifecycle_crawler_env(conversation: BenchmarkConversation):
-    """Ensure faithful LoCoMo replay exercises the normal crawler hook.
+def _locomo_replay_metadata(
+    *,
+    root: str | Path,
+    conversation: BenchmarkConversation,
+    turn: BenchmarkTurn,
+) -> dict[str, Any]:
+    """Build request-scoped LoCoMo crawler metadata for one replay turn.
 
-    Core Memory only invokes turn-time crawler updates when the invoke flag or a
-    callable is configured. The lifecycle runner previously called
-    process_turn_finalized without either setting, so the gate correctly
-    reported invocation_disabled/agent_updates_missing and fell back to an empty
-    corpus. For LoCoMo lifecycle replay, default the hook to the benchmark-local
-    crawler callable unless deployment already supplied a production callable.
+    The benchmark must not toggle process-wide Core Memory env flags in a
+    concurrent server. Instead, it computes the LoCoMo crawler updates for this
+    turn and passes them through metadata.crawler_updates, which is already a
+    request-scoped Core Memory contract.
     """
 
-    is_locomo = str(getattr(conversation, "benchmark_name", "") or "").strip().lower() == "locomo"
-    if not is_locomo:
-        yield
-        return
-    previous_invoke = os.environ.get("CORE_MEMORY_AGENT_CRAWLER_INVOKE")
-    previous_callable = os.environ.get("CORE_MEMORY_AGENT_CRAWLER_CALLABLE")
-    previous_enrichment_queue = os.environ.get("CORE_MEMORY_ENRICHMENT_QUEUE")
-    os.environ["CORE_MEMORY_AGENT_CRAWLER_INVOKE"] = "1"
-    # The queued enrichment delta path currently validates associations before
-    # resolving the __current_turn__ alias. LoCoMo lifecycle replay needs the
-    # same-turn alias to be resolved immediately, so run enrichment inline for
-    # this benchmark until Core Memory's queued delta path supports the alias.
-    os.environ["CORE_MEMORY_ENRICHMENT_QUEUE"] = "off"
-    if not str(previous_callable or "").strip():
-        os.environ["CORE_MEMORY_AGENT_CRAWLER_CALLABLE"] = _LOCOMO_CRAWLER_CALLABLE
+    metadata: dict[str, Any] = {
+        "benchmark_name": conversation.benchmark_name,
+        "benchmark_phase": "conversation_replay",
+        "conversation_id": conversation.conversation_id,
+        "source_turn_id": turn.turn_id,
+        **dict(turn.metadata or {}),
+    }
+    if str(conversation.benchmark_name or "").strip().lower() != "locomo":
+        return metadata
+
+    metadata["replay_source"] = "locomo"
     try:
-        yield
-    finally:
-        if previous_invoke is None:
-            os.environ.pop("CORE_MEMORY_AGENT_CRAWLER_INVOKE", None)
-        else:
-            os.environ["CORE_MEMORY_AGENT_CRAWLER_INVOKE"] = previous_invoke
-        if previous_callable is None:
-            os.environ.pop("CORE_MEMORY_AGENT_CRAWLER_CALLABLE", None)
-        else:
-            os.environ["CORE_MEMORY_AGENT_CRAWLER_CALLABLE"] = previous_callable
-        if previous_enrichment_queue is None:
-            os.environ.pop("CORE_MEMORY_ENRICHMENT_QUEUE", None)
-        else:
-            os.environ["CORE_MEMORY_ENRICHMENT_QUEUE"] = previous_enrichment_queue
+        from core_memory.association.crawler_contract import build_crawler_context
+
+        crawler_context = build_crawler_context(root=str(root), session_id=conversation.session_id, limit=200)
+        req = {
+            "session_id": conversation.session_id,
+            "turn_id": turn.turn_id,
+            "turns": [{"speaker": turn.speaker, "role": turn.role, "content": turn.content}],
+            "speakers": [turn.speaker],
+            "user_query": turn.content if str(turn.role or "") == "user" else "",
+            "assistant_final": turn.content if str(turn.role or "") == "assistant" else "",
+            "turn_text": _turn_text(turn),
+            "source_turn_ref": {"turn_id": turn.turn_id, "session_id": conversation.session_id, "speakers": [turn.speaker]},
+            "metadata": metadata,
+        }
+        updates = locomo_crawler_callable({"root": str(root), "request": req, "crawler_context": crawler_context})
+    except Exception as exc:  # noqa: BLE001 - replay result should surface exact failure
+        raise BenchmarkLifecycleError(f"locomo_crawler_prepare_failed:{exc}") from exc
+
+    if isinstance(updates, dict) and updates:
+        metadata["crawler_updates"] = updates
+        metadata["_crawler_updates_source"] = "locomo_lifecycle"
+    return metadata
 
 
 def _default_process_turn_finalized() -> ProcessTurnFinalized:
@@ -335,30 +341,22 @@ def replay_conversation_turns(
         )
         t0 = time.perf_counter()
         try:
-            with _locomo_lifecycle_crawler_env(conversation):
-                out = process_turn_finalized_fn(
-                    root=str(root),
-                    session_id=conversation.session_id,
-                    turn_id=turn.turn_id,
-                    transaction_id=f"tx:{turn.turn_id}",
-                    trace_id=f"trace:{turn.turn_id}",
-                    turns=[
-                        {
-                            "speaker": turn.speaker,
-                            "role": turn.role,
-                            "content": turn.content,
-                        }
-                    ],
-                    metadata={
-                        "benchmark_name": conversation.benchmark_name,
-                        "benchmark_phase": "conversation_replay",
-                        "conversation_id": conversation.conversation_id,
-                        "source_turn_id": turn.turn_id,
-                        "replay_source": "locomo" if str(conversation.benchmark_name or "").strip().lower() == "locomo" else str(conversation.benchmark_name or ""),
-                        **dict(turn.metadata or {}),
-                    },
-                    origin="BENCHMARK_REPLAY",
-                )
+            out = process_turn_finalized_fn(
+                root=str(root),
+                session_id=conversation.session_id,
+                turn_id=turn.turn_id,
+                transaction_id=f"tx:{turn.turn_id}",
+                trace_id=f"trace:{turn.turn_id}",
+                turns=[
+                    {
+                        "speaker": turn.speaker,
+                        "role": turn.role,
+                        "content": turn.content,
+                    }
+                ],
+                metadata=_locomo_replay_metadata(root=root, conversation=conversation, turn=turn),
+                origin="BENCHMARK_REPLAY",
+            )
             ok = bool((out or {}).get("ok", True))
             calls.append(
                 {
