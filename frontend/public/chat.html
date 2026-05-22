@@ -864,10 +864,10 @@
           <span class="control-label">suite</span>
           <select id="bench-subset" class="control-select" title="Benchmark suite">
             <option value="fixture_smoke">fixture_smoke</option>
-            <option value="locomo_mini" selected>locomo_mini</option>
-            <option value="locomo_retrieval">locomo_retrieval</option>
-            <option value="locomo_qa">locomo_qa</option>
-            <option value="locomo_native_lifecycle">locomo_native_lifecycle</option>
+            <option value="locomo_native_lifecycle" selected>locomo_native_lifecycle</option>
+            <option value="locomo_mini">locomo_mini (deprecated)</option>
+            <option value="locomo_retrieval">locomo_retrieval (deprecated)</option>
+            <option value="locomo_qa">locomo_qa (deprecated)</option>
           </select>
           <span class="control-label">semantic</span>
           <select id="bench-semantic" class="control-select" title="Semantic mode">
@@ -892,8 +892,8 @@
           </select>
           <span class="control-label">QA</span>
           <select id="bench-qa-session-mode" class="control-select" title="Lifecycle QA session mode">
-            <option value="shared" selected>shared</option>
-            <option value="isolated">isolated</option>
+            <option value="shared">shared</option>
+            <option value="isolated" selected>isolated</option>
           </select>
           <span class="control-label">embeddings</span>
           <select id="bench-embeddings-provider" class="control-select" title="Benchmark embeddings provider">

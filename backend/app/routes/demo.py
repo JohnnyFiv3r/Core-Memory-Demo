@@ -1364,7 +1364,7 @@ async def story_pack_replay(request: Request):
 
 @router.get('/demo/benchmark/preflight')
 def benchmark_preflight(
-    suite: str = 'locomo_mini',
+    suite: str = 'locomo_native_lifecycle',
     semantic_mode: str = 'required',
     answer_mode: str = 'none',
     generator_model: str = '',
@@ -1372,7 +1372,7 @@ def benchmark_preflight(
     import importlib.util
     import os
 
-    suite_name = str(suite or 'locomo_mini').strip().lower() or 'locomo_mini'
+    suite_name = str(suite or 'locomo_native_lifecycle').strip().lower() or 'locomo_native_lifecycle'
     semantic_mode_name = str(semantic_mode or 'required').strip().lower() or 'required'
     answer_mode_name = str(answer_mode or 'none').strip().lower() or 'none'
     if answer_mode_name not in {'none', 'extractive', 'llm'}:
@@ -1497,9 +1497,9 @@ async def benchmark_run(request: Request):
     persist_case_artifacts = bool((body or {}).get('persist_case_artifacts', True))
     compare_paths = bool((body or {}).get('compare_paths', False))
     compare_retrieval_modes = bool((body or {}).get('compare_retrieval_modes', False))
-    qa_session_mode = str((body or {}).get('qa_session_mode') or 'shared').strip().lower() or 'shared'
+    qa_session_mode = str((body or {}).get('qa_session_mode') or 'isolated').strip().lower() or 'isolated'
     if qa_session_mode not in {'shared', 'isolated'}:
-        qa_session_mode = 'shared'
+        qa_session_mode = 'isolated'
     retrieval_pipeline = str((body or {}).get('retrieval_pipeline') or 'execute_trace').strip().lower() or 'execute_trace'
     if retrieval_pipeline not in {'execute_trace', 'execute_trace_hydrate', 'forced_three_phase', 'three_phase'}:
         retrieval_pipeline = 'execute_trace'

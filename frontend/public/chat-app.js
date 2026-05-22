@@ -4328,10 +4328,11 @@ async function runBenchmark() {
     updateBenchmarkButtonGate();
     return;
   }
-  const subset = document.getElementById('bench-subset')?.value || 'locomo_mini';
+  const subset = document.getElementById('bench-subset')?.value || 'locomo_native_lifecycle';
   const semanticMode = document.getElementById('bench-semantic')?.value || 'required';
   const myelination = document.getElementById('bench-myelination')?.value || 'off';
   const rootMode = document.getElementById('bench-root-mode')?.value || 'snapshot';
+  const qaSessionMode = document.getElementById('bench-qa-session-mode')?.value || 'isolated';
   const embeddingsProvider = document.getElementById('bench-embeddings-provider')?.value || 'hash';
   const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
   const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
@@ -4383,9 +4384,10 @@ async function runBenchmark() {
       myelination,
       root_mode: rootMode,
       embeddings_provider: embeddingsProvider,
+      qa_session_mode: qaSessionMode,
       preload_from_demo: preloadEnabled,
       preload_turns_max: preloadMax,
-      compare_paths: true,
+      compare_paths: subset !== 'locomo_native_lifecycle',
     };
     if (answerMode) benchmarkPayload.answer_mode = answerMode;
     if (generatorModel) benchmarkPayload.generator_model = generatorModel;
