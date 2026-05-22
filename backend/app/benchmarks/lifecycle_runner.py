@@ -225,6 +225,31 @@ def _dedupe_warnings(rows: list[str]) -> list[str]:
     return out
 
 
+def suite_corpus_snapshots(results: list[dict[str, Any]], corpus_after_suite: dict[str, int]) -> dict[str, Any]:
+    """Expose PRD-visible corpus snapshots without hiding per-conversation detail."""
+
+    per_conversation: list[dict[str, Any]] = []
+    for result in results:
+        replay = dict(result.get("replay") or {})
+        pre_qa_flush = dict(result.get("pre_qa_flush") or {})
+        row = {
+            "conversation_id": str(result.get("conversation_id") or ""),
+            "corpus_after_replay": dict(replay.get("corpus_after_replay") or {}),
+            "corpus_after_pre_qa_flush": dict(pre_qa_flush.get("corpus_after_pre_qa_flush") or {}),
+            "corpus_after_qa": dict(result.get("corpus_after_qa") or {}),
+        }
+        per_conversation.append(row)
+
+    last = per_conversation[-1] if per_conversation else {}
+    return {
+        "corpus_after_replay": dict(last.get("corpus_after_replay") or {}),
+        "corpus_after_pre_qa_flush": dict(last.get("corpus_after_pre_qa_flush") or {}),
+        "corpus_after_qa": dict(last.get("corpus_after_qa") or corpus_after_suite or {}),
+        "corpus_after_suite": dict(corpus_after_suite or {}),
+        "per_conversation": per_conversation,
+    }
+
+
 def replay_conversation_turns(
     *,
     root: str | Path,
@@ -736,6 +761,7 @@ def run_locomo_lifecycle_suite(
         cases.extend(list(result.get("cases") or []))
     scores = aggregate_lifecycle_effort_scores(cases)
     corpus_after_suite = corpus_snapshot(root)
+    snapshots = suite_corpus_snapshots(results, corpus_after_suite)
     warnings = _dedupe_warnings(
         [w for result in results for w in list(result.get("warnings") or [])]
         + lifecycle_corpus_warnings(corpus_after_suite, phase="after_suite")
@@ -762,5 +788,9 @@ def run_locomo_lifecycle_suite(
         "scores": scores,
         "conversations": results,
         "cases": cases,
+        "corpus_after_replay": dict(snapshots.get("corpus_after_replay") or {}),
+        "corpus_after_pre_qa_flush": dict(snapshots.get("corpus_after_pre_qa_flush") or {}),
+        "corpus_after_qa": dict(snapshots.get("corpus_after_qa") or {}),
         "corpus_after_suite": corpus_after_suite,
+        "corpus_snapshots": snapshots,
     }

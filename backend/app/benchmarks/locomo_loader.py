@@ -238,7 +238,12 @@ def locomo_samples_to_benchmark_conversations(samples: list[dict[str, Any]]) -> 
             if not isinstance(qa, dict):
                 continue
             raw_qa_id = str(qa.get("qa_id") or "").strip()
-            qa_id = raw_qa_id if raw_qa_id.startswith("locomo:") else f"locomo:{raw_qa_id or sample_id}"
+            if raw_qa_id.startswith("locomo:"):
+                qa_id = raw_qa_id
+            elif raw_qa_id.startswith(f"{sample_id}:"):
+                qa_id = f"locomo:{raw_qa_id}"
+            else:
+                qa_id = f"locomo:{sample_id}:{raw_qa_id or 'qa'}"
             if qa_id in seen_qa_ids:
                 raise LocomoLoaderError(f"locomo_duplicate_qa_id:{qa_id}")
             seen_qa_ids.add(qa_id)

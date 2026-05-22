@@ -72,6 +72,17 @@ class TestBenchmarkContracts(unittest.TestCase):
         self.assertEqual(["D1:1"], conv.qa_cases[0].gold_evidence)
         self.assertEqual(("locomo_category_2",), conv.qa_cases[0].bucket_labels)
 
+    def test_locomo_adapter_scopes_bare_qa_ids_by_sample(self):
+        conversations = locomo_samples_to_benchmark_conversations(
+            [
+                {"sample_id": "conv-1", "sessions": [], "qa": [{"qa_id": "q0001", "question": "one?"}]},
+                {"sample_id": "conv-2", "sessions": [], "qa": [{"qa_id": "q0001", "question": "two?"}]},
+            ]
+        )
+
+        self.assertEqual("locomo:conv-1:q0001", conversations[0].qa_cases[0].qa_id)
+        self.assertEqual("locomo:conv-2:q0001", conversations[1].qa_cases[0].qa_id)
+
     def test_locomo_adapter_detects_duplicate_sample_scoped_turn_ids(self):
         samples = [
             {

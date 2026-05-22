@@ -43,6 +43,11 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
                 "benchmark_aware_answer_prompt": False,
             },
             "warnings": ["after_suite:no_claims_produced"],
+            "corpus_after_replay": {"beads": 2, "associations": 0, "semantic_associations": 0, "entities": 0, "claims": 0},
+            "corpus_after_pre_qa_flush": {"beads": 2, "associations": 0, "semantic_associations": 0, "entities": 0, "claims": 0},
+            "corpus_after_qa": {"beads": 3, "associations": 0, "semantic_associations": 0, "entities": 0, "claims": 0},
+            "corpus_after_suite": {"beads": 3, "associations": 0, "semantic_associations": 0, "entities": 0, "claims": 0},
+            "corpus_snapshots": {"per_conversation": [{"conversation_id": "locomo:conv-1"}]},
             "cases": [
                 {
                     "qa_id": "locomo:conv-1:q0001",
@@ -94,6 +99,9 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
         self.assertTrue(out["report"]["benchmark_table"][0]["hit_any"])
         self.assertIn("after_suite:no_claims_produced", out["summary"]["warnings"])
         self.assertIn("after_suite:no_claims_produced", out["report"]["warnings"])
+        self.assertEqual(2, out["report"]["corpus_after_replay"]["beads"])
+        self.assertEqual(3, out["report"]["corpus_after_qa"]["beads"])
+        self.assertEqual("locomo:conv-1", out["report"]["corpus_snapshots"]["per_conversation"][0]["conversation_id"])
         lifecycle_mock.assert_called_once()
         kwargs = lifecycle_mock.call_args.kwargs
         self.assertEqual(selected_samples, kwargs["samples"])

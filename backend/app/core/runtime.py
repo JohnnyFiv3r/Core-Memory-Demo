@@ -3084,6 +3084,11 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "shortcut_guards": dict(lifecycle_report.get("shortcut_guards") or {}),
                 "warnings": list(warnings),
                 "scores": lifecycle_scores,
+                "corpus_after_replay": dict(lifecycle_report.get("corpus_after_replay") or {}),
+                "corpus_after_pre_qa_flush": dict(lifecycle_report.get("corpus_after_pre_qa_flush") or {}),
+                "corpus_after_qa": dict(lifecycle_report.get("corpus_after_qa") or {}),
+                "corpus_after_suite": dict(lifecycle_report.get("corpus_after_suite") or {}),
+                "corpus_snapshots": dict(lifecycle_report.get("corpus_snapshots") or {}),
                 "environment": {
                     "python_version": platform.python_version(),
                     "semantic_mode": semantic_mode_name,
