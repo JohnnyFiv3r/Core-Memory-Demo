@@ -132,6 +132,7 @@ function BenchmarkPane(props) {
   const r = report || null
   const benchmarkTable = Array.isArray((r || {}).benchmark_table) ? r.benchmark_table : []
   const semanticBuild = (r || {}).semantic_build || null
+  const effortScores = (r && r.scores && r.scores.by_effort) ? r.scores.by_effort : null
 
   let compareSection = null
   if (r && r.myelination_comparison) {
@@ -428,6 +429,27 @@ function BenchmarkPane(props) {
               ' · backend=' + String(semanticBuild.backend || 'n/a') +
               ' · entries=' + String(semanticBuild.entries ?? 'n/a')
           )
+        )
+      : null,
+    isLocomo && effortScores
+      ? React.createElement(
+          React.Fragment,
+          null,
+          React.createElement('div', { className: 'runtime-card' }, React.createElement('strong', null, 'By retrieval effort')),
+          ...['low', 'medium', 'high'].filter(k => effortScores[k]).map((k) => {
+            const row = effortScores[k] || {}
+            const latency = row.latency_ms || {}
+            return React.createElement(
+              'div',
+              { className: 'bench-bucket', key: k, onClick: () => openPayload('Lifecycle effort: ' + k, row) },
+              React.createElement('strong', null, k),
+              ' · qa=', String(row.qa_count || 0),
+              ' · f1=', Number(row.answer_f1_mean || 0).toFixed(4),
+              ' · recall@5=', Number(row['evidence_recall@5'] || 0).toFixed(4),
+              ' · p50=', Number(latency.p50 || 0).toFixed(2), 'ms',
+              ' · p95=', Number(latency.p95 || 0).toFixed(2), 'ms'
+            )
+          })
         )
       : null,
     isLocomo && r && r.scores && r.scores.by_category

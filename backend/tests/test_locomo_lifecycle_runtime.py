@@ -42,7 +42,26 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
                 "oracle_gold_used": False,
                 "benchmark_aware_answer_prompt": False,
             },
-            "cases": [{"qa_id": "locomo:conv-1:q0001", "retrieval_order": ["low", "medium", "high"]}],
+            "cases": [
+                {
+                    "qa_id": "locomo:conv-1:q0001",
+                    "conversation_id": "locomo:conv-1",
+                    "question": "q",
+                    "expected_answer": "gold",
+                    "category": "2",
+                    "gold_evidence": ["D1:1"],
+                    "retrieval_order": ["low", "medium", "high"],
+                    "efforts": {
+                        "high": {
+                            "prediction": "gold",
+                            "answer_f1": 1.0,
+                            "retrieved": [{"bead_id": "b1", "dia_ids": ["D1:1"], "score": 0.9}],
+                            "retrieved_count": 1,
+                            "evidence_recall": {"hit_any": True, "mrr": 1.0, "recall@1": 1.0, "recall@3": 1.0, "recall@5": 1.0},
+                        }
+                    },
+                }
+            ],
         }
 
         with tempfile.TemporaryDirectory() as td, \
@@ -67,6 +86,9 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
         self.assertEqual("locomo_native_lifecycle", out["report"]["config"]["dataset_mode"])
         self.assertEqual(["low", "medium", "high"], out["report"]["config"]["retrieval_efforts"])
         self.assertTrue(out["report"]["lifecycle"]["lifecycle_faithful"])
+        self.assertEqual(1, len(out["report"]["benchmark_table"]))
+        self.assertEqual(1.0, out["report"]["benchmark_table"][0]["answer_f1"])
+        self.assertTrue(out["report"]["benchmark_table"][0]["hit_any"])
         lifecycle_mock.assert_called_once()
         kwargs = lifecycle_mock.call_args.kwargs
         self.assertEqual(selected_samples, kwargs["samples"])

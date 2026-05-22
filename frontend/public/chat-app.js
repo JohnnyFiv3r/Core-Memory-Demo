@@ -4230,9 +4230,9 @@ async function runBenchmark() {
       embeddings_provider: embeddingsProvider,
       preload_from_demo: preloadEnabled,
       preload_turns_max: preloadMax,
-      compare_paths: true,
+      compare_paths: subset !== 'locomo_native_lifecycle',
     };
-    if (subset === 'locomo_mini') {
+    if (subset === 'locomo_mini' || subset === 'locomo_native_lifecycle') {
       if (locomoSampleMode === 'single' && locomoSampleId) {
         benchmarkPayload.sample_ids = [locomoSampleId];
         benchmarkPayload.sample_limit = 1;

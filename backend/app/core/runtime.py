@@ -2995,6 +2995,43 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 lifecycle_report["snapshot_sanitize"] = dict(snapshot_sanitize_meta)
             lifecycle_scores = dict(lifecycle_report.get("scores") or {})
             lifecycle_overall = dict(lifecycle_scores.get("overall") or {})
+            lifecycle_cases = list(lifecycle_report.get("cases") or [])
+            cases_inline = lifecycle_cases[: max(0, int(settings.locomo_case_artifact_limit_inline))]
+            benchmark_table = []
+            for c in cases_inline:
+                high = dict((dict((c or {}).get("efforts") or {}).get("high") or {}))
+                evidence = dict(high.get("evidence_recall") or {})
+                retrieved = list(high.get("retrieved") or [])
+                category_value = (c or {}).get("category") or 0
+                try:
+                    category_int = int(category_value or 0)
+                except Exception:
+                    category_int = 0
+                benchmark_table.append({
+                    "qa_id": str((c or {}).get("qa_id") or ""),
+                    "sample_id": str((c or {}).get("conversation_id") or "").replace("locomo:", "", 1),
+                    "category": category_int,
+                    "question": str((c or {}).get("question") or ""),
+                    "gold_answer": str((c or {}).get("expected_answer") or ""),
+                    "prediction": str(high.get("prediction") or ""),
+                    "answer_f1": float(high.get("answer_f1") or 0.0),
+                    "backend": "lifecycle_high_effort",
+                    "raw_result_count": int(high.get("retrieved_count") or len(retrieved)),
+                    "unsupported": False,
+                    "used_dia_ids": [str(did) for r in retrieved[:5] for did in list((r or {}).get("dia_ids") or []) if str(did)],
+                    "gold_evidence": list((c or {}).get("gold_evidence") or []),
+                    "hit_any": bool(evidence.get("hit_any")),
+                    "mrr": float(evidence.get("mrr") or 0.0),
+                    "recall@1": float(evidence.get("recall@1") or 0.0),
+                    "recall@3": float(evidence.get("recall@3") or 0.0),
+                    "recall@5": float(evidence.get("recall@5") or 0.0),
+                    "retrieved_count": len(retrieved),
+                    "retrieved_preview": retrieved[:5],
+                    "top_retrieved_dia_ids": [str(did) for r in retrieved[:5] for did in list((r or {}).get("dia_ids") or []) if str(did)],
+                    "diagnostics": {"retrieval_order": list((c or {}).get("retrieval_order") or [])},
+                    "warnings": list(high.get("warnings") or []),
+                    "status": "ok",
+                })
 
             finished_at = _utc_now_iso()
             duration_ms = max(0, int((datetime.fromisoformat(finished_at.replace('Z', '+00:00')) - datetime.fromisoformat(started.replace('Z', '+00:00'))).total_seconds() * 1000)) if started else 0
@@ -3056,8 +3093,9 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     "ingested_turns": int((lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
                     "snapshot_sanitize": dict(snapshot_sanitize_meta or {}),
                 },
-                "cases": list(lifecycle_report.get("cases") or [])[: max(0, int(settings.locomo_case_artifact_limit_inline))],
-                "cases_omitted": max(0, len(list(lifecycle_report.get("cases") or [])) - max(0, int(settings.locomo_case_artifact_limit_inline))),
+                "benchmark_table": benchmark_table,
+                "cases": cases_inline,
+                "cases_omitted": max(0, len(lifecycle_cases) - max(0, int(settings.locomo_case_artifact_limit_inline))),
                 "lifecycle_report": {**dict(lifecycle_report or {}), "cases": []},
             }
             artifacts = write_locomo_run_artifacts(
