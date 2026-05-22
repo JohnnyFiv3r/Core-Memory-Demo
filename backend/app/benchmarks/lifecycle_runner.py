@@ -198,6 +198,33 @@ def corpus_snapshot(root: str | Path) -> dict[str, int]:
     }
 
 
+def lifecycle_corpus_warnings(snapshot: dict[str, Any], *, phase: str) -> list[str]:
+    """Warn about missing runtime products without synthesizing them."""
+
+    prefix = f"{str(phase or 'lifecycle')}:"
+    warnings: list[str] = []
+    if int((snapshot or {}).get("associations") or 0) <= 0:
+        warnings.append(prefix + "no_associations_produced")
+    if int((snapshot or {}).get("semantic_associations") or 0) <= 0:
+        warnings.append(prefix + "no_semantic_associations_produced")
+    if int((snapshot or {}).get("claims") or 0) <= 0:
+        warnings.append(prefix + "no_claims_produced")
+    if int((snapshot or {}).get("entities") or 0) <= 0:
+        warnings.append(prefix + "no_entities_produced")
+    return warnings
+
+
+def _dedupe_warnings(rows: list[str]) -> list[str]:
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows:
+        text = str(row or "").strip()
+        if text and text not in seen:
+            seen.add(text)
+            out.append(text)
+    return out
+
+
 def replay_conversation_turns(
     *,
     root: str | Path,
@@ -257,6 +284,8 @@ def replay_conversation_turns(
                 }
             )
 
+    snapshot = corpus_snapshot(root)
+    warnings = lifecycle_corpus_warnings(snapshot, phase="after_replay")
     return {
         "ok": not errors,
         "conversation_id": conversation.conversation_id,
@@ -265,7 +294,8 @@ def replay_conversation_turns(
         "capture_hook_calls": len(calls),
         "calls": calls,
         "errors": errors,
-        "corpus_after_replay": corpus_snapshot(root),
+        "warnings": warnings,
+        "corpus_after_replay": snapshot,
     }
 
 
@@ -308,6 +338,8 @@ def run_pre_qa_flush(
             )
             or {}
         )
+    snapshot = corpus_snapshot(root)
+    warnings = lifecycle_corpus_warnings(snapshot, phase="after_pre_qa_flush")
     return {
         "ran": True,
         "ok": bool(flush_result.get("ok", True)),
@@ -318,7 +350,8 @@ def run_pre_qa_flush(
         "latency_ms": round((time.perf_counter() - t0) * 1000.0, 3),
         "result": flush_result,
         "async_drain": async_result,
-        "corpus_after_pre_qa_flush": corpus_snapshot(root),
+        "warnings": warnings,
+        "corpus_after_pre_qa_flush": snapshot,
     }
 
 
@@ -501,6 +534,12 @@ def run_lifecycle_conversation(
         qa_results.append(qa_result)
 
     scores = aggregate_lifecycle_effort_scores(qa_results)
+    corpus_after_qa = corpus_snapshot(root)
+    warnings = _dedupe_warnings(
+        list(replay.get("warnings") or [])
+        + list(pre_qa_flush.get("warnings") or [])
+        + lifecycle_corpus_warnings(corpus_after_qa, phase="after_qa")
+    )
 
     return {
         "ok": bool(replay.get("ok")) and bool(pre_qa_flush.get("ok", True)),
@@ -517,6 +556,7 @@ def run_lifecycle_conversation(
             "retrieval_efforts_per_qa": list(RETRIEVAL_EFFORT_ORDER),
         },
         "shortcut_guards": flags.to_dict(),
+        "warnings": warnings,
         "conversation_id": conversation.conversation_id,
         "session_id": conversation.session_id,
         "qa_session_id": qa_session_id,
@@ -524,7 +564,7 @@ def run_lifecycle_conversation(
         "pre_qa_flush": pre_qa_flush,
         "scores": scores,
         "cases": qa_results,
-        "corpus_after_qa": corpus_snapshot(root),
+        "corpus_after_qa": corpus_after_qa,
     }
 
 
@@ -613,6 +653,11 @@ def run_locomo_lifecycle_suite(
     for result in results:
         cases.extend(list(result.get("cases") or []))
     scores = aggregate_lifecycle_effort_scores(cases)
+    corpus_after_suite = corpus_snapshot(root)
+    warnings = _dedupe_warnings(
+        [w for result in results for w in list(result.get("warnings") or [])]
+        + lifecycle_corpus_warnings(corpus_after_suite, phase="after_suite")
+    )
 
     return {
         "ok": failed == 0,
@@ -629,10 +674,11 @@ def run_locomo_lifecycle_suite(
             "retrieval_efforts_per_qa": list(RETRIEVAL_EFFORT_ORDER),
         },
         "shortcut_guards": flags.to_dict(),
+        "warnings": warnings,
         "completed": completed_qa,
         "failed_conversations": failed,
         "scores": scores,
         "conversations": results,
         "cases": cases,
-        "corpus_after_suite": corpus_snapshot(root),
+        "corpus_after_suite": corpus_after_suite,
     }

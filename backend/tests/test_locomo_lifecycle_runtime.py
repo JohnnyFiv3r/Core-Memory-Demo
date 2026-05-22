@@ -42,6 +42,7 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
                 "oracle_gold_used": False,
                 "benchmark_aware_answer_prompt": False,
             },
+            "warnings": ["after_suite:no_claims_produced"],
             "cases": [
                 {
                     "qa_id": "locomo:conv-1:q0001",
@@ -91,6 +92,8 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
         self.assertEqual(1, len(out["report"]["benchmark_table"]))
         self.assertEqual(1.0, out["report"]["benchmark_table"][0]["answer_f1"])
         self.assertTrue(out["report"]["benchmark_table"][0]["hit_any"])
+        self.assertIn("after_suite:no_claims_produced", out["summary"]["warnings"])
+        self.assertIn("after_suite:no_claims_produced", out["report"]["warnings"])
         lifecycle_mock.assert_called_once()
         kwargs = lifecycle_mock.call_args.kwargs
         self.assertEqual(selected_samples, kwargs["samples"])

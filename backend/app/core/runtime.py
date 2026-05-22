@@ -2996,6 +2996,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 lifecycle_report["snapshot_sanitize"] = dict(snapshot_sanitize_meta)
             lifecycle_scores = dict(lifecycle_report.get("scores") or {})
             lifecycle_overall = dict(lifecycle_scores.get("overall") or {})
+            warnings.extend(str(w) for w in list(lifecycle_report.get("warnings") or []) if str(w))
             lifecycle_cases = list(lifecycle_report.get("cases") or [])
             cases_inline = lifecycle_cases[: max(0, int(settings.locomo_case_artifact_limit_inline))]
             benchmark_table = []
@@ -3081,6 +3082,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "dataset": dict((dataset_meta.get("dataset") or {})),
                 "lifecycle": dict(lifecycle_report.get("lifecycle") or {}),
                 "shortcut_guards": dict(lifecycle_report.get("shortcut_guards") or {}),
+                "warnings": list(warnings),
                 "scores": lifecycle_scores,
                 "environment": {
                     "python_version": platform.python_version(),

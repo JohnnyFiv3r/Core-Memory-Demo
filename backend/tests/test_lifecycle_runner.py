@@ -14,6 +14,7 @@ from app.benchmarks.contracts import (  # noqa: E402
 )
 from app.benchmarks.lifecycle_runner import (  # noqa: E402
     RETRIEVAL_EFFORT_ORDER,
+    lifecycle_corpus_warnings,
     replay_conversation_turns,
     run_lifecycle_conversation,
     run_locomo_lifecycle_suite,
@@ -56,6 +57,16 @@ def _conversation() -> BenchmarkConversation:
 
 
 class TestLifecycleRunner(unittest.TestCase):
+    def test_lifecycle_corpus_warnings_report_missing_runtime_products(self):
+        warnings = lifecycle_corpus_warnings(
+            {"beads": 2, "associations": 0, "semantic_associations": 0, "entities": 0, "claims": 0},
+            phase="after_replay",
+        )
+
+        self.assertIn("after_replay:no_associations_produced", warnings)
+        self.assertIn("after_replay:no_claims_produced", warnings)
+        self.assertIn("after_replay:no_entities_produced", warnings)
+
     def test_replay_calls_capture_once_per_turn(self):
         calls = []
 
@@ -73,6 +84,7 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertTrue(out["ok"])
         self.assertEqual(2, out["turns_replayed"])
         self.assertEqual(2, out["capture_hook_calls"])
+        self.assertIn("after_replay:no_associations_produced", out["warnings"])
         self.assertEqual("BENCHMARK_REPLAY", calls[0]["origin"])
         self.assertEqual("conversation_replay", calls[0]["metadata"]["benchmark_phase"])
         self.assertEqual("locomo:conv-1:D1:1:1", calls[0]["metadata"]["source_turn_id"])
@@ -194,6 +206,7 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual(2, out["lifecycle"]["capture_hook_calls"])
         self.assertEqual(["low", "medium", "high"], out["cases"][0]["retrieval_order"])
         self.assertTrue(out["cases"][0]["qa_bead_written"])
+        self.assertIn("after_qa:no_associations_produced", out["warnings"])
         self.assertEqual("bench:locomo:conv-1:qa", out["qa_session_id"])
         self.assertEqual(
             [
@@ -295,6 +308,7 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertTrue(out["ok"])
         self.assertEqual(1, out["lifecycle"]["conversations"])
         self.assertEqual(1, out["lifecycle"]["qa_cases"])
+        self.assertIn("after_suite:no_associations_produced", out["warnings"])
         self.assertEqual(1, len(out["cases"]))
         self.assertEqual("locomo:conv-1:q0001", out["cases"][0]["qa_id"])
         self.assertIn("by_effort", out["scores"])
