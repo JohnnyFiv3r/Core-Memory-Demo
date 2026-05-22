@@ -60,13 +60,10 @@ class TestLocomoAnswer(unittest.TestCase):
                 retrieved_context=[],
             )
 
-    def test_llm_mode_uses_shared_demo_agent_path(self):
-        with patch("app.benchmarks.locomo_answer.run_agent_for_root", new_callable=AsyncMock) as run_agent:
-            run_agent.return_value = {
-                "ok": True,
-                "assistant": '```json\n{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}\n```',
-                "model_id": "openai:gpt-4o-mini",
-            }
+    def test_llm_mode_uses_isolated_no_memory_agent_path(self):
+        with patch("app.benchmarks.locomo_answer.Agent") as Agent:
+            agent = Agent.return_value
+            agent.run = AsyncMock(return_value='```json\n{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}\n```')
             out = generate_locomo_answer(
                 mode="llm",
                 root="/tmp/fake",
@@ -75,18 +72,17 @@ class TestLocomoAnswer(unittest.TestCase):
                 retrieved_context=[{"text": "Caroline went on 7 May 2023", "dia_ids": ["D1:3"]}],
                 generator_model="openai:gpt-4o-mini",
             )
+        Agent.assert_called_once()
+        self.assertNotIn("root", Agent.call_args.kwargs)
         self.assertEqual("7 May 2023", out["answer"])
         self.assertEqual(["D1:3"], out["used_dia_ids"])
         self.assertEqual("high", out["confidence"])
         self.assertFalse(out["unsupported"])
 
     def test_llm_mode_reconciles_non_dataset_used_ids_back_to_retrieved_dia_ids(self):
-        with patch("app.benchmarks.locomo_answer.run_agent_for_root", new_callable=AsyncMock) as run_agent:
-            run_agent.return_value = {
-                "ok": True,
-                "assistant": '```json\n{"answer":"7 May 2023","used_dia_ids":["turn-abc123"],"confidence":"high","unsupported":false}\n```',
-                "model_id": "openai:gpt-4o-mini",
-            }
+        with patch("app.benchmarks.locomo_answer.Agent") as Agent:
+            agent = Agent.return_value
+            agent.run = AsyncMock(return_value='```json\n{"answer":"7 May 2023","used_dia_ids":["turn-abc123"],"confidence":"high","unsupported":false}\n```')
             out = generate_locomo_answer(
                 mode="llm",
                 root="/tmp/fake",

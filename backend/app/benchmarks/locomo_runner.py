@@ -144,6 +144,20 @@ def _dedupe_rows(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
     return out
 
 
+def _is_locomo_transcript_row(row: dict[str, Any], *, sample_id: str) -> bool:
+    """Keep benchmark retrieval grounded in replayed transcript evidence only."""
+    item = dict(row or {})
+    if str(item.get("source_surface") or "").strip() == "claim_state":
+        return False
+    row_sample = str(item.get("sample_id") or "").strip()
+    if row_sample and row_sample != str(sample_id or "").strip():
+        return False
+    dia_ids = [str(x).strip() for x in (item.get("dia_ids") or []) if str(x).strip()]
+    if not dia_ids:
+        return False
+    return any(re.fullmatch(r"D\d+:\d+", dia) for dia in dia_ids)
+
+
 def _turn_text_from_record(rec: dict[str, Any]) -> tuple[str, dict[str, Any]]:
     md = dict((rec or {}).get("metadata") or {})
     text = str(md.get("locomo_display_text") or rec.get("assistant_final") or "").strip()
@@ -378,7 +392,10 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         if recall_result_from_memory_execute is not None:
             recall_payload = recall_result_from_memory_execute(result, query=req["query"], effort="high", include_raw=False).to_dict()
         raw_results = list(result.get("results") or [])
-        retrieved = [_extract_result_row(root=root, rank=idx, row=dict(row or {})) for idx, row in enumerate(raw_results, start=1)]
+        retrieved = [
+            row for row in [_extract_result_row(root=root, rank=idx, row=dict(row or {})) for idx, row in enumerate(raw_results, start=1)]
+            if _is_locomo_transcript_row(row, sample_id=sample_id)
+        ]
         pipeline_name = str(retrieval_pipeline or "execute_trace").strip().lower() or "execute_trace"
         # Phase 2: causal traversal anchored to semantic bead candidates.
         # Always runs as part of the single retrieval pass — results are merged
@@ -400,6 +417,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
                     _extract_result_row(root=root, rank=len(retrieved) + idx, row=dict(row or {}))
                     for idx, row in enumerate(list((trace or {}).get("results") or []), start=1)
                 ]
+                trace_rows = [row for row in trace_rows if _is_locomo_transcript_row(row, sample_id=sample_id)]
                 if trace_rows:
                     retrieved = _dedupe_rows(retrieved + trace_rows)
                 trace_meta = {
