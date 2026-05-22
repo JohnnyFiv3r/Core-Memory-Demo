@@ -214,8 +214,57 @@ class TestLocomoRunnerRetrieval(unittest.TestCase):
         self.assertEqual("ok", out["status"])
         self.assertEqual("bead-right", out["retrieved"][0]["bead_id"])
         self.assertEqual(["D1:3"], out["retrieved"][0]["dia_ids"])
-        self.assertGreater(float(out["retrieved"][0].get("locomo_score") or 0.0), float(out["retrieved"][1].get("locomo_score") or 0.0))
+        self.assertNotIn("bead-wrong", [str(r.get("bead_id") or "") for r in out["retrieved"]])
         self.assertGreaterEqual(float(out["retrieved"][0].get("score") or 0.0), 0.0)
+
+    def test_retrieval_filters_claim_state_answer_artifacts(self):
+        qa = {
+            "qa_id": "conv-1:q0005",
+            "question": "What kind of interests do Caroline and Melanie share?",
+            "answer": "painting",
+            "category": 1,
+            "evidence": ["D1:3"],
+        }
+        fake_execute = {
+            "results": [
+                {
+                    "bead_id": "bead-answer-json",
+                    "title": "prior answer",
+                    "snippet": '{"answer":"prior benchmark answer","used_dia_ids":["D9:9"]}',
+                    "score": 0.99,
+                    "source_surface": "claim_state",
+                    "dia_ids": ["abc123"],
+                },
+                {
+                    "bead_id": "bead-turn",
+                    "title": "real turn",
+                    "snippet": "Caroline and Melanie both painted sunsets",
+                    "score": 0.5,
+                    "source_surface": "session",
+                },
+            ],
+            "warnings": ["semantic_index_stale"],
+            "backend": "semantic",
+        }
+
+        def fake_inspect_bead(*, root, bead_id):
+            if bead_id == "bead-turn":
+                return {
+                    "id": "bead-turn",
+                    "detail": "Caroline and Melanie both painted sunsets",
+                    "source_turn_ids": ["locomo:conv-1:D1:3", "D1:3"],
+                    "metadata": {"sample_id": "conv-1", "dia_ids": ["D1:3"]},
+                }
+            return {"id": "bead-answer-json", "detail": "prior benchmark answer", "metadata": {}}
+
+        with patch("app.benchmarks.locomo_runner.memory_tools") as mt, patch("app.benchmarks.locomo_runner.inspect_bead") as ib, patch("app.benchmarks.locomo_runner.trace_request") as tr:
+            mt.execute.return_value = fake_execute
+            ib.side_effect = fake_inspect_bead
+            tr.return_value = {"results": [], "chains": [], "grounding": {}, "warnings": []}
+            out = run_locomo_retrieval_case(root="/tmp/fake", sample_id="conv-1", qa=qa, retrieval_k=8)
+
+        self.assertEqual(["bead-turn"], [str(r.get("bead_id") or "") for r in out["retrieved"]])
+        self.assertEqual(1.0, out["evidence_recall"]["recall@1"])
 
     def test_retrieval_case_expands_with_causal_trace(self):
         qa = {

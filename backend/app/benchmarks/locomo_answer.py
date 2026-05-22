@@ -6,9 +6,9 @@ import re
 from typing import Any
 
 try:
-    from app.core.agent_runtime import run_agent_for_root
+    from pydantic_ai import Agent
 except Exception:  # pragma: no cover
-    run_agent_for_root = None  # type: ignore
+    Agent = None  # type: ignore
 
 
 def _support_strength(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
@@ -154,23 +154,29 @@ async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_i
         "If the retrieved context does not contain enough information to answer, "
         "respond exactly with 'No information available'.\n\n"
         f"Question: {question}\n\n"
-        f"Retrieved context:\n{context_block}\n\n"
+        f"Retrieved evidence:\n{context_block}\n\n"
         "Return strict JSON with keys: answer, used_dia_ids, confidence, unsupported. "
         "Only cite dia_ids that appear in the retrieved context."
     )
-    out = await run_agent_for_root(
-        root=root,
-        session_id=f"locomo:{sample_id}",
-        message=context_prompt,
-        model_id=model_id,
-        instruction_prefix=(
-            "You are a conversational memory assistant answering questions about past conversations. "
-            "Use the retrieved context provided to form your answer. "
-            "If the context is insufficient, abstain with 'No information available'."
+    if Agent is None:
+        raise RuntimeError("pydantic_ai_unavailable")
+    # Important benchmark isolation: answer generation must not run through
+    # run_with_memory()/run_agent_for_root on the benchmark root.  That path
+    # writes the generated answer back into Core Memory, marks the semantic
+    # index dirty between QA cases, and can cause later retrieval to return a
+    # previous answer JSON as evidence.  This answerer is deliberately a plain
+    # no-tools LLM call over the already-retrieved evidence block.
+    agent = Agent(
+        model_id,
+        system_prompt=(
+            "You are a conversational memory benchmark answerer. "
+            "Only answer from the supplied retrieved evidence block. "
+            "Do not use tools, memory, prior answers, or unstated knowledge. "
+            "If the evidence is insufficient, abstain with 'No information available'."
         ),
-        metadata={"benchmark_answering": True, "sample_id": sample_id},
     )
-    raw = str(out.get("assistant") or "").strip()
+    result = await agent.run(context_prompt)
+    raw = str(getattr(result, "output", None) or getattr(result, "data", None) or result).strip()
     return _normalize_answer_payload(raw)
 
 
@@ -188,8 +194,8 @@ def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str
     if mode_name == "oracle_context":
         raise ValueError("oracle_context_answer_mode_disabled_for_scored_benchmarks")
     if mode_name == "llm":
-        if run_agent_for_root is None:
-            raise RuntimeError("agent_runtime_unavailable")
+        if Agent is None:
+            raise RuntimeError("pydantic_ai_unavailable")
         model_id = str(generator_model or "").strip()
         if not model_id:
             raise RuntimeError("missing_generator_model")

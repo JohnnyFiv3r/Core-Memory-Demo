@@ -27,7 +27,7 @@ class TestLocomoAnswerGrounding(unittest.TestCase):
         self.assertEqual([], out["used_dia_ids"])
 
     def test_llm_abstains_before_agent_call_when_support_is_weak(self):
-        with patch("app.benchmarks.locomo_answer.run_agent_for_root") as runner:
+        with patch("app.benchmarks.locomo_answer.Agent") as Agent:
             out = generate_locomo_answer(
                 mode="llm",
                 root="/tmp/fake",
@@ -43,17 +43,14 @@ class TestLocomoAnswerGrounding(unittest.TestCase):
                     }
                 ],
             )
-        runner.assert_not_called()
+        Agent.assert_not_called()
         self.assertEqual("No information available", out["answer"])
         self.assertTrue(out["unsupported"])
 
     def test_llm_uses_bounded_retrieved_context_prompt(self):
-        async def _fake_runner(**kwargs):
-            return {
-                "assistant": '{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}'
-            }
-
-        with patch("app.benchmarks.locomo_answer.run_agent_for_root", side_effect=_fake_runner) as runner:
+        with patch("app.benchmarks.locomo_answer.Agent") as Agent:
+            agent = Agent.return_value
+            agent.run = unittest.mock.AsyncMock(return_value='{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}')
             out = generate_locomo_answer(
                 mode="llm",
                 root="/tmp/fake",
@@ -73,9 +70,9 @@ class TestLocomoAnswerGrounding(unittest.TestCase):
             )
         self.assertEqual("7 May 2023", out["answer"])
         self.assertEqual(["D1:3"], out["used_dia_ids"])
-        called = runner.call_args.kwargs
-        self.assertIn("Retrieved evidence:", str(called.get("message") or ""))
-        self.assertIn("Only answer from the supplied retrieved evidence block", str(called.get("instruction_prefix") or ""))
+        prompt = str(agent.run.call_args.args[0])
+        self.assertIn("Retrieved evidence:", prompt)
+        self.assertIn("Only answer from the supplied retrieved evidence block", str(Agent.call_args.kwargs.get("system_prompt") or ""))
 
 
 if __name__ == "__main__":
