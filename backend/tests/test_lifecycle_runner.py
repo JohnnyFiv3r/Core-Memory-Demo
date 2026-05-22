@@ -16,6 +16,7 @@ from app.benchmarks.lifecycle_runner import (  # noqa: E402
     RETRIEVAL_EFFORT_ORDER,
     replay_conversation_turns,
     run_lifecycle_conversation,
+    run_locomo_lifecycle_suite,
     run_pre_qa_flush,
     run_qa_efforts,
 )
@@ -196,6 +197,51 @@ class TestLifecycleRunner(unittest.TestCase):
                     recall_fn=lambda *args, **kwargs: {},
                     write_qa_beads=False,
                 )
+
+    def test_locomo_lifecycle_suite_filters_selected_qa_cases(self):
+        events = []
+        sample = {
+            "sample_id": "conv-1",
+            "sessions": [
+                {
+                    "session_index": 1,
+                    "date_time": "1 Jan 2024",
+                    "turns": [
+                        {"dia_id": "D1:1", "speaker": "A", "text": "hi", "turn_index": 1},
+                    ],
+                }
+            ],
+            "qa": [
+                {"qa_id": "conv-1:q0001", "question": "selected?", "answer": "yes", "category": 1, "evidence": ["D1:1"]},
+                {"qa_id": "conv-1:q0002", "question": "not selected?", "answer": "no", "category": 1, "evidence": ["D1:1"]},
+            ],
+        }
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            events.append(("recall", effort, request["constraints"]["qa_id"]))
+            return {"answer": f"answer-{effort}", "warnings": []}
+
+        with tempfile.TemporaryDirectory() as td:
+            out = run_locomo_lifecycle_suite(
+                root=td,
+                samples=[sample],
+                qa_cases=[{"qa_id": "conv-1:q0001"}],
+                process_turn_finalized_fn=lambda **kwargs: {"ok": True},
+                process_flush_fn=lambda **kwargs: {"ok": True},
+                run_async_jobs_fn=lambda **kwargs: {"ok": True},
+                recall_fn=fake_recall,
+                write_qa_beads=False,
+            )
+
+        self.assertTrue(out["ok"])
+        self.assertEqual(1, out["lifecycle"]["conversations"])
+        self.assertEqual(1, out["lifecycle"]["qa_cases"])
+        self.assertEqual(1, len(out["cases"]))
+        self.assertEqual("locomo:conv-1:q0001", out["cases"][0]["qa_id"])
+        self.assertEqual(
+            [("recall", "low", "locomo:conv-1:q0001"), ("recall", "medium", "locomo:conv-1:q0001"), ("recall", "high", "locomo:conv-1:q0001")],
+            events,
+        )
 
 
 if __name__ == "__main__":

@@ -63,6 +63,7 @@ from app.benchmarks.locomo_loader import LocomoLoaderError
 from app.benchmarks.locomo_runner import run_locomo_retrieval_suite
 from app.benchmarks.locomo_scoring import aggregate_case_scores
 from app.benchmarks.locomo_suite import build_locomo_comparison, build_locomo_suite_metadata, ingest_locomo_samples, make_locomo_missing_dataset_response, write_locomo_run_artifacts
+from app.benchmarks.lifecycle_runner import run_locomo_lifecycle_suite
 from app.core.config import settings
 
 
@@ -2945,7 +2946,7 @@ def _resolve_benchmark_embeddings_provider(explicit_provider: str | None = None)
 
 def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", progress: Any | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
-    if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini"}:
+    if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini", "locomo_native_lifecycle"}:
         try:
             dataset_meta, selected_cases, selected_samples = build_locomo_suite_metadata(
                 suite=suite_name,
@@ -2979,6 +2980,113 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
         if str(root_mode or "snapshot") == "snapshot":
             _copy_tree(Path(settings.core_memory_root), base_root)
             snapshot_sanitize_meta = _sanitize_locomo_benchmark_snapshot(base_root)
+
+        if suite_name == "locomo_native_lifecycle":
+            benchmark_embeddings_provider = _resolve_benchmark_embeddings_provider(embeddings_provider)
+            with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
+                lifecycle_report = run_locomo_lifecycle_suite(
+                    root=str(base_root),
+                    samples=selected_samples,
+                    qa_cases=selected_cases,
+                    retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
+                    progress=progress,
+                )
+            if snapshot_sanitize_meta:
+                lifecycle_report["snapshot_sanitize"] = dict(snapshot_sanitize_meta)
+
+            finished_at = _utc_now_iso()
+            duration_ms = max(0, int((datetime.fromisoformat(finished_at.replace('Z', '+00:00')) - datetime.fromisoformat(started.replace('Z', '+00:00'))).total_seconds() * 1000)) if started else 0
+            selected_qa_total = int((dataset_meta.get("dataset") or {}).get("selected_qa_cases") or 0)
+            summary = {
+                "run_id": run_id,
+                "status": "completed" if bool(lifecycle_report.get("ok")) else "failed",
+                "phase": "done",
+                "started_at": started,
+                "finished_at": finished_at,
+                "duration_ms": duration_ms,
+                "suite": suite_name,
+                "samples": int((dataset_meta.get("dataset") or {}).get("selected_samples") or 0),
+                "qa_cases": selected_qa_total,
+                "qa_completed": int(lifecycle_report.get("completed") or 0),
+                "turns_ingested": int((lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
+                "answer_f1_mean": 0.0,
+                "evidence_recall_at_5": 0.0,
+                "semantic_mode": semantic_mode_name,
+                "answer_mode": "lifecycle_effort_recall",
+                "generator_model": "",
+                "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
+                "root_mode": root_mode,
+                "warnings": warnings,
+                "dataset_path": str((dataset_meta.get("dataset") or {}).get("dataset_path") or ""),
+                "locomo_repo_commit": str((dataset_meta.get("dataset") or {}).get("repo_commit") or ""),
+                "subset": str(subset or "local"),
+                "legacy_request": bool(legacy_mode),
+            }
+            report = {
+                "config": {
+                    "suite": suite_name,
+                    "root_mode": root_mode,
+                    "semantic_mode": semantic_mode_name,
+                    "sample_limit": sample_limit,
+                    "qa_limit": qa_limit,
+                    "sample_ids": list(sample_ids or []),
+                    "category_filter": list(category_filter or []),
+                    "qa_per_category": {str(k): int(v) for k, v in dict(qa_per_category or {}).items()},
+                    "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
+                    "retrieval_efforts": ["low", "medium", "high"],
+                    "recall_scope": "full_bead_corpus",
+                    "qa_session_mode": "shared",
+                    "dataset_mode": "locomo_native_lifecycle",
+                },
+                "dataset": dict((dataset_meta.get("dataset") or {})),
+                "lifecycle": dict(lifecycle_report.get("lifecycle") or {}),
+                "shortcut_guards": dict(lifecycle_report.get("shortcut_guards") or {}),
+                "scores": {},
+                "environment": {
+                    "python_version": platform.python_version(),
+                    "semantic_mode": semantic_mode_name,
+                    "embeddings_provider": benchmark_embeddings_provider,
+                },
+                "ingestion": {
+                    "mode": "locomo_native_lifecycle",
+                    "ingest_path": "lifecycle_replay",
+                    "turns_total": int((lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
+                    "ingested_turns": int((lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
+                    "snapshot_sanitize": dict(snapshot_sanitize_meta or {}),
+                },
+                "cases": list(lifecycle_report.get("cases") or [])[: max(0, int(settings.locomo_case_artifact_limit_inline))],
+                "cases_omitted": max(0, len(list(lifecycle_report.get("cases") or [])) - max(0, int(settings.locomo_case_artifact_limit_inline))),
+                "lifecycle_report": {**dict(lifecycle_report or {}), "cases": []},
+            }
+            artifacts = write_locomo_run_artifacts(
+                run_id=run_id,
+                summary=summary,
+                report=report,
+                config=dict(report.get("config") or {}),
+                dataset_meta=dict(report.get("dataset") or {}),
+                ingestion_meta=dict(report.get("ingestion") or {}),
+                cases=list(lifecycle_report.get("cases") or []),
+            )
+            summary["artifact_path"] = artifacts.get("root")
+            summary["artifact_download_url"] = f"/api/demo/benchmark/artifact/{run_id}/report.json"
+            report["artifacts"] = artifacts
+            report["artifact_download_url"] = f"/api/demo/benchmark/artifact/{run_id}/report.json"
+            history_row = {
+                "run_id": run_id,
+                "created_at": summary["finished_at"],
+                "summary": dict(summary),
+                "report": dict(report),
+                "cases": list(lifecycle_report.get("cases") or []),
+            }
+            _set_last_benchmark_cache(summary=summary, report=report, history_row=history_row)
+            try:
+                benchmark_store.save_run(history_row=history_row, artifacts=artifacts)
+            except Exception:
+                pass
+            _append_history(history_row)
+            _prune_benchmark_run_dirs()
+            return {"ok": bool(lifecycle_report.get("ok")), "suite": suite_name, "summary": summary, "report": report}
+
         ingestion_mode_name = str(ingestion_mode or settings.locomo_ingest_mode_default)
         ingest_path_active = str(settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
         ingestion_meta = ingest_locomo_samples(base_root=str(base_root), samples=selected_samples, ingestion_mode=ingestion_mode_name)

@@ -1056,7 +1056,7 @@ async def benchmark_run(request: Request):
     subset = str((body or {}).get('subset') or 'local').strip().lower() or 'local'
     if subset not in {'local', 'full'}:
         subset = 'local'
-    if suite not in {'fixture_smoke', 'locomo_qa', 'locomo_retrieval', 'locomo_mini'}:
+    if suite not in {'fixture_smoke', 'locomo_qa', 'locomo_retrieval', 'locomo_mini', 'locomo_native_lifecycle'}:
         suite = 'fixture_smoke'
     legacy_mode = not bool((body or {}).get('suite'))
     if legacy_mode and subset == 'full':

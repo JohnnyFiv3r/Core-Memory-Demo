@@ -12,6 +12,7 @@ from app.benchmarks.contracts import (
     BenchmarkTurn,
     assert_lifecycle_faithful_mode,
 )
+from app.benchmarks.locomo_loader import locomo_samples_to_benchmark_conversations
 
 RETRIEVAL_EFFORT_ORDER = ("low", "medium", "high")
 
@@ -381,4 +382,112 @@ def run_lifecycle_conversation(
         "pre_qa_flush": pre_qa_flush,
         "cases": qa_results,
         "corpus_after_qa": corpus_snapshot(root),
+    }
+
+
+def _case_identity(row: dict[str, Any]) -> str:
+    raw = str((row or {}).get("qa_id") or "").strip()
+    if raw.startswith("locomo:"):
+        return raw
+    return f"locomo:{raw}" if raw else ""
+
+
+def _filter_conversation_qa(conversation: BenchmarkConversation, selected_case_ids: set[str]) -> BenchmarkConversation:
+    if not selected_case_ids:
+        return conversation
+    qa_cases = [qa for qa in conversation.qa_cases if qa.qa_id in selected_case_ids]
+    return BenchmarkConversation(
+        benchmark_name=conversation.benchmark_name,
+        conversation_id=conversation.conversation_id,
+        session_id=conversation.session_id,
+        turns=list(conversation.turns),
+        qa_cases=qa_cases,
+        metadata=dict(conversation.metadata or {}),
+    )
+
+
+def run_locomo_lifecycle_suite(
+    *,
+    root: str | Path,
+    samples: list[dict[str, Any]],
+    qa_cases: list[dict[str, Any]] | None = None,
+    dataset_mode: str = "locomo_native_lifecycle",
+    shortcut_flags: BenchmarkShortcutFlags | None = None,
+    qa_session_mode: str = "shared",
+    process_turn_finalized_fn: ProcessTurnFinalized | None = None,
+    process_flush_fn: ProcessFlush | None = None,
+    run_async_jobs_fn: RunAsyncJobs | None = None,
+    recall_fn: RecallFunc | None = None,
+    write_qa_beads: bool = True,
+    retrieval_k: int | None = None,
+    progress: Any | None = None,
+) -> dict[str, Any]:
+    """Run faithful LoCoMo lifecycle benchmark over selected samples.
+
+    This is the first suite-level bridge from existing LoCoMo selection to the
+    new lifecycle runner. It keeps the adapter pure and preserves selected QA
+    filtering from legacy suite controls.
+    """
+
+    flags = shortcut_flags or BenchmarkShortcutFlags()
+    assert_lifecycle_faithful_mode(dataset_mode=dataset_mode, shortcut_flags=flags)
+
+    selected_case_ids = {_case_identity(row) for row in list(qa_cases or []) if _case_identity(row)}
+    conversations = [
+        _filter_conversation_qa(conv, selected_case_ids)
+        for conv in locomo_samples_to_benchmark_conversations(list(samples or []))
+    ]
+    conversations = [conv for conv in conversations if conv.turns and conv.qa_cases]
+
+    results: list[dict[str, Any]] = []
+    completed_qa = 0
+    failed = 0
+    for idx, conversation in enumerate(conversations, start=1):
+        if progress is not None:
+            try:
+                progress({"phase": "locomo_lifecycle", "conversation_index": idx, "conversations": len(conversations), "conversation_id": conversation.conversation_id})
+            except Exception:
+                pass
+        out = run_lifecycle_conversation(
+            root=root,
+            conversation=conversation,
+            dataset_mode=dataset_mode,
+            shortcut_flags=flags,
+            qa_session_mode=qa_session_mode,
+            process_turn_finalized_fn=process_turn_finalized_fn,
+            process_flush_fn=process_flush_fn,
+            run_async_jobs_fn=run_async_jobs_fn,
+            recall_fn=recall_fn,
+            write_qa_beads=write_qa_beads,
+            retrieval_k=retrieval_k,
+        )
+        results.append(out)
+        completed_qa += int(((out.get("lifecycle") or {}).get("qa_cases") or 0))
+        if not bool(out.get("ok")):
+            failed += 1
+
+    cases: list[dict[str, Any]] = []
+    for result in results:
+        cases.extend(list(result.get("cases") or []))
+
+    return {
+        "ok": failed == 0,
+        "dataset_mode": dataset_mode,
+        "lifecycle": {
+            "dataset_mode": dataset_mode,
+            "lifecycle_faithful": dataset_mode == "locomo_native_lifecycle" and not flags.any_enabled(),
+            "conversations": len(conversations),
+            "turns_replayed": sum(int(((r.get("lifecycle") or {}).get("turns_replayed") or 0)) for r in results),
+            "capture_hook_calls": sum(int(((r.get("lifecycle") or {}).get("capture_hook_calls") or 0)) for r in results),
+            "pre_qa_flush_ran": all(bool((r.get("lifecycle") or {}).get("pre_qa_flush_ran")) for r in results) if results else False,
+            "qa_session_mode": qa_session_mode,
+            "qa_cases": completed_qa,
+            "retrieval_efforts_per_qa": list(RETRIEVAL_EFFORT_ORDER),
+        },
+        "shortcut_guards": flags.to_dict(),
+        "completed": completed_qa,
+        "failed_conversations": failed,
+        "conversations": results,
+        "cases": cases,
+        "corpus_after_suite": corpus_snapshot(root),
     }
