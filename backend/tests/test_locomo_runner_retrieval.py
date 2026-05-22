@@ -114,7 +114,7 @@ class TestLocomoRunnerRetrieval(unittest.TestCase):
         facets = req.get("facets") or {}
         self.assertEqual("project", (facets.get("scope") or ""))
         self.assertEqual("conv-1", ((facets.get("metadata") or {}).get("sample_id") or ""))
-        self.assertEqual("locomo:conv-1", ((facets.get("metadata") or {}).get("session_id") or ""))
+        self.assertNotIn("session_id", facets.get("metadata") or {})
         must_terms = list(facets.get("must_terms") or [])
         self.assertNotIn("conv-1", must_terms)
         self.assertNotIn("caroline", [str(x).lower() for x in must_terms])

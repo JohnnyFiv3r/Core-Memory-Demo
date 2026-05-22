@@ -444,6 +444,88 @@ def _locomo_core_session_id(sample_id: str, session_index: int | str | None = No
     return f"{base}:session:{int(session_index or 0)}"
 
 
+def _locomo_turn_detail(row: dict[str, Any], *, display: str) -> str:
+    session_date = str(row.get("session_date_time") or "").strip()
+    detail = f"Session date: {session_date}\n\n{display}" if session_date else display
+    caption = str(row.get("blip_caption") or "").strip()
+    if caption:
+        detail = f"{detail}\n\nImage caption: {caption}".strip()
+    return detail
+
+
+def _ensure_locomo_evidence_bead(*, root: str, row: dict[str, Any], session_id: str, turn_id: str, dia_id: str, display: str) -> str:
+    """Persist one retrievable Core Memory evidence bead per LoCoMo turn.
+
+    The benchmark must exercise Core Memory retrieval over replayed transcript
+    memory, not over answer-key shortcuts.  Turn finalization + flush may compact
+    ordinary rolling-window beads down to session summaries, so this benchmark
+    adapter also writes a durable promoted evidence bead whose only payload is
+    the observed transcript turn and native `source_turn_ids` provenance.
+    """
+    target_root = str(root or settings.core_memory_root)
+    sample_id = str(row.get("sample_id") or "").strip() or "unknown"
+    speaker = str(row.get("speaker") or "").strip()
+    session_index = int(row.get("session_index") or 0)
+    turn_index = int(row.get("turn_index") or 0)
+    detail = _locomo_turn_detail(row, display=display)
+    store = MemoryStore(target_root)
+
+    # Idempotency for local replays/tests: do not duplicate the same evidence
+    # bead if the turn is replayed in an existing root.
+    try:
+        existing = store._read_json(store.beads_dir / "index.json")
+        for bid, bead in dict((existing.get("beads") or {})).items():
+            source_ids = {str(x).strip() for x in (bead or {}).get("source_turn_ids") or [] if str(x).strip()}
+            # LoCoMo dia_id values (for example D1:1) are reused across
+            # conversations, so idempotency must be scoped to the full
+            # sample-qualified turn_id.
+            if turn_id in source_ids:
+                tags = {str(x) for x in (bead or {}).get("tags") or []}
+                if "locomo_turn_evidence" in tags:
+                    return str(bid)
+    except Exception:
+        pass
+
+    return str(
+        store.add_bead(
+            type="evidence",
+            title=display[:160] or "LoCoMo replay turn",
+            summary=[display[:240] or "LoCoMo replay turn"],
+            detail=detail,
+            session_id=session_id,
+            source_turn_ids=[turn_id, dia_id],
+            tags=["locomo_replay", "locomo_turn_evidence", f"sample:{sample_id}", f"session:{session_index}"],
+            entities=[x for x in [speaker, f"locomo:{sample_id}"] if x],
+            topics=[f"sample:{sample_id}", f"session:{session_index}"],
+            retrieval_eligible=True,
+            retrieval_title=display[:200] or "LoCoMo replay turn",
+            retrieval_facts=[detail[:500]],
+            status="promoted",
+            promotion_state="promoted",
+            promotion_locked=True,
+            authority="benchmark_transcript_replay",
+            metadata={
+                "sample_id": sample_id,
+                "locomo_sample_id": sample_id,
+                "session_index": session_index,
+                "locomo_session_index": session_index,
+                "turn_index": turn_index,
+                "locomo_turn_index": turn_index,
+                "dia_id": dia_id,
+                "dia_ids": [dia_id],
+                "locomo_dia_id": dia_id,
+                "locomo_dia_ids": [dia_id],
+                "speaker": speaker,
+                "locomo_speaker": speaker,
+                "session_date_time": str(row.get("session_date_time") or ""),
+                "locomo_session_date_time": str(row.get("session_date_time") or ""),
+                "locomo_display_text": display,
+                "locomo_raw_text": str(row.get("text") or ""),
+            },
+        )
+    )
+
+
 def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[str, Any]:
     sample_id = str(row.get("sample_id") or "").strip() or "unknown"
     dia_id = str(row.get("dia_id") or "").strip() or f"row-{uuid.uuid4().hex[:8]}"
@@ -453,6 +535,7 @@ def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[
     session_id = _locomo_core_session_id(sample_id, session_index)
     turn_id = f"locomo:{sample_id}:{dia_id}"
     display = f"{speaker}: {text}" if speaker else text
+    detail = _locomo_turn_detail(row, display=display)
     metadata = {
         "source": "locomo_replay",
         "replay_source": "locomo",
@@ -476,11 +559,7 @@ def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[
                     "type": "context",
                     "title": display[:160] or "LoCoMo replay turn",
                     "summary": [display[:240] or "LoCoMo replay turn"],
-                    "detail": (
-                        f"Session date: {str(row.get('session_date_time') or '')}\n\n{display}"
-                        if str(row.get('session_date_time') or '').strip()
-                        else display
-                    ),
+                    "detail": detail,
                     "source_turn_ids": [turn_id, dia_id],
                     "entities": [x for x in [speaker, f"locomo:{sample_id}"] if x],
                     "tags": ["crawler_reviewed", "turn_finalized", "locomo_replay"],
@@ -530,7 +609,15 @@ def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[
     )
     if not bool((out or {}).get("ok", False)):
         return {"ok": False, "session_id": session_id, "turn_id": turn_id, "dia_id": dia_id, "result": dict(out or {})}
-    return {"ok": True, "session_id": session_id, "turn_id": turn_id, "dia_id": dia_id, "result": dict(out or {})}
+    evidence_bead_id = _ensure_locomo_evidence_bead(
+        root=str(root or settings.core_memory_root),
+        row=row,
+        session_id=session_id,
+        turn_id=turn_id,
+        dia_id=dia_id,
+        display=display,
+    )
+    return {"ok": True, "session_id": session_id, "turn_id": turn_id, "dia_id": dia_id, "evidence_bead_id": evidence_bead_id, "result": dict(out or {})}
 
 
 def ingest_locomo_samples_through_core_memory(
@@ -702,6 +789,7 @@ def _validate_locomo_benchmark_corpus(*, root: str, turns_ingested: int, semanti
         corpus = []
     entries = int((semantic_build or {}).get("entries") or 0)
     source_turn_ids: set[str] = set()
+    sample_scoped_turn_ids: set[str] = set()
     dia_ids: set[str] = set()
     distinct_beads: set[str] = set()
     for row in corpus:
@@ -710,31 +798,41 @@ def _validate_locomo_benchmark_corpus(*, root: str, turns_ingested: int, semanti
             distinct_beads.add(bid)
         for tid in [str(x).strip() for x in (row.get("source_turn_ids") or []) if str(x).strip()]:
             source_turn_ids.add(tid)
+            if tid.startswith("locomo:"):
+                sample_scoped_turn_ids.add(tid)
             dia = _locomo_dia_from_turn_id(tid)
             if dia:
                 dia_ids.add(dia)
-    if int(turns_ingested or 0) <= 0:
+    turns_n = int(turns_ingested or 0)
+    if turns_n <= 0:
         min_entries = 0
-        min_dia_ids = 0
-    elif int(turns_ingested or 0) < 20:
-        min_entries = 1
-        min_dia_ids = 1
+        min_sample_scoped_turn_ids = 0
+    elif turns_n < 20:
+        min_entries = turns_n
+        min_sample_scoped_turn_ids = turns_n
     else:
-        min_entries = min(10, max(2, int(turns_ingested or 0) // 20))
-        min_dia_ids = min(10, max(2, int(turns_ingested or 0) // 20))
+        # A valid LoCoMo benchmark corpus needs turn-level evidence coverage.
+        # Session-head summaries (e.g. 32 rows for 663 replayed turns) are not
+        # enough: most gold evidence IDs point at later dialogue rows.
+        min_entries = max(20, int(float(turns_n) * 0.80))
+        # Use sample-scoped turn IDs for this threshold. Bare LoCoMo dia IDs
+        # such as D1:1 repeat across conversations, so distinct normalized dia
+        # IDs can undercount a complete multi-sample corpus.
+        min_sample_scoped_turn_ids = max(20, int(float(turns_n) * 0.80))
     validation = {
         "ok": True,
         "visible_beads": len(distinct_beads),
         "semantic_entries": entries,
         "source_turn_ids_visible": len(source_turn_ids),
+        "sample_scoped_turn_ids_visible": len(sample_scoped_turn_ids),
         "distinct_dia_ids_visible": len(dia_ids),
         "min_semantic_entries": min_entries,
-        "min_distinct_dia_ids": min_dia_ids,
+        "min_sample_scoped_turn_ids": min_sample_scoped_turn_ids,
     }
     errors: list[str] = []
     if int(turns_ingested or 0) > 0 and entries < min_entries:
         errors.append("semantic_index_too_small")
-    if int(turns_ingested or 0) > 0 and len(dia_ids) < min_dia_ids:
+    if int(turns_ingested or 0) > 0 and len(sample_scoped_turn_ids) < min_sample_scoped_turn_ids:
         errors.append("source_turn_provenance_too_small")
     if errors:
         validation["ok"] = False

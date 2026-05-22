@@ -80,7 +80,6 @@ def _locomo_facets(*, sample_id: str, question: str) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     if sample:
         metadata["sample_id"] = sample
-        metadata["session_id"] = f"locomo:{sample}"
 
     must_terms: list[str] = []
     # Session references are metadata on LoCoMo turns, so they remain safe as
