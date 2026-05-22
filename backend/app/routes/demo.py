@@ -1222,6 +1222,12 @@ async def benchmark_run(request: Request):
         row['error'] = 'benchmark_run_disabled'
         _benchmark_event(row, 'failed', 'Benchmark run disabled')
         return JSONResponse({'ok': False, 'job_id': job_id, 'status': 'failed', 'error': row['error']}, status_code=503)
+    if run_mode in {'inline', 'sync', 'synchronous'}:
+        _benchmark_event(row, 'queued', 'Benchmark queued', supersedes=prior_job_id or '')
+        await _run_benchmark_job(job_id, kwargs)
+        if isinstance(row.get('result'), dict):
+            return dict(row.get('result') or {})
+        return _benchmark_job_payload(row)
     task = asyncio.create_task(_run_benchmark_job(job_id, kwargs))
     row['task'] = task
     _benchmark_event(row, 'queued', 'Benchmark queued', supersedes=prior_job_id or '')
