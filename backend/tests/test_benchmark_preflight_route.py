@@ -26,6 +26,18 @@ class TestBenchmarkPreflightRoute(unittest.TestCase):
         self.assertTrue(any(row['name'] == 'openai' for row in body['semantic']['dependencies']))
         self.assertTrue(any(row['name'] == 'pydantic_ai' for row in body['answering']['dependencies']))
 
+    def test_preflight_defaults_to_lifecycle_suite(self):
+        from fastapi.testclient import TestClient
+        from app.main import app
+
+        with patch('app.routes.demo.build_locomo_suite_metadata') as build_meta:
+            build_meta.return_value = ({'dataset': {'selected_samples': 1, 'selected_qa_cases': 1}}, [], [], {})
+            c = TestClient(app)
+            res = c.get('/api/demo/benchmark/preflight')
+
+        self.assertEqual(200, res.status_code)
+        self.assertEqual('locomo_native_lifecycle', build_meta.call_args.kwargs.get('suite'))
+
 
 if __name__ == '__main__':
     unittest.main()
