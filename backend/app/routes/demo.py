@@ -283,6 +283,7 @@ def _dispatch_benchmark_job(job_id: str, body: dict[str, Any], kwargs: dict[str,
 def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
     events = list(row.get('events') or [])
     latest = dict(events[-1] or {}) if events else {}
+    kwargs = dict(row.get('kwargs') or {})
     return {
         'run_id': '',
         'job_id': str(row.get('job_id') or ''),
@@ -290,6 +291,11 @@ def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
         'phase': str(row.get('stage') or latest.get('stage') or 'working'),
         'started_at': datetime.fromtimestamp(int(row.get('started_ms') or _now_ms()) / 1000, timezone.utc).isoformat(),
         'updated_at': datetime.fromtimestamp(int(row.get('updated_ms') or _now_ms()) / 1000, timezone.utc).isoformat(),
+        'suite': str(kwargs.get('suite') or ''),
+        'root_mode': str(kwargs.get('root_mode') or ''),
+        'semantic_mode': str(kwargs.get('semantic_mode_name') or ''),
+        'answer_mode': str(kwargs.get('answer_mode') or ''),
+        'retrieval_k': int(kwargs.get('retrieval_k') or 0),
         'qa_completed': int(latest.get('qa_completed') or 0),
         'qa_cases': int(latest.get('qa_total') or 0),
         'sample_id': str(latest.get('sample_id') or ''),
@@ -301,20 +307,24 @@ def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    summary = dict(snapshot.get('summary') or {})
+    active_summary = _active_benchmark_summary(active_job)
     report = dict(snapshot.get('report') or {})
-    live_run_id = str(summary.get('run_id') or report.get('run_id') or '').strip()
     active_job_id = str(active_job.get('job_id') or '')
-    if live_run_id:
-        summary['job_id'] = active_job_id
+    if active_job_id:
+        summary = active_summary
         summary['active'] = True
         compact_report: dict[str, Any] = {
             'live': True,
-            'run_id': live_run_id,
-            'status': str(report.get('status') or summary.get('status') or active_job.get('status') or 'running'),
-            'phase': str(report.get('phase') or summary.get('phase') or active_job.get('stage') or 'working'),
+            'run_id': '',
+            'status': str(summary.get('status') or active_job.get('status') or 'running'),
+            'phase': str(summary.get('phase') or active_job.get('stage') or 'working'),
             'active_job_id': active_job_id,
             'active': True,
+            'qa_completed': int(summary.get('qa_completed') or 0),
+            'qa_cases': int(summary.get('qa_cases') or 0),
+            'sample_id': str(summary.get('sample_id') or ''),
+            'qa_id': str(summary.get('qa_id') or ''),
+            'case_status': str(summary.get('case_status') or ''),
         }
         for key in (
             'started_at',
@@ -335,13 +345,15 @@ def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]
             if key in summary:
                 compact_report[key] = summary.get(key)
         config = report.get('config')
+        kwargs = dict(active_job.get('kwargs') or {})
         if isinstance(config, dict) and config:
             compact_report['config'] = {
-                'suite': str(config.get('suite') or summary.get('suite') or ''),
-                'root_mode': str(config.get('root_mode') or summary.get('root_mode') or ''),
-                'semantic_mode': str(config.get('semantic_mode') or summary.get('semantic_mode') or ''),
-                'answer_mode': str(config.get('answer_mode') or summary.get('answer_mode') or ''),
-                'retrieval_k': int(config.get('retrieval_k') or summary.get('retrieval_k') or 0),
+                'suite': str(kwargs.get('suite') or config.get('suite') or summary.get('suite') or ''),
+                'root_mode': str(kwargs.get('root_mode') or config.get('root_mode') or summary.get('root_mode') or ''),
+                'semantic_mode': str(kwargs.get('semantic_mode_name') or config.get('semantic_mode') or summary.get('semantic_mode') or ''),
+                'answer_mode': str(kwargs.get('answer_mode') or config.get('answer_mode') or summary.get('answer_mode') or ''),
+                'retrieval_k': int(kwargs.get('retrieval_k') or config.get('retrieval_k') or summary.get('retrieval_k') or 0),
+                'qa_session_mode': str(kwargs.get('qa_session_mode') or config.get('qa_session_mode') or ''),
             }
         elif summary:
             compact_report['config'] = {
@@ -350,6 +362,7 @@ def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]
                 'semantic_mode': str(summary.get('semantic_mode') or ''),
                 'answer_mode': str(summary.get('answer_mode') or ''),
                 'retrieval_k': int(summary.get('retrieval_k') or 0),
+                'qa_session_mode': str(kwargs.get('qa_session_mode') or ''),
             }
         dataset = report.get('dataset')
         if isinstance(dataset, dict) and dataset:
@@ -380,7 +393,7 @@ def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]
                 'error': semantic_build.get('error'),
             }
         return summary, compact_report
-    summary = _active_benchmark_summary(active_job)
+    summary = active_summary
     report = {
         'status': str(active_job.get('status') or 'running'),
         'phase': str(active_job.get('stage') or 'working'),
@@ -483,15 +496,17 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             return
         current['status'] = 'running'
         current['updated_ms'] = _now_ms()
+        stage = str((result or {}).get('phase') or 'retrieving').strip().lower() or 'retrieving'
+        status = str((result or {}).get('status') or '').strip()
         _benchmark_event(
             current,
-            'retrieving',
+            stage,
             f'QA {int(completed)}/{int(total)}',
             qa_completed=int(completed),
             qa_total=int(total),
             sample_id=str((case or {}).get('sample_id') or ''),
             qa_id=str((case or {}).get('qa_id') or ''),
-            case_status=str((result or {}).get('status') or ''),
+            case_status=status,
         )
 
     try:
@@ -1167,6 +1182,7 @@ async def benchmark_run(request: Request):
     job_id = uuid.uuid4().hex[:12]
     row = {
         'job_id': job_id,
+        'kwargs': dict(kwargs),
         'status': 'queued',
         'stage': 'queued',
         'done': False,

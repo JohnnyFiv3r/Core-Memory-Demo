@@ -45,6 +45,8 @@ function BenchmarkPane(props) {
   const qaCases = Number((summary || {}).qa_cases || 0)
   const qaCompleted = Number((summary || {}).qa_completed || (status === 'completed' ? qaCases : 0))
   const activeSampleId = String((summary || {}).sample_id || '').trim()
+  const activeQaId = String((summary || {}).qa_id || '').trim()
+  const activeCaseStatus = String((summary || {}).case_status || '').trim()
   const isActiveRun = !!((runId || activeJobId) && !hasFinishedAt && status !== 'completed' && status !== 'failed')
   const runLabel = isActiveRun
     ? (activeJobId ? ('job_id=' + activeJobId) : (runId ? ('run_id=' + runId) : ''))
@@ -60,6 +62,8 @@ function BenchmarkPane(props) {
     ingested: 50,
     semantic_built: 70,
     retrieving: 82,
+    locomo_lifecycle: 58,
+    lifecycle_qa: 82,
     scoring: 92,
     writing_artifacts: 97,
     completed: 100,
@@ -319,7 +323,9 @@ function BenchmarkPane(props) {
               (runLabel ? (' · ' + runLabel) : '') +
               (turnsIngested > 0 ? (' · turns=' + String(turnsIngested)) : '') +
               (qaCases > 0 ? (' · qa=' + String(qaCompleted) + '/' + String(qaCases)) : '') +
-              (activeSampleId ? (' · sample=' + activeSampleId) : '')
+              (activeSampleId ? (' · sample=' + activeSampleId) : '') +
+              (activeQaId ? (' · qa_id=' + activeQaId) : '') +
+              (activeCaseStatus ? (' · status=' + activeCaseStatus) : '')
           ),
           React.createElement(
             'div',

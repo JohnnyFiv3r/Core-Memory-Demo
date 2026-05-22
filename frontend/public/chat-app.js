@@ -4282,6 +4282,8 @@ async function runBenchmark() {
             qa_cases: Number(evt.qa_total || (lastBenchmarkSummary || {}).qa_cases || 0),
             qa_completed: Number(evt.qa_completed || 0),
             sample_id: String(evt.sample_id || ''),
+            qa_id: String(evt.qa_id || ''),
+            case_status: String(evt.case_status || ''),
           };
           updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
           renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});

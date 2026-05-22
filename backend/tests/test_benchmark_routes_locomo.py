@@ -8,6 +8,49 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 class TestBenchmarkRoutesLocomo(unittest.TestCase):
+    def test_active_benchmark_state_uses_active_job_not_stale_finished_snapshot(self):
+        from app.routes import demo as demo_routes
+
+        active_job = {
+            "job_id": "job-live",
+            "status": "running",
+            "stage": "lifecycle_qa",
+            "started_ms": 1000,
+            "updated_ms": 2000,
+            "kwargs": {
+                "suite": "locomo_native_lifecycle",
+                "root_mode": "snapshot",
+                "semantic_mode_name": "required",
+                "retrieval_k": 8,
+                "qa_session_mode": "isolated",
+            },
+            "events": [
+                {
+                    "seq": 1,
+                    "stage": "lifecycle_qa",
+                    "qa_completed": 3,
+                    "qa_total": 10,
+                    "sample_id": "conv-1",
+                    "qa_id": "locomo:conv-1:q0003",
+                    "case_status": "retrieving",
+                }
+            ],
+        }
+        stale_snapshot = {
+            "summary": {"run_id": "old-run", "status": "completed", "finished_at": "2026-01-01T00:00:00Z"},
+            "report": {"config": {"suite": "locomo_qa"}},
+        }
+
+        summary, report = demo_routes._active_benchmark_state(active_job, stale_snapshot)
+
+        self.assertEqual("", summary.get("run_id"))
+        self.assertNotIn("finished_at", summary)
+        self.assertEqual("running", summary.get("status"))
+        self.assertEqual(3, summary.get("qa_completed"))
+        self.assertEqual("locomo:conv-1:q0003", summary.get("qa_id"))
+        self.assertEqual("job-live", report.get("active_job_id"))
+        self.assertEqual("isolated", (report.get("config") or {}).get("qa_session_mode"))
+
     def test_locomo_suite_missing_dataset_fails_clearly(self):
         try:
             from fastapi.testclient import TestClient
