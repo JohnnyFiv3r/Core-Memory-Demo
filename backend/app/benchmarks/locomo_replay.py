@@ -63,8 +63,18 @@ def _turn_envelope(*, sample_id: str, session_index: int, turn: dict[str, Any]) 
         'turn_id': turn_id,
         'transaction_id': f'tx-{turn_id}',
         'trace_id': f'tr-{turn_id}',
-        'user_query': f'[LoCoMo replay] session={session_index} dia_id={dia_id} speaker={speaker}',
-        'assistant_final': f'{speaker}: {text}'.strip(': '),
+        'turns': [
+            {
+                'speaker': 'locomo_replay',
+                'role': 'user',
+                'content': f'[LoCoMo replay] session={session_index} dia_id={dia_id} speaker={speaker}',
+            },
+            {
+                'speaker': speaker,
+                'role': 'assistant',
+                'content': f'{speaker}: {text}'.strip(': '),
+            }
+        ],
         'trace_depth': 0,
         'origin': 'LOCOMO_REPLAY',
         'tools_trace': [],

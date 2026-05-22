@@ -2,6 +2,8 @@
 
 Status: research/design note
 
+> Phase 0 fencing note: this document describes useful UX seams. It does not authorize seed-like shortcut ingestion for authoritative LoCoMo runs. `locomo_native_lifecycle` must follow `../../docs/locomo-lifecycle-benchmark-prd.md` and the mode boundaries in `locomo-benchmark-mode-matrix.md`.
+
 ## User requirement captured
 
 Desired UX:

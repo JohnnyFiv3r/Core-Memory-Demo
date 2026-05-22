@@ -1,5 +1,7 @@
 # LoCoMo seam and integration research
 
+> Phase 0 fencing note: treat this as historical/context research. Authoritative lifecycle implementation guidance now lives in `../../docs/locomo-lifecycle-benchmark-prd.md`; mode boundaries live in `locomo-benchmark-mode-matrix.md`.
+
 Status: research-only documentation for adapter planning
 Source repo cloned at: `/home/node/.openclaw/workspace/locomo`
 Observed branch/commit: `main` @ `3eb6f2c`
