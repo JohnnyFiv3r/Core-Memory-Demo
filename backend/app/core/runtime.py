@@ -789,6 +789,7 @@ def _validate_locomo_benchmark_corpus(*, root: str, turns_ingested: int, semanti
         corpus = []
     entries = int((semantic_build or {}).get("entries") or 0)
     source_turn_ids: set[str] = set()
+    sample_scoped_turn_ids: set[str] = set()
     dia_ids: set[str] = set()
     distinct_beads: set[str] = set()
     for row in corpus:
@@ -797,35 +798,41 @@ def _validate_locomo_benchmark_corpus(*, root: str, turns_ingested: int, semanti
             distinct_beads.add(bid)
         for tid in [str(x).strip() for x in (row.get("source_turn_ids") or []) if str(x).strip()]:
             source_turn_ids.add(tid)
+            if tid.startswith("locomo:"):
+                sample_scoped_turn_ids.add(tid)
             dia = _locomo_dia_from_turn_id(tid)
             if dia:
                 dia_ids.add(dia)
     turns_n = int(turns_ingested or 0)
     if turns_n <= 0:
         min_entries = 0
-        min_dia_ids = 0
+        min_sample_scoped_turn_ids = 0
     elif turns_n < 20:
         min_entries = turns_n
-        min_dia_ids = turns_n
+        min_sample_scoped_turn_ids = turns_n
     else:
         # A valid LoCoMo benchmark corpus needs turn-level evidence coverage.
         # Session-head summaries (e.g. 32 rows for 663 replayed turns) are not
         # enough: most gold evidence IDs point at later dialogue rows.
         min_entries = max(20, int(float(turns_n) * 0.80))
-        min_dia_ids = max(20, int(float(turns_n) * 0.80))
+        # Use sample-scoped turn IDs for this threshold. Bare LoCoMo dia IDs
+        # such as D1:1 repeat across conversations, so distinct normalized dia
+        # IDs can undercount a complete multi-sample corpus.
+        min_sample_scoped_turn_ids = max(20, int(float(turns_n) * 0.80))
     validation = {
         "ok": True,
         "visible_beads": len(distinct_beads),
         "semantic_entries": entries,
         "source_turn_ids_visible": len(source_turn_ids),
+        "sample_scoped_turn_ids_visible": len(sample_scoped_turn_ids),
         "distinct_dia_ids_visible": len(dia_ids),
         "min_semantic_entries": min_entries,
-        "min_distinct_dia_ids": min_dia_ids,
+        "min_sample_scoped_turn_ids": min_sample_scoped_turn_ids,
     }
     errors: list[str] = []
     if int(turns_ingested or 0) > 0 and entries < min_entries:
         errors.append("semantic_index_too_small")
-    if int(turns_ingested or 0) > 0 and len(dia_ids) < min_dia_ids:
+    if int(turns_ingested or 0) > 0 and len(sample_scoped_turn_ids) < min_sample_scoped_turn_ids:
         errors.append("source_turn_provenance_too_small")
     if errors:
         validation["ok"] = False

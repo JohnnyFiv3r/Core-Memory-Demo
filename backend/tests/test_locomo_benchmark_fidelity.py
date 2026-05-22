@@ -135,7 +135,21 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
         with patch.object(runtime_mod, 'build_visible_corpus', return_value=rows):
             out = runtime_mod._validate_locomo_benchmark_corpus(root='/tmp/fake', turns_ingested=100, semantic_build={'entries': 85})
         self.assertTrue(out['ok'])
+        self.assertEqual(85, out['sample_scoped_turn_ids_visible'])
         self.assertEqual(85, out['distinct_dia_ids_visible'])
+
+    def test_corpus_validation_is_sample_scoped_not_bare_dia_scoped(self):
+        if runtime_mod is None:
+            self.skipTest('runtime unavailable')
+        rows = []
+        for sample_i in range(1, 6):
+            for dia_i in range(1, 21):
+                rows.append({'bead_id': f'b{sample_i}-{dia_i}', 'source_turn_ids': [f'locomo:conv-{sample_i}:D1:{dia_i}', f'D1:{dia_i}']})
+        with patch.object(runtime_mod, 'build_visible_corpus', return_value=rows):
+            out = runtime_mod._validate_locomo_benchmark_corpus(root='/tmp/fake', turns_ingested=100, semantic_build={'entries': 100})
+        self.assertTrue(out['ok'])
+        self.assertEqual(100, out['sample_scoped_turn_ids_visible'])
+        self.assertEqual(20, out['distinct_dia_ids_visible'])
 
     def test_corpus_validation_rejects_session_head_only_corpus(self):
         if runtime_mod is None:
