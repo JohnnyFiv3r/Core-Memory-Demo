@@ -272,6 +272,7 @@ class TestLifecycleRunner(unittest.TestCase):
 
     def test_locomo_lifecycle_suite_filters_selected_qa_cases(self):
         events = []
+        progress_events = []
         sample = {
             "sample_id": "conv-1",
             "sessions": [
@@ -303,6 +304,7 @@ class TestLifecycleRunner(unittest.TestCase):
                 run_async_jobs_fn=lambda **kwargs: {"ok": True},
                 recall_fn=fake_recall,
                 write_qa_beads=False,
+                progress=lambda completed, total, case, result: progress_events.append((completed, total, case.get("qa_id"), result.get("status"))),
             )
 
         self.assertTrue(out["ok"])
@@ -316,6 +318,8 @@ class TestLifecycleRunner(unittest.TestCase):
             [("recall", "low", "locomo:conv-1:q0001"), ("recall", "medium", "locomo:conv-1:q0001"), ("recall", "high", "locomo:conv-1:q0001")],
             events,
         )
+        self.assertIn((0, 1, "locomo:conv-1:q0001", "retrieving"), progress_events)
+        self.assertIn((1, 1, "locomo:conv-1:q0001", "ok"), progress_events)
 
 
 if __name__ == "__main__":

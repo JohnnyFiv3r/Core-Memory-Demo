@@ -475,6 +475,26 @@ def _isolated_qa_root(*, root: str | Path, conversation: BenchmarkConversation, 
     return out
 
 
+def _emit_progress(progress: Any | None, completed: int, total: int, qa: BenchmarkQA | None, result: dict[str, Any]) -> None:
+    if progress is None:
+        return
+    metadata = dict((qa.metadata if qa else {}) or {})
+    case = {
+        "qa_id": str((qa.qa_id if qa else "") or ""),
+        "sample_id": str(metadata.get("sample_id") or metadata.get("locomo_sample_id") or ""),
+        "question": str((qa.question if qa else "") or ""),
+    }
+    try:
+        progress(int(completed), int(total), case, dict(result or {}))
+    except TypeError:
+        try:
+            progress({"completed": int(completed), "total": int(total), "case": case, "result": dict(result or {})})
+        except Exception:
+            pass
+    except Exception:
+        pass
+
+
 def run_lifecycle_conversation(
     *,
     root: str | Path,
@@ -488,6 +508,9 @@ def run_lifecycle_conversation(
     recall_fn: RecallFunc | None = None,
     write_qa_beads: bool = True,
     retrieval_k: int | None = None,
+    progress: Any | None = None,
+    progress_total: int | None = None,
+    progress_completed_offset: int = 0,
 ) -> dict[str, Any]:
     """Run the faithful benchmark lifecycle for one normalized conversation."""
 
@@ -507,7 +530,10 @@ def run_lifecycle_conversation(
 
     qa_session_id = conversation.session_id.replace(":replay", ":qa") if conversation.session_id.endswith(":replay") else f"{conversation.session_id}:qa"
     qa_results: list[dict[str, Any]] = []
-    for qa in conversation.qa_cases:
+    total_for_progress = int(progress_total if progress_total is not None else len(conversation.qa_cases))
+    offset_for_progress = int(progress_completed_offset or 0)
+    for idx, qa in enumerate(conversation.qa_cases, start=1):
+        _emit_progress(progress, offset_for_progress + idx - 1, total_for_progress, qa, {"status": "retrieving", "phase": "lifecycle_qa", "conversation_id": conversation.conversation_id})
         qa_root: str | Path = root
         qa_session_id_for_case = qa_session_id
         isolated_meta: dict[str, Any] = {"enabled": False}
@@ -532,6 +558,7 @@ def run_lifecycle_conversation(
         qa_result["qa_session_mode"] = qa_session_mode_name
         qa_result["isolated_qa"] = isolated_meta
         qa_results.append(qa_result)
+        _emit_progress(progress, offset_for_progress + idx, total_for_progress, qa, {"status": "ok", "phase": "lifecycle_qa", "conversation_id": conversation.conversation_id})
 
     scores = aggregate_lifecycle_effort_scores(qa_results)
     corpus_after_qa = corpus_snapshot(root)
@@ -625,12 +652,9 @@ def run_locomo_lifecycle_suite(
     results: list[dict[str, Any]] = []
     completed_qa = 0
     failed = 0
+    total_qa = sum(len(conv.qa_cases) for conv in conversations)
     for idx, conversation in enumerate(conversations, start=1):
-        if progress is not None:
-            try:
-                progress({"phase": "locomo_lifecycle", "conversation_index": idx, "conversations": len(conversations), "conversation_id": conversation.conversation_id})
-            except Exception:
-                pass
+        _emit_progress(progress, completed_qa, total_qa, None, {"status": "replaying", "phase": "locomo_lifecycle", "conversation_index": idx, "conversations": len(conversations), "conversation_id": conversation.conversation_id})
         out = run_lifecycle_conversation(
             root=root,
             conversation=conversation,
@@ -643,6 +667,9 @@ def run_locomo_lifecycle_suite(
             recall_fn=recall_fn,
             write_qa_beads=write_qa_beads,
             retrieval_k=retrieval_k,
+            progress=progress,
+            progress_total=total_qa,
+            progress_completed_offset=completed_qa,
         )
         results.append(out)
         completed_qa += int(((out.get("lifecycle") or {}).get("qa_cases") or 0))
