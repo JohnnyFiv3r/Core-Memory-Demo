@@ -33,14 +33,24 @@ function BenchmarkPane(props) {
   const history = Array.isArray(benchmarkMeta.history) ? benchmarkMeta.history : []
   const formatIsoShort = typeof props.formatIsoShort === 'function' ? props.formatIsoShort : fmtIso
   const openPayload = typeof props.onOpenPayload === 'function' ? props.onOpenPayload : () => {}
+  const onCancel = typeof props.onCancel === 'function' ? props.onCancel : null
+  // liveJobId is the authoritative signal that a poll loop owns the benchmark state.
+  // When set, treat the run as active regardless of what summary says — prevents stale
+  // finished_at / status from the previous run making isActiveRun flip to false.
+  const liveJobId = String(props.liveJobId || '').trim()
 
   const suite = String((summary || {}).suite || '')
   const isLocomo = suite && suite !== 'fixture_smoke'
   const hasFinishedAt = !!String((summary || {}).finished_at || '').trim()
   const status = String((summary || {}).status || (report || {}).status || (hasFinishedAt ? 'completed' : '')).trim().toLowerCase()
   const phase = String((summary || {}).phase || (report || {}).phase || (hasFinishedAt ? 'done' : '')).trim().toLowerCase()
+  const heartbeatStage = String((summary || {}).heartbeat_stage || (summary || {}).stage || '').trim()
+  const stageMessage = String((summary || {}).stage_message || '').trim()
+  const ingestN = Number((summary || {}).ingest_n || 0)
+  const ingestTotal = Number((summary || {}).ingest_total || 0)
+  const elapsedMs = Number((summary || {}).elapsed_ms || 0)
   const runId = String((summary || {}).run_id || (report || {}).run_id || '').trim()
-  const activeJobId = String((summary || {}).job_id || (report || {}).active_job_id || '').trim()
+  const activeJobId = liveJobId || String((summary || {}).job_id || (report || {}).active_job_id || '').trim()
   const turnsIngested = Number((summary || {}).turns_ingested || (((report || {}).ingestion || {}).ingested_turns || 0) || 0)
   const qaCases = Number((summary || {}).qa_cases || 0)
   const qaCompleted = Number((summary || {}).qa_completed || (status === 'completed' ? qaCases : 0))
@@ -53,10 +63,49 @@ function BenchmarkPane(props) {
   const replayTurnCompleted = Number((summary || {}).replay_turn_completed || 0)
   const replayTurnTotal = Number((summary || {}).replay_turn_total || 0)
   const activeTurnId = String((summary || {}).turn_id || '').trim()
-  const isActiveRun = !!((runId || activeJobId) && !hasFinishedAt && status !== 'completed' && status !== 'failed')
+  // liveJobId overrides any stale finished_at / status that may have leaked from the previous run.
+  const isActiveRun = !!liveJobId || !!((runId || activeJobId) && !hasFinishedAt && status !== 'completed' && status !== 'failed' && status !== 'cancelled')
   const runLabel = isActiveRun
     ? (activeJobId ? ('job_id=' + activeJobId) : (runId ? ('run_id=' + runId) : ''))
     : (runId ? ('run_id=' + runId) : '')
+
+  // Human-readable stage label
+  const stageLabels = {
+    waiting_for_slot: 'Waiting for slot',
+    queued: 'Queued',
+    resolving_dataset: 'Loading dataset',
+    building_suite: 'Building suite',
+    starting: 'Starting',
+    preparing_root: 'Preparing memory root',
+    ingesting: 'Ingesting turns',
+    draining: 'Enriching memory',
+    async_jobs: 'Enriching memory',
+    ingested: 'Ingested',
+    building_index: 'Building semantic index',
+    semantic_built: 'Index built',
+    running_qa: 'Running QA',
+    locomo_lifecycle: 'Replaying lifecycle',
+    lifecycle_qa: 'Running lifecycle QA',
+    retrieving: 'Retrieving',
+    scoring: 'Scoring results',
+    writing_artifacts: 'Writing artifacts',
+    completed: 'Done',
+    failed: 'Failed',
+    cancelled: 'Cancelled',
+  }
+  const stageForProgress = heartbeatStage || phase
+  const stageLabel = stageLabels[stageForProgress] || stageForProgress || 'Working'
+
+  // Elapsed timer formatted as m:ss
+  function fmtElapsed(ms) {
+    if (!ms || ms < 1000) return ''
+    const s = Math.floor(ms / 1000)
+    const m = Math.floor(s / 60)
+    const ss = String(s % 60).padStart(2, '0')
+    return m + ':' + ss
+  }
+  const elapsedLabel = fmtElapsed(elapsedMs)
+
   const phaseProgressMap = {
     waiting_for_slot: 4,
     queued: 6,
@@ -64,18 +113,23 @@ function BenchmarkPane(props) {
     building_suite: 16,
     starting: 22,
     preparing_root: 30,
-    ingesting: 44,
-    ingested: 50,
+    ingesting: ingestTotal > 0 ? Math.max(32, Math.min(55, 32 + Math.round((ingestN / ingestTotal) * 23))) : 40,
+    draining: 56,
+    async_jobs: 56,
+    ingested: 58,
+    building_index: 65,
     semantic_built: 70,
-    retrieving: 82,
+    running_qa: qaCases > 0 ? Math.max(72, Math.min(92, 72 + Math.round((qaCompleted / qaCases) * 20))) : 75,
     locomo_lifecycle: replayTurnTotal > 0 ? Math.max(24, Math.min(58, 24 + Math.round((replayTurnCompleted / replayTurnTotal) * 34))) : 58,
-    lifecycle_qa: 82,
-    scoring: 92,
+    lifecycle_qa: qaCases > 0 ? Math.max(72, Math.min(92, 72 + Math.round((qaCompleted / qaCases) * 20))) : 82,
+    retrieving: qaCases > 0 ? Math.max(72, Math.min(92, 72 + Math.round((qaCompleted / qaCases) * 20))) : 82,
+    scoring: 93,
     writing_artifacts: 97,
     completed: 100,
     failed: 100,
+    cancelled: 100,
   }
-  const progressPct = Number(phaseProgressMap[phase] || (isActiveRun ? 18 : 0))
+  const progressPct = Number(phaseProgressMap[stageForProgress] || (isActiveRun ? 18 : 0))
 
   if (!summary || (!summary.cases && !summary.qa_cases && !isActiveRun)) {
     return React.createElement(
@@ -142,7 +196,6 @@ function BenchmarkPane(props) {
   const r = report || null
   const benchmarkTable = Array.isArray((r || {}).benchmark_table) ? r.benchmark_table : []
   const semanticBuild = (r || {}).semantic_build || null
-  const effortScores = (r && r.scores && r.scores.by_effort) ? r.scores.by_effort : null
 
   let compareSection = null
   if (r && r.myelination_comparison) {
@@ -314,42 +367,118 @@ function BenchmarkPane(props) {
     }
   }
 
+  // When a run is actively in flight, render ONLY the progress banner + history.
+  // Never show cards or run-config during an active run — they would show either
+  // zeros (optimistic reset) or stale values from the previous completed run.
+  if (isActiveRun) {
+    const progressBanner = React.createElement(
+      'div',
+      { className: 'runtime-card' },
+      React.createElement(
+        'div',
+        { style: { display: 'flex', alignItems: 'center', justifyContent: 'space-between' } },
+        React.createElement('strong', null, 'Benchmark in progress'),
+        onCancel && activeJobId
+          ? React.createElement(
+              'button',
+              {
+                onClick: () => onCancel(activeJobId),
+                style: {
+                  background: 'rgba(248,113,113,0.15)',
+                  border: '1px solid rgba(248,113,113,0.4)',
+                  borderRadius: '4px',
+                  color: '#f87171',
+                  cursor: 'pointer',
+                  fontSize: '11px',
+                  padding: '2px 8px',
+                },
+              },
+              'Cancel'
+            )
+          : null
+      ),
+      React.createElement(
+        'div',
+        { style: { marginTop: '6px', fontSize: '13px', fontWeight: '600', color: 'var(--text-main, #e2e8f0)' } },
+        stageLabel
+      ),
+      React.createElement(
+        'div',
+        { style: { marginTop: '3px', color: 'var(--text-dim)', fontSize: '12px' } },
+        [
+          stageMessage || null,
+          ingestTotal > 0 && stageForProgress === 'ingesting' ? (ingestN + '/' + ingestTotal + ' turns') : null,
+          qaCases > 0 ? ('QA ' + qaCompleted + '/' + qaCases) : null,
+          activeSampleId ? ('sample=' + activeSampleId) : null,
+          elapsedLabel ? (elapsedLabel + ' elapsed') : null,
+          runLabel || null,
+        ].filter(Boolean).join(' · ') || 'Starting…'
+      ),
+      React.createElement(
+        'div',
+        { style: { marginTop: '8px', height: '8px', borderRadius: '999px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' } },
+        React.createElement('div', {
+          style: {
+            width: String(Math.max(6, Math.min(100, progressPct))) + '%',
+            height: '100%',
+            background: 'linear-gradient(90deg, #60a5fa, #34d399)',
+            transition: 'width 0.8s ease',
+          },
+        })
+      )
+    )
+    return React.createElement(
+      React.Fragment,
+      null,
+      progressBanner,
+      history.length
+        ? React.createElement(
+            React.Fragment,
+            null,
+            React.createElement(
+              'div',
+              { className: 'runtime-card' },
+              React.createElement('strong', null, 'Recent runs'),
+              React.createElement(
+                'div',
+                { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+                'Click a row for full payload.'
+              )
+            ),
+            ...history.slice(0, 12).map((rowData, idx) => {
+              const s = rowData.summary || {}
+              const hs = String(s.suite || '')
+              const hIsLocomo = hs && hs !== 'fixture_smoke'
+              return React.createElement(
+                'div',
+                {
+                  className: 'bench-bucket',
+                  key: String(s.run_id || rowData.run_id || idx),
+                  onClick: () => openPayload('Benchmark run', rowData),
+                },
+                React.createElement('div', null, React.createElement('strong', null, String(s.run_id || rowData.run_id || ('run-' + idx)))),
+                React.createElement(
+                  'div',
+                  { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+                  hIsLocomo
+                    ? ('f1=' + Number(s.answer_f1_mean || 0).toFixed(4) + ' · recall@5=' + Number(s.evidence_recall_at_5 || 0).toFixed(4))
+                    : ('acc=' + Number(s.accuracy || 0).toFixed(4) + ' · pass/fail=' + String((s.pass || 0) + '/' + (s.fail || 0)))
+                ),
+                React.createElement(
+                  'div',
+                  { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+                  'at=' + formatIsoShort(String(s.finished_at || rowData.created_at || ''))
+                )
+              )
+            })
+          )
+        : null
+    )
+  }
+
   return React.createElement(
     React.Fragment,
     null,
-    isActiveRun
-      ? React.createElement(
-          'div',
-          { className: 'runtime-card' },
-          React.createElement('div', null, React.createElement('strong', null, 'Benchmark in progress')),
-          React.createElement(
-            'div',
-            { style: { marginTop: '4px', color: 'var(--text-dim)' } },
-            'phase=' + String(phase || 'working') +
-              (runLabel ? (' · ' + runLabel) : '') +
-              (turnsIngested > 0 ? (' · turns=' + String(turnsIngested)) : '') +
-              (qaCases > 0 ? (' · qa=' + String(qaCompleted) + '/' + String(qaCases)) : '') +
-              (conversationTotal > 0 ? (' · conversation=' + String(conversationIndex || 1) + '/' + String(conversationTotal)) : '') +
-              (replayTurnTotal > 0 ? (' · replay_turn=' + String(replayTurnCompleted) + '/' + String(replayTurnTotal)) : '') +
-              (activeConversationId ? (' · conv=' + activeConversationId) : '') +
-              (activeSampleId ? (' · sample=' + activeSampleId) : '') +
-              (activeTurnId ? (' · turn=' + activeTurnId) : '') +
-              (activeQaId ? (' · qa_id=' + activeQaId) : '') +
-              (activeCaseStatus ? (' · status=' + activeCaseStatus) : '')
-          ),
-          React.createElement(
-            'div',
-            { style: { marginTop: '8px', height: '8px', borderRadius: '999px', background: 'rgba(255,255,255,0.08)', overflow: 'hidden' } },
-            React.createElement('div', {
-              style: {
-                width: String(Math.max(6, Math.min(100, progressPct))) + '%',
-                height: '100%',
-                background: 'linear-gradient(90deg, #60a5fa, #34d399)',
-              },
-            })
-          )
-        )
-      : null,
     React.createElement(
       'div',
       { className: 'bench-grid' },
@@ -369,9 +498,7 @@ function BenchmarkPane(props) {
       React.createElement(
         'div',
         { style: { marginTop: '2px', color: 'var(--text-dim)' } },
-        (isActiveRun
-          ? ('job_id: ' + String(activeJobId || 'n/a'))
-          : ('run_id: ' + String(summary.run_id || 'n/a'))) +
+        'run_id: ' + String(summary.run_id || 'n/a') +
           ' · at: ' +
           formatIsoShort(String(summary.finished_at || summary.started_at || ''))
       ),
@@ -379,10 +506,9 @@ function BenchmarkPane(props) {
         'div',
         { style: { marginTop: '4px', color: 'var(--text-dim)' } },
         isLocomo
-          ? ((isActiveRun && runId ? ('pending run_id: ' + String(runId) + ' · ') : '') +
-            'root mode: ' + String(summary.root_mode || 'n/a') +
-            ' · qa mode: ' + String((((r || {}).config || {}).qa_session_mode) || 'n/a') +
+          ? ('root mode: ' + String(summary.root_mode || 'n/a') +
             ' · answer mode: ' + String(summary.answer_mode || 'n/a') +
+            ' · model: ' + String(summary.generator_model || 'auto') +
             ' · retrieval k: ' + String(summary.retrieval_k || 'n/a'))
           : ('root mode: ' + String(summary.root_mode || 'n/a') + ' · preload turns: ' + String(summary.preload_turn_count || 0))
       ),
@@ -420,16 +546,58 @@ function BenchmarkPane(props) {
         : null,
       React.createElement(
         'div',
-        { style: { marginTop: '6px' } },
+        { style: { marginTop: '6px', display: 'flex', gap: '8px', flexWrap: 'wrap' } },
         React.createElement(
           ((report || {}).artifact_download_url || (summary || {}).artifact_download_url) ? 'a' : 'button',
           ((report || {}).artifact_download_url || (summary || {}).artifact_download_url)
             ? { className: 'btn', href: ((report || {}).artifact_download_url || (summary || {}).artifact_download_url), download: true }
             : { className: 'btn', onClick: () => openPayload('LOCOMO Benchmark Report (raw JSON)', report || {}) },
-          ((report || {}).artifact_download_url || (summary || {}).artifact_download_url) ? 'Download raw JSON' : 'Open raw JSON'
-        )
+          ((report || {}).artifact_download_url || (summary || {}).artifact_download_url) ? 'Download report.json' : 'Open raw JSON'
+        ),
+        (summary || {}).run_id
+          ? React.createElement(
+              'a',
+              { className: 'btn', href: '/api/demo/benchmark/artifact/' + String(summary.run_id) + '/cases.jsonl', download: true },
+              'Download cases.jsonl'
+            )
+          : null
       )
     ),
+    isLocomo && !isActiveRun && (summary || {}).methodology
+      ? React.createElement(
+          'div',
+          { className: 'runtime-card' },
+          React.createElement('strong', null, 'Methodology'),
+          React.createElement(
+            'div',
+            { style: { marginTop: '4px', color: 'var(--text-dim)' } },
+            'categories: ' + String(((summary.methodology || {}).categories_scored || []).join(', ') || 'n/a') +
+              ' · cat-5 excluded: ' + String(!!(summary.methodology || {}).category_5_excluded) +
+              ' · runs: ' + String((summary.methodology || {}).runs || 1) +
+              ' · variance: ' + String((summary.methodology || {}).variance_reported ? 'reported' : 'not reported')
+          ),
+          React.createElement(
+            'div',
+            { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+            'comparable to: ' + String((summary.methodology || {}).comparable_to || 'n/a')
+          ),
+          (summary.methodology || {}).questions_no_evidence
+            ? React.createElement(
+                'div',
+                { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+                'questions with no evidence annotation: ' + String((summary.methodology || {}).questions_no_evidence) +
+                  ' (recall@k=1.0 for these — vacuous)'
+              )
+            : null,
+          (summary || {}).locomo_repo_commit
+            ? React.createElement(
+                'div',
+                { style: { marginTop: '2px', color: 'var(--text-dim)' } },
+                'dataset commit: ' + String(summary.locomo_repo_commit)
+              )
+            : null
+        )
+      : null,
     isLocomo && semanticBuild
       ? React.createElement(
           'div',
@@ -446,27 +614,6 @@ function BenchmarkPane(props) {
               ' · backend=' + String(semanticBuild.backend || 'n/a') +
               ' · entries=' + String(semanticBuild.entries ?? 'n/a')
           )
-        )
-      : null,
-    isLocomo && effortScores
-      ? React.createElement(
-          React.Fragment,
-          null,
-          React.createElement('div', { className: 'runtime-card' }, React.createElement('strong', null, 'By retrieval effort')),
-          ...['low', 'medium', 'high'].filter(k => effortScores[k]).map((k) => {
-            const row = effortScores[k] || {}
-            const latency = row.latency_ms || {}
-            return React.createElement(
-              'div',
-              { className: 'bench-bucket', key: k, onClick: () => openPayload('Lifecycle effort: ' + k, row) },
-              React.createElement('strong', null, k),
-              ' · qa=', String(row.qa_count || 0),
-              ' · f1=', Number(row.answer_f1_mean || 0).toFixed(4),
-              ' · recall@5=', Number(row['evidence_recall@5'] || 0).toFixed(4),
-              ' · p50=', Number(latency.p50 || 0).toFixed(2), 'ms',
-              ' · p95=', Number(latency.p95 || 0).toFixed(2), 'ms'
-            )
-          })
         )
       : null,
     isLocomo && r && r.scores && r.scores.by_category

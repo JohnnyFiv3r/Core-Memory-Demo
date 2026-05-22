@@ -125,12 +125,35 @@ def aggregate_case_scores(cases: list[dict[str, Any]]) -> dict[str, Any]:
         by_category.setdefault(str(row.get("category") or "0"), []).append(row)
         by_sample.setdefault(str(row.get("sample_id") or "unknown"), []).append(row)
 
+    # Questions with no gold evidence annotations: compute_evidence_recall returns
+    # recall@k=1.0 vacuously, which inflates aggregate recall if included.
+    # Primary recall metrics use evidence-annotated cases only; raw figures
+    # (including vacuous cases) are preserved for auditing.
+    no_evidence_count = sum(
+        1 for r in cases
+        if int((r.get("evidence_recall") or {}).get("gold_evidence_count") or 0) == 0
+    )
+    cases_with_evidence = [
+        r for r in cases
+        if int((r.get("evidence_recall") or {}).get("gold_evidence_count") or 0) > 0
+    ]
+
     overall = {
         "qa_count": len(cases),
         "answer_f1_mean": _avg("answer_f1", cases),
-        "evidence_recall@5": _avg_nested(cases, "recall@5"),
-        "hit_any": _avg_nested(cases, "hit_any"),
-        "mrr": _avg_nested(cases, "mrr"),
+        # Recall metrics exclude vacuous-truth (no-evidence) cases so aggregate
+        # recall is comparable to published systems that all have evidence annotations.
+        "evidence_recall@5": _avg_nested(cases_with_evidence, "recall@5"),
+        "hit_any": _avg_nested(cases_with_evidence, "hit_any"),
+        "mrr": _avg_nested(cases_with_evidence, "mrr"),
+        "evidence_recall@5_all": _avg_nested(cases, "recall@5"),
+        "hit_any_all": _avg_nested(cases, "hit_any"),
+        "mrr_all": _avg_nested(cases, "mrr"),
+        "questions_no_evidence": no_evidence_count,
+        "questions_with_evidence": len(cases_with_evidence),
+        # Comparable to published systems only when category 5 is excluded and
+        # run on all 10 samples. Multi-run variance not reported (single run).
+        "methodology_note": "single_run_no_variance",
     }
 
     return {

@@ -50,7 +50,7 @@ services:
     name: core-memory-demo-benchmark-worker
     env: python
     rootDir: backend
-    plan: pro plus
+    plan: starter
     region: oregon
     branch: main
     schedule: "*/1 * * * *"
@@ -60,11 +60,11 @@ services:
       - key: APP_ENV
         value: production
       - key: CORE_MEMORY_ROOT
-        value: /tmp/core-memory
+        value: /var/data/core-memory
       - key: CORE_MEMORY_DEMO_BENCHMARK_ROOT
-        value: /tmp/core-memory-bench
+        value: /var/data/core-memory-bench
       - key: CORE_MEMORY_DEMO_ARTIFACTS_ROOT
-        value: /tmp/core-memory-artifacts
+        value: /var/data/core-memory-artifacts
       - key: BENCHMARK_DATABASE_URL
         sync: false
       - key: CORE_MEMORY_VECTOR_BACKEND

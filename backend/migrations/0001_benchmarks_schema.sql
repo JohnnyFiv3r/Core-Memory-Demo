@@ -23,6 +23,8 @@ CREATE TABLE IF NOT EXISTS benchmarks.jobs (
     status TEXT NOT NULL DEFAULT 'queued',
     request JSONB NOT NULL DEFAULT '{}'::jsonb,
     kwargs JSONB NOT NULL DEFAULT '{}'::jsonb,
+    progress JSONB NOT NULL DEFAULT '{}'::jsonb,
+    events JSONB NOT NULL DEFAULT '[]'::jsonb,
     result JSONB,
     error TEXT,
     attempts INTEGER NOT NULL DEFAULT 0,
@@ -33,6 +35,9 @@ CREATE TABLE IF NOT EXISTS benchmarks.jobs (
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS benchmarks_jobs_status_created_idx ON benchmarks.jobs (status, created_at);
+
+ALTER TABLE benchmarks.jobs ADD COLUMN IF NOT EXISTS progress JSONB NOT NULL DEFAULT '{}'::jsonb;
+ALTER TABLE benchmarks.jobs ADD COLUMN IF NOT EXISTS events JSONB NOT NULL DEFAULT '[]'::jsonb;
 
 CREATE TABLE IF NOT EXISTS benchmarks.artifacts (
     run_id TEXT NOT NULL REFERENCES benchmarks.runs(run_id) ON DELETE CASCADE,

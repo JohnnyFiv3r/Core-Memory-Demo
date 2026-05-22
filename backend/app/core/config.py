@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     benchmark_dispatch_url: str = ''
     benchmark_dispatch_token: str = ''
     benchmark_dispatch_timeout_seconds: int = 15
+    benchmark_max_runtime_seconds: int = 90 * 60
     transcript_ingest_run_mode: str = 'inline'
 
     locomo_data_file: str = ''
@@ -57,7 +58,7 @@ class Settings(BaseSettings):
     locomo_case_artifact_limit_inline: int = 10
     locomo_answer_timeout_seconds: int = 60
     locomo_ingest_mode_default: str = 'turns'
-    locomo_ingest_path: str = 'bead_direct'
+    locomo_ingest_path: str = 'canonical_replay'
     locomo_replay_mode: str = 'canonical_turn'
     locomo_replay_flush_policy: str = 'per_session'
     locomo_compare_paths_enabled: bool = False

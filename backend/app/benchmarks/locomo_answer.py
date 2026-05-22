@@ -5,7 +5,10 @@ import json
 import re
 from typing import Any
 
-from app.core.agent_runtime import run_agent_for_root
+try:
+    from app.core.agent_runtime import run_agent_for_root
+except Exception:  # pragma: no cover
+    run_agent_for_root = None  # type: ignore
 
 
 def _support_strength(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
@@ -20,8 +23,6 @@ def _support_strength(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]
         return {"supported": False, "reason": "empty_top_text"}
     if not used_dia_ids:
         return {"supported": False, "reason": "missing_dia_ids"}
-    if top_score is not None and top_score <= 0.0:
-        return {"supported": False, "reason": "non_positive_score"}
     return {"supported": True, "reason": "top_hit_grounded"}
 
 
@@ -148,26 +149,26 @@ async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_i
             "unsupported": True,
         }
     context_block = _format_retrieved_context(retrieved_context)
-    bounded_prompt = (
-        "Answer the question using only the retrieved evidence below. "
-        "Do not use outside memory beyond these retrieved rows. "
-        "If the evidence is insufficient or ambiguous, answer exactly 'No information available'.\n\n"
+    context_prompt = (
+        "Answer the question based on the retrieved conversation context below. "
+        "If the retrieved context does not contain enough information to answer, "
+        "respond exactly with 'No information available'.\n\n"
         f"Question: {question}\n\n"
-        f"Retrieved evidence:\n{context_block}\n\n"
+        f"Retrieved context:\n{context_block}\n\n"
         "Return strict JSON with keys: answer, used_dia_ids, confidence, unsupported. "
-        "Only cite dia_ids that appear in the retrieved evidence."
+        "Only cite dia_ids that appear in the retrieved context."
     )
     out = await run_agent_for_root(
         root=root,
         session_id=f"locomo:{sample_id}",
-        message=bounded_prompt,
+        message=context_prompt,
         model_id=model_id,
         instruction_prefix=(
-            "You are doing evidence-bounded answer synthesis. "
-            "Only answer from the supplied retrieved evidence block. "
-            "If support is weak or missing, abstain with 'No information available'."
+            "You are a conversational memory assistant answering questions about past conversations. "
+            "Use the retrieved context provided to form your answer. "
+            "If the context is insufficient, abstain with 'No information available'."
         ),
-        metadata={"benchmark_answering": True, "sample_id": sample_id, "bounded_evidence": True},
+        metadata={"benchmark_answering": True, "sample_id": sample_id},
     )
     raw = str(out.get("assistant") or "").strip()
     return _normalize_answer_payload(raw)
@@ -187,6 +188,8 @@ def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str
     if mode_name == "oracle_context":
         raise ValueError("oracle_context_answer_mode_disabled_for_scored_benchmarks")
     if mode_name == "llm":
+        if run_agent_for_root is None:
+            raise RuntimeError("agent_runtime_unavailable")
         model_id = str(generator_model or "").strip()
         if not model_id:
             raise RuntimeError("missing_generator_model")

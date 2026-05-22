@@ -31,6 +31,10 @@ let selectedClaimSlot = null;
 let claimsAsOf = '';
 let claimsDetailOpen = false;
 let seedStatusState = {active: false, kind: '', status: 'idle', message: ''};
+let activeSeedJobId = null;
+let benchmarkProgressEl = null;
+let activeBenchmarkPollJobId = null;
+let completedBenchmarkRunId = null;
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
@@ -956,10 +960,30 @@ function bindUiEventHandlers() {
   }
 
   const seedBtn = document.getElementById('btn-seed');
-  if (seedBtn) seedBtn.addEventListener('click', seedMemory);
+  if (seedBtn) seedBtn.addEventListener('click', () => {
+    if (activeSeedJobId) {
+      const jobId = activeSeedJobId;
+      activeSeedJobId = null;
+      fetch(`/api/locomo/replay/job/${jobId}/cancel`, {method: 'POST'}).catch(() => {});
+    } else {
+      seedMemory();
+    }
+  });
 
   const benchmarkBtn = document.getElementById('btn-benchmark');
-  if (benchmarkBtn) benchmarkBtn.addEventListener('click', runBenchmark);
+  if (benchmarkBtn) benchmarkBtn.addEventListener('click', () => {
+    const status = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
+    if (status === 'running' || status === 'queued' || status === 'waiting_for_slot') {
+      const jobId = String((lastBenchmarkSummary || {}).job_id || '');
+      if (jobId) {
+        benchmarkBtn.textContent = 'Cancelling...';
+        benchmarkBtn.disabled = true;
+        cancelBenchmarkJob(jobId);
+      }
+    } else {
+      runBenchmark();
+    }
+  });
 
   const modal = document.getElementById('modal');
   if (modal) {
@@ -1141,9 +1165,9 @@ function renderRecallEvidence(container, recallResult) {
   for (const item of evidence) {
     const row = document.createElement('div');
     row.className = 'recall-evidence-item';
-    const label = String(item.bead_id || item.id || 'evidence').trim();
+    const label = String(item.bead_id || item.id || item.title || 'evidence').trim();
     const score = Number(item.score || item.confidence || 0);
-    const text = String(item.text || item.summary || item.reason || '').trim();
+    const text = String(item.content_excerpt || item.text || item.summary || item.title || item.reason || '').trim();
     row.textContent = label + (score ? ' · ' + score.toFixed(2) : '') + (text ? ' — ' + text.slice(0, 180) : '');
     panel.appendChild(row);
   }
@@ -3584,7 +3608,7 @@ function ensureBenchmarkPaneRenderer() {
   return ensureSliceBinding(
     benchmarkPaneRenderer,
     'benchmarkPaneRenderer',
-    '/chat-slices/benchmark-pane.js',
+    '/chat-slices/benchmark-pane.js?v=20260521-rich-progress-2',
     (mod) => (mod && typeof mod.renderBenchmarkPane === 'function' ? mod.renderBenchmarkPane : null),
     (value) => { benchmarkPaneRenderer = value; }
   );
@@ -3596,6 +3620,15 @@ function benchmarkSummaryHasLiveJob(summary, report) {
   const status = String(s.status || r.status || '').trim().toLowerCase();
   const jobId = String(s.job_id || r.active_job_id || '').trim();
   return !!(jobId && (status === 'running' || status === 'queued' || status === 'waiting_for_slot'));
+}
+
+async function cancelBenchmarkJob(jobId) {
+  if (!jobId) return;
+  try {
+    await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' });
+  } catch (_) {
+    // best effort
+  }
 }
 
 function renderBenchmark(summary, report, benchmarkMeta) {
@@ -3612,9 +3645,11 @@ function renderBenchmark(summary, report, benchmarkMeta) {
       report: safeReport,
       benchmarkMeta: safeMeta,
       formatIsoShort,
+      liveJobId: activeBenchmarkPollJobId || null,
       onOpenPayload: (title, payload) => {
         openJsonModal(String(title || 'Benchmark detail'), payload || {});
       },
+      onCancel: (jobId) => cancelBenchmarkJob(jobId),
     }),
     () => renderBenchmarkFallback(safeSummary, safeReport, safeMeta),
     ensureBenchmarkPaneRenderer
@@ -3634,19 +3669,53 @@ async function refreshMemory() {
   if (authEnabled && !authReady) return;
   if (!modelOptionsHydrated) loadDemoModels();
   refreshSeedStatus();
+
+  // While a LoCoMo seed is actively polling, skip the full state refresh —
+  // the seed poll loop owns progress updates and the rate budget is tight.
+  if (activeSeedJobId) {
+    refreshErrorStreak = 0;
+    return;
+  }
+
   try {
     const activeBenchmarkStatus = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
     const activeBenchmarkJobId = String((lastBenchmarkSummary || {}).job_id || '').trim();
-    const benchmarkRunning = initialStateHydrated && (!!activeBenchmarkJobId || activeBenchmarkStatus === 'running' || activeBenchmarkStatus === 'queued' || activeBenchmarkStatus === 'waiting_for_slot');
+    const benchmarkRunning = initialStateHydrated && (activeBenchmarkStatus === 'running' || activeBenchmarkStatus === 'queued' || activeBenchmarkStatus === 'waiting_for_slot');
 
     if (benchmarkRunning) {
       try {
         const controlRes = await fetch('/api/demo/control-state');
         const control = await parseApiJsonResponse(controlRes, 'control-state');
         const bench = control.benchmark || {};
-        if (bench.summary) lastBenchmarkSummary = bench.summary || lastBenchmarkSummary;
-        if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
-        if (bench.history) lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
+        const benchJob = bench.job || {};
+        lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
+        if (!activeBenchmarkPollJobId) {
+          // No dedicated poll loop — use control-state as the complete source of truth.
+          if (bench.summary) {
+            lastBenchmarkSummary = {
+              ...(bench.summary || {}),
+              heartbeat_stage: String(benchJob.stage || ''),
+              stage: String(benchJob.stage || ''),
+              stage_message: String(benchJob.stage_message || ''),
+              ingest_n: Number(benchJob.ingest_n || 0),
+              ingest_total: Number(benchJob.ingest_total || 0),
+              elapsed_ms: Number(benchJob.elapsed_ms || 0),
+            };
+          }
+          if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
+        } else if (benchJob.stage && !benchJob.done) {
+          // Poll loop owns the summary — only spread the job's live stage fields so the
+          // pane repaints every refreshMemory tick even between poll responses.
+          lastBenchmarkSummary = {
+            ...(lastBenchmarkSummary || {}),
+            heartbeat_stage: String(benchJob.stage || ''),
+            stage: String(benchJob.stage || ''),
+            stage_message: String(benchJob.stage_message || ''),
+            ingest_n: Number(benchJob.ingest_n || 0),
+            ingest_total: Number(benchJob.ingest_total || 0),
+            elapsed_ms: Number(benchJob.elapsed_ms || 0),
+          };
+        }
         updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
         renderBenchmark(lastBenchmarkSummary || {}, lastBenchmarkReport || null, {history: lastBenchmarkHistory});
       } catch (_) {
@@ -3749,12 +3818,19 @@ async function refreshMemory() {
     safeRenderSection('rolling', () => renderRolling(mem.rolling_window || data.rolling_window || []));
 
     const inspectBenchmarkSummary = (data.benchmark || {}).last_summary || null;
-    const liveBenchmarkPinned = benchmarkSummaryHasLiveJob(lastBenchmarkSummary, lastBenchmarkReport);
-    if (!liveBenchmarkPinned && inspectBenchmarkSummary) {
-      lastBenchmarkSummary = inspectBenchmarkSummary;
+    if (!activeBenchmarkPollJobId) {
+      const liveBenchmarkPinned = benchmarkSummaryHasLiveJob(lastBenchmarkSummary, lastBenchmarkReport);
+      if (!liveBenchmarkPinned && inspectBenchmarkSummary) {
+        const incomingRunId = String(inspectBenchmarkSummary.run_id || '');
+        // Only overwrite if: no prior completed run (initial load), or the backend has
+        // caught up and is returning the run we just completed.
+        if (!completedBenchmarkRunId || incomingRunId === completedBenchmarkRunId) {
+          lastBenchmarkSummary = inspectBenchmarkSummary;
+        }
+      }
     }
     lastBenchmarkHistory = arrayOr((data.benchmark || {}).history, lastBenchmarkHistory);
-    if ((data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
+    if (!activeBenchmarkPollJobId && (data.benchmark || {}).has_last_report && !lastBenchmarkReport) {
       try {
         const rb = await fetch('/api/demo/benchmark/last');
         const jb = await parseApiJsonResponse(rb, 'benchmark-last');
@@ -3779,10 +3855,14 @@ async function refreshMemory() {
     refreshPauseNoticeShown = false;
     restartRefreshTimer(refreshBackoffMs);
   } catch (err) {
-    refreshErrorStreak += 1;
-    refreshBackoffMs = Math.min(30000, Math.max(2500, refreshBackoffMs * 2));
+    const errMsg = String((err && err.message) || err || '');
+    const isTransientNetwork = /network_changed|network_io_suspended|failed to fetch|networkerror/i.test(errMsg);
+    if (!isTransientNetwork) {
+      refreshErrorStreak += 1;
+      refreshBackoffMs = Math.min(30000, Math.max(2500, refreshBackoffMs * 2));
+    }
     restartRefreshTimer(refreshBackoffMs);
-    if (refreshErrorStreak >= 3 && !refreshPauseNoticeShown) {
+    if (!isTransientNetwork && refreshErrorStreak >= 3 && !refreshPauseNoticeShown) {
       refreshPauseNoticeShown = true;
       addMsg('system', 'Data refresh is degraded due to repeated backend/proxy errors. Retrying automatically with backoff.');
     }
@@ -3834,15 +3914,9 @@ function syncBenchmarkButton(summary) {
   const qaTotal = Number(s.qa_cases || 0);
   const qaDone = Number(s.qa_completed || 0);
   if (status === 'running' || status === 'queued' || status === 'waiting_for_slot') {
-    btn.disabled = true;
-    if (qaTotal > 0) {
-      btn.textContent = 'QA ' + qaDone + '/' + qaTotal;
-    } else if (phase === 'waiting_for_slot' || phase === 'queued') {
-      btn.textContent = 'Queued...';
-    } else if (phase) {
-      btn.textContent = phase.replace(/_/g, ' ') + '...';
-    } else {
-      btn.textContent = 'Running...';
+    if (btn.textContent !== 'Cancelling...') {
+      btn.disabled = false;
+      btn.textContent = 'Cancel';
     }
     return;
   }
@@ -3876,8 +3950,10 @@ async function refreshSeedStatus() {
         message: String(seed.message || ''),
       };
       const bench = control.benchmark || {};
-      if (bench.summary) lastBenchmarkSummary = bench.summary || lastBenchmarkSummary;
-      if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
+      if (!activeBenchmarkPollJobId) {
+        if (bench.summary) lastBenchmarkSummary = bench.summary || lastBenchmarkSummary;
+        if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
+      }
       if (bench.history) lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
       updateBenchmarkButtonGate();
       syncBenchmarkButton(lastBenchmarkSummary || {});
@@ -3963,36 +4039,92 @@ async function seedMemory() {
       if (locomoSampleMode === 'single' && !locomoSampleId) {
         throw new Error('locomo_sample_not_found');
       }
-      const progress = addMsg('system', 'Seeding LoCoMo transcript corpus...');
+      const progressEl = addMsg('system', 'Seeding LoCoMo transcript corpus...');
       const payload = {
         sample_mode: locomoSampleMode,
         sample_id: locomoSampleMode === 'single' ? locomoSampleId : null,
         replay_mode: 'transcript_only',
         max_turns: locomoMaxTurns,
-        wait_for_idle: true,
-        idle_timeout_ms: 120000,
-        idle_poll_ms: 250,
         auto_flush: true,
         flush_threshold_ratio: AUTO_FLUSH_THRESHOLD_PCT / 100,
       };
-      const res = await fetch('/api/locomo/replay', {
+      const startRes = await fetch('/api/locomo/replay', {
         method: 'POST',
         headers: {'Content-Type': 'application/json'},
         body: JSON.stringify(payload),
       });
-      data = await parseApiJsonResponse(res, 'locomo replay');
-      const seeded = Number(data.seeded || data.seeded_turns || 0);
-      const queueIdle = !!data.queue_idle;
-      const range = data.turn_range || {};
-      const sampleIds = Array.isArray(data.sample_ids) ? data.sample_ids : [];
-      const sampleLabel = sampleIds.length === 1 ? ('sample=' + String(sampleIds[0])) : ('samples=' + String(sampleIds.length || 0));
-      progress.textContent =
-        'Seeded ' + seeded + ' turn(s) via LoCoMo replay' +
-        (sampleLabel ? (' · ' + sampleLabel) : '') +
-        (range.first && range.last ? (' · range=' + String(range.first) + '-' + String(range.last)) : '') +
-        ' · queue_idle=' + String(queueIdle);
-      if (Number(data.failed_turns || 0) > 0) {
-        addMsg('system', 'Warning: LoCoMo replay completed with ' + String(data.failed_turns || 0) + ' failed turn(s).');
+      const startJson = await parseApiJsonResponse(startRes, 'locomo replay');
+      const seedJobId = String(startJson.job_id || '');
+      if (!seedJobId) throw new Error('locomo replay: no job_id returned');
+      activeSeedJobId = seedJobId;
+      if (seedBtn) {
+        seedBtn.textContent = 'Cancel seed';
+        seedBtn.disabled = false;
+      }
+
+      // Poll until the background job finishes
+      let job = {};
+      let cursor = 0;
+      let seedPollBackoffMs = 3000;
+      let cancellingStartMs = 0;
+      while (true) {
+        await new Promise(r => setTimeout(r, seedPollBackoffMs));
+        try {
+          const pollRes = await fetch(`/api/locomo/replay/job/${seedJobId}?cursor=${cursor}`);
+          if (pollRes.status === 429) {
+            seedPollBackoffMs = Math.min(seedPollBackoffMs * 2, 30000);
+            continue;
+          }
+          job = await parseApiJsonResponse(pollRes, 'locomo replay job');
+          cursor = Number(job.cursor_next || cursor);
+          seedPollBackoffMs = Math.max(3000, Number(job.poll_after_ms || 3000));
+          const stage = String(job.stage || '');
+          if (activeSeedJobId !== seedJobId) {
+            if (!cancellingStartMs) cancellingStartMs = Date.now();
+            progressEl.textContent = 'Cancelling LoCoMo seed...';
+            if (Date.now() - cancellingStartMs > 30000) {
+              job = { ...(job || {}), status: 'cancelled', done: true };
+              break;
+            }
+          } else {
+            cancellingStartMs = 0;
+            progressEl.textContent = 'Seeding LoCoMo transcript corpus... ' + stage;
+          }
+        } catch (_) {
+          // transient poll failure — keep trying
+        }
+        if (job.done) break;
+      }
+
+      activeSeedJobId = null;
+      if (seedBtn) seedBtn.disabled = true; // re-disable while finally restores label
+      data = (job.result) || {};
+
+      const terminalStatus = String(job.status || '');
+      if (terminalStatus === 'cancelled') {
+        progressEl.textContent = 'LoCoMo seed cancelled.';
+      } else if (terminalStatus === 'failed' || (job.done && job.error)) {
+        const errMsg = String(job.error || data.error || 'unknown error');
+        progressEl.textContent = 'LoCoMo seed failed: ' + errMsg;
+        addMsg('system', 'LoCoMo seed failed: ' + errMsg);
+      } else {
+        const seeded = Number(data.seeded || data.seeded_turns || 0);
+        const queueIdle = !!data.queue_idle;
+        const range = data.turn_range || {};
+        const sampleIds = Array.isArray(data.sample_ids) ? data.sample_ids : [];
+        const sampleLabel = sampleIds.length === 1 ? ('sample=' + String(sampleIds[0])) : ('samples=' + String(sampleIds.length || 0));
+        progressEl.textContent =
+          'Seeded ' + seeded + ' turn(s) via LoCoMo replay' +
+          (sampleLabel ? (' · ' + sampleLabel) : '') +
+          (range.first && range.last ? (' · range=' + String(range.first) + '-' + String(range.last)) : '') +
+          ' · queue_idle=' + String(queueIdle);
+        if (Number(data.failed_turns || 0) > 0) {
+          const turnErrors = Array.isArray(data.errors) ? data.errors : [];
+          const errDetails = turnErrors.slice(0, 3).map(e =>
+            'dia_id=' + String((e || {}).dia_id || '?') + ': ' + String((e || {}).error || 'unknown')
+          ).join('; ');
+          addMsg('system', 'Warning: LoCoMo replay completed with ' + String(data.failed_turns || 0) + ' failed turn(s).' + (errDetails ? ' ' + errDetails : ''));
+        }
       }
     } else if (seedSource === 'story_pack' && preloadEnabled) {
       let startTurn = 1;
@@ -4115,6 +4247,20 @@ function updateBenchmarkProgressMessage(summary, report) {
   const btn = document.getElementById('btn-benchmark');
   if (!btn) return;
   syncBenchmarkButton(summary || {});
+  if (!benchmarkProgressEl) return;
+  const status = String((summary || {}).status || '');
+  if (status !== 'running') return;
+  const stage = String((summary || {}).stage || '');
+  const qa = Number((summary || {}).qa_completed || 0);
+  const qaTotal = Number((summary || {}).qa_cases || 0);
+  let label;
+  if (stage === 'ingesting') label = 'ingesting turns';
+  else if (stage === 'async_jobs') label = 'enriching memory';
+  else if (stage === 'building_index') label = 'building index';
+  else if (stage === 'running_qa') label = 'running QA';
+  else label = stage || 'starting';
+  if (qaTotal > 0) label += ' · ' + qa + '/' + qaTotal + ' QA';
+  benchmarkProgressEl.textContent = 'Benchmark running... ' + label;
 }
 
 function formatBenchmarkSummary(s) {
@@ -4186,7 +4332,6 @@ async function runBenchmark() {
   const semanticMode = document.getElementById('bench-semantic')?.value || 'required';
   const myelination = document.getElementById('bench-myelination')?.value || 'off';
   const rootMode = document.getElementById('bench-root-mode')?.value || 'snapshot';
-  const qaSessionMode = document.getElementById('bench-qa-session-mode')?.value || 'shared';
   const embeddingsProvider = document.getElementById('bench-embeddings-provider')?.value || 'hash';
   const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
   const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
@@ -4195,32 +4340,41 @@ async function runBenchmark() {
   const locomoSampleId = String(document.getElementById('locomo-sample-id')?.value || '').trim();
   const locomoMaxTurnsRaw = Number(document.getElementById('locomo-max-turns')?.value || 200);
   const locomoMaxTurns = Number.isFinite(locomoMaxTurnsRaw) ? Math.max(1, Math.floor(locomoMaxTurnsRaw)) : 200;
+  const answerModeRaw = document.getElementById('bench-answer-mode')?.value || 'auto';
+  const answerModeIsAuto = answerModeRaw === 'auto' || !answerModeRaw;
+  const answerMode = answerModeIsAuto ? '' : answerModeRaw;
+  const generatorModel = String(document.getElementById('bench-generator-model')?.value || '').trim();
 
   const prev = btn.textContent;
   btn.dataset.prevLabel = prev;
   btn.disabled = true;
   btn.textContent = 'Starting...';
+  completedBenchmarkRunId = null;
   const optimisticJobId = 'pending-job-' + Date.now().toString(36);
+  activeBenchmarkPollJobId = optimisticJobId;
+  const optimisticAnswerMode = answerMode || 'auto';
   lastBenchmarkSummary = {
     run_id: '',
     job_id: optimisticJobId,
     suite: subset,
     semantic_mode: semanticMode,
     root_mode: rootMode,
+    answer_mode: optimisticAnswerMode,
     status: 'running',
     phase: 'starting',
     samples: 0,
     qa_cases: 0,
     turns_ingested: 0,
   };
-  lastBenchmarkReport = {live: true, active_job_id: optimisticJobId, status: 'running', phase: 'starting', config: {suite: subset, root_mode: rootMode, semantic_mode: semanticMode}};
+  lastBenchmarkReport = {live: true, active_job_id: optimisticJobId, status: 'running', phase: 'starting', config: {suite: subset, root_mode: rootMode, semantic_mode: semanticMode, answer_mode: optimisticAnswerMode}};
   renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
   updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
   addMsg(
     'system',
-    'Starting LOCOMO benchmark (' + subset + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
+    'Starting LOCOMO benchmark (' + subset + ', answer=' + optimisticAnswerMode + (generatorModel ? '/' + generatorModel : '') + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
       ', preload=' + (preloadEnabled ? preloadMax : 0) + ')...'
   );
+  benchmarkProgressEl = addMsg('system', 'Benchmark running...');
   try {
     const benchmarkPayload = {
       suite: subset,
@@ -4228,12 +4382,13 @@ async function runBenchmark() {
       vector_backend: 'local-faiss',
       myelination,
       root_mode: rootMode,
-      qa_session_mode: qaSessionMode,
       embeddings_provider: embeddingsProvider,
       preload_from_demo: preloadEnabled,
       preload_turns_max: preloadMax,
-      compare_paths: subset !== 'locomo_native_lifecycle',
+      compare_paths: true,
     };
+    if (answerMode) benchmarkPayload.answer_mode = answerMode;
+    if (generatorModel) benchmarkPayload.generator_model = generatorModel;
     if (subset === 'locomo_mini' || subset === 'locomo_native_lifecycle') {
       if (locomoSampleMode === 'single' && locomoSampleId) {
         benchmarkPayload.sample_ids = [locomoSampleId];
@@ -4251,12 +4406,14 @@ async function runBenchmark() {
       throw new Error(data.error || ('HTTP ' + res.status));
     }
     const jobId = String(data.job_id || '').trim();
+    activeBenchmarkPollJobId = jobId;
     lastBenchmarkSummary = {
       ...(lastBenchmarkSummary || {}),
       run_id: '',
       job_id: jobId,
       status: 'queued',
       phase: 'queued',
+      finished_at: '',
     };
     lastBenchmarkReport = {
       ...(lastBenchmarkReport || {}),
@@ -4265,11 +4422,35 @@ async function runBenchmark() {
       phase: 'queued',
     };
     renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+    syncBenchmarkButton(lastBenchmarkSummary);
     let cursor = 0;
     let done = false;
     while (!done) {
-      const jr = await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobId) + '?cursor=' + encodeURIComponent(String(cursor)));
-      const job = await parseApiJsonResponse(jr, 'benchmark-job');
+      let jr, job;
+      try {
+        jr = await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobId) + '?cursor=' + encodeURIComponent(String(cursor)));
+        job = await parseApiJsonResponse(jr, 'benchmark-job');
+      } catch (pollErr) {
+        const pollErrMsg = String((pollErr && pollErr.message) || pollErr || '');
+        if (/network_changed|network_io_suspended|failed to fetch|networkerror/i.test(pollErrMsg)) {
+          await new Promise(r => setTimeout(r, 2000));
+          continue;
+        }
+        throw pollErr;
+      }
+      // Relay heartbeat stage + message + ingest progress + elapsed from the keepalive.
+      if (job.stage && !job.done) {
+        lastBenchmarkSummary = {
+          ...(lastBenchmarkSummary || {}),
+          heartbeat_stage: String(job.stage || ''),
+          stage: String(job.stage || ''),
+          stage_message: String(job.stage_message || ''),
+          ingest_n: Number(job.ingest_n || 0),
+          ingest_total: Number(job.ingest_total || 0),
+          elapsed_ms: Number(job.elapsed_ms || 0),
+        };
+        renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+      }
       const events = Array.isArray(job.events) ? job.events : [];
       if (events.length) cursor = Number(job.cursor_next || cursor || 0);
       for (const evt of events) {
@@ -4296,6 +4477,11 @@ async function runBenchmark() {
         }
         if (stage === 'failed') {
           addMsg('system', 'Benchmark failed: ' + String(evt.error || evt.message || 'benchmark_failed'));
+        } else if (stage === 'cancelled') {
+          lastBenchmarkSummary = { ...(lastBenchmarkSummary || {}), status: 'cancelled', phase: 'cancelled' };
+          renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+          updateBenchmarkProgressMessage(lastBenchmarkSummary, null);
+          addMsg('system', 'Benchmark cancelled.');
         } else if (stage === 'abandoned') {
           lastBenchmarkSummary = {};
           lastBenchmarkReport = null;
@@ -4304,28 +4490,15 @@ async function runBenchmark() {
           addMsg('system', 'Benchmark attempt was abandoned in favor of a newer run.');
         }
       }
-      try {
-        const rb = await fetch('/api/demo/benchmark/last');
-        const jb = await parseApiJsonResponse(rb, 'benchmark-last');
-        if (jb && jb.summary) {
-          lastBenchmarkSummary = jb.summary || lastBenchmarkSummary;
-          lastBenchmarkReport = jb.report || lastBenchmarkReport;
-          lastBenchmarkHistory = arrayOr(jb.history, lastBenchmarkHistory);
-          updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
-          renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
-          syncBenchmarkButton(lastBenchmarkSummary || {});
-        }
-      } catch (_) {
-        // best effort only
-      }
       done = !!job.done;
       if (!done) {
         syncBenchmarkButton(lastBenchmarkSummary || {});
         await new Promise(resolve => setTimeout(resolve, Math.max(500, Number(job.poll_after_ms || 1200))));
       } else if (job.result && job.result.ok) {
         const result = job.result || {};
-        lastBenchmarkSummary = result.summary || lastBenchmarkSummary;
-        lastBenchmarkReport = result.report || lastBenchmarkReport;
+        lastBenchmarkSummary = { ...(lastBenchmarkSummary || {}), ...(result.summary || {}) };
+        lastBenchmarkReport = { ...(lastBenchmarkReport || {}), ...(result.report || {}) };
+        completedBenchmarkRunId = String((lastBenchmarkSummary || {}).run_id || '') || null;
         try {
           const rh = await fetch('/api/demo/benchmark/history?limit=20');
           const jh = await parseApiJsonResponse(rh, 'benchmark-history');
@@ -4353,6 +4526,8 @@ async function runBenchmark() {
       addMsg('system', 'Benchmark failed: ' + msg);
     }
   } finally {
+    activeBenchmarkPollJobId = null;
+    benchmarkProgressEl = null;
     syncBenchmarkButton(lastBenchmarkSummary || {});
   }
 }

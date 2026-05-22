@@ -29,6 +29,7 @@ class TestSemanticWriteOnlyContract(unittest.TestCase):
         sync_lines = []
         direct_run_async_lines = []
         diag_execute_lines = []
+        diag_recall_lines = []
 
         for n in ast.walk(run_chat):
             if not isinstance(n, ast.Call):
@@ -39,14 +40,17 @@ class TestSemanticWriteOnlyContract(unittest.TestCase):
             elif name == "run_async_jobs":
                 direct_run_async_lines.append(n.lineno)
             elif name == "memory_tools.execute":
-                # diagnostics retrieval call uses `req` variable
+                # legacy diagnostics retrieval call uses `req` variable
                 if n.args and isinstance(n.args[0], ast.Name) and n.args[0].id == "req":
                     diag_execute_lines.append(n.lineno)
+            elif name == "core_recall":
+                diag_recall_lines.append(n.lineno)
 
         self.assertTrue(sync_lines, "run_chat should call _sync_semantic_on_write")
         self.assertFalse(direct_run_async_lines, "run_chat should not call run_async_jobs directly")
-        self.assertTrue(diag_execute_lines, "run_chat should execute diagnostics retrieval with req")
-        self.assertLess(min(sync_lines), min(diag_execute_lines), "write sync should happen before diagnostics retrieval")
+        diag_lines = diag_execute_lines or diag_recall_lines
+        self.assertTrue(diag_lines, "run_chat should execute diagnostics retrieval")
+        self.assertLess(min(sync_lines), min(diag_lines), "write sync should happen before diagnostics retrieval")
 
     def test_write_sync_hook_runs_semantic_only_pass(self):
         tree = ast.parse(RUNTIME_PATH.read_text(encoding="utf-8"))

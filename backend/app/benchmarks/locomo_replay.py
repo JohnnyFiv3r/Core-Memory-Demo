@@ -5,10 +5,25 @@ import os
 from pathlib import Path
 from typing import Any
 
-from core_memory.integrations.openclaw_runtime import finalize_and_process_turn
-from core_memory.runtime.engine import emit_turn_finalized, process_flush
-from core_memory.runtime.association_pass import run_association_pass
-from core_memory.runtime.worker import process_memory_event
+try:
+    from core_memory.integrations.openclaw_runtime import finalize_and_process_turn
+except Exception:  # pragma: no cover
+    finalize_and_process_turn = None  # type: ignore
+try:
+    from core_memory.runtime.engine import emit_turn_finalized, process_flush
+except Exception:  # pragma: no cover
+    emit_turn_finalized = None  # type: ignore
+    process_flush = None  # type: ignore
+try:
+    from core_memory.runtime.association_pass import run_association_pass
+except Exception:  # pragma: no cover
+    run_association_pass = None  # type: ignore
+try:
+    from core_memory.runtime.worker import process_memory_event
+except Exception:  # pragma: no cover
+    process_memory_event = None  # type: ignore
+
+from app.benchmarks.locomo_ingest import _archive_locomo_turn
 
 
 _LOCOMO_CRAWLER_CALLABLE = 'app.benchmarks.locomo_turn_crawler:locomo_crawler_callable'
@@ -24,6 +39,13 @@ _LOCOMO_ENTITY_STOP = {
 def _turn_metadata(*, sample_id: str, session_index: int, session_date_time: str, turn_index: int, dia_id: str, speaker: str, img_url: str, blip_caption: str) -> dict[str, Any]:
     return {
         'benchmark_name': 'locomo',
+        'sample_id': sample_id,
+        'session_index': session_index,
+        'session_date_time': session_date_time,
+        'dia_id': dia_id,
+        'dia_ids': [dia_id] if dia_id else [],
+        'speaker': speaker,
+        'turn_index': turn_index,
         'locomo_sample_id': sample_id,
         'locomo_session_index': session_index,
         'locomo_session_date_time': session_date_time,
@@ -58,6 +80,14 @@ def _turn_envelope(*, sample_id: str, session_index: int, turn: dict[str, Any]) 
         img_url=img_url,
         blip_caption=blip_caption,
     )
+    assistant_content_parts: list[str] = []
+    if session_date_time:
+        assistant_content_parts.append(f'Session date: {session_date_time}')
+    assistant_content_parts.append(f'{speaker}: {text}'.strip(': '))
+    if blip_caption:
+        assistant_content_parts.append(f'Image caption: {blip_caption}')
+    assistant_content = '\n\n'.join(p for p in assistant_content_parts if p)
+
     return {
         'session_id': f'locomo:{sample_id}',
         'turn_id': turn_id,
@@ -65,15 +95,15 @@ def _turn_envelope(*, sample_id: str, session_index: int, turn: dict[str, Any]) 
         'trace_id': f'tr-{turn_id}',
         'turns': [
             {
-                'speaker': 'locomo_replay',
+                'speaker': 'benchmark',
                 'role': 'user',
                 'content': f'[LoCoMo replay] session={session_index} dia_id={dia_id} speaker={speaker}',
             },
             {
-                'speaker': speaker,
+                'speaker': speaker or 'assistant',
                 'role': 'assistant',
-                'content': f'{speaker}: {text}'.strip(': '),
-            }
+                'content': assistant_content,
+            },
         ],
         'trace_depth': 0,
         'origin': 'LOCOMO_REPLAY',
@@ -259,7 +289,8 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
 
     # Bounded entity-overlap links: connect each turn to the latest previous
     # mentions of the same meaningful people/entities, excluding generic replay
-    # scaffolding tokens. This keeps density useful without building a clique.
+    # scaffolding tokens. The relationship itself stays in the canonical Core
+    # Memory vocabulary; the overlap heuristic is recorded as reason metadata.
     latest_by_entity: dict[str, str] = {}
     for cur in ordered:
         cur_bead = str(cur.get('bead_id') or '')
@@ -272,7 +303,7 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
                 add_assoc(
                     cur_bead,
                     prior_bead,
-                    'entity_overlap',
+                    'associated_with',
                     f"LoCoMo replay entity overlap: both turns mention {entity!r} within sample {sample_id} session {session_index}.",
                     0.82,
                     'locomo_entity_overlap',
@@ -293,6 +324,19 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
             'beads_considered': len(ordered),
             'lookup_misses': lookup_misses,
             'lookup_misses_omitted': max(0, len(list(turns or [])) - len(ordered) - len(lookup_misses)),
+        }
+
+    if run_association_pass is None:
+        return {
+            'ok': False,
+            'enabled': False,
+            'associations_requested': len(associations),
+            'associations_appended': 0,
+            'associations_quarantined': 0,
+            'beads_considered': len(ordered),
+            'lookup_misses': lookup_misses,
+            'lookup_misses_omitted': max(0, len(list(turns or [])) - len(ordered) - len(lookup_misses)),
+            'reason': 'run_association_pass_unavailable',
         }
 
     out = run_association_pass(
@@ -318,6 +362,12 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
 
 
 def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'transcript_only', flush_policy: str = 'per_session') -> dict[str, Any]:
+    if str(mode or 'transcript_only') == 'canonical_turn':
+        if finalize_and_process_turn is None:
+            raise RuntimeError('core_memory_unavailable:finalize_and_process_turn')
+    else:
+        if emit_turn_finalized is None:
+            raise RuntimeError('core_memory_unavailable:emit_turn_finalized')
     sample_id = str(sample.get('sample_id') or '').strip()
     sessions = list(sample.get('sessions') or [])
     emitted: list[dict[str, Any]] = []
@@ -330,17 +380,11 @@ def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'tran
         for turn in session_turns:
             env = _turn_envelope(sample_id=sample_id, session_index=session_index, turn=dict(turn or {}))
             if str(mode or 'transcript_only') == 'canonical_turn':
-                previous_callable = os.environ.get('CORE_MEMORY_AGENT_CRAWLER_CALLABLE')
                 previous_invoke = os.environ.get('CORE_MEMORY_AGENT_CRAWLER_INVOKE')
-                os.environ['CORE_MEMORY_AGENT_CRAWLER_CALLABLE'] = previous_callable or _LOCOMO_CRAWLER_CALLABLE
-                os.environ['CORE_MEMORY_AGENT_CRAWLER_INVOKE'] = previous_invoke or '1'
+                os.environ['CORE_MEMORY_AGENT_CRAWLER_INVOKE'] = '1'
                 try:
                     out = finalize_and_process_turn(root=root, policy=None, **env)
                 finally:
-                    if previous_callable is None:
-                        os.environ.pop('CORE_MEMORY_AGENT_CRAWLER_CALLABLE', None)
-                    else:
-                        os.environ['CORE_MEMORY_AGENT_CRAWLER_CALLABLE'] = previous_callable
                     if previous_invoke is None:
                         os.environ.pop('CORE_MEMORY_AGENT_CRAWLER_INVOKE', None)
                     else:
@@ -358,6 +402,10 @@ def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'tran
                     out = {**out, 'worker': worker_out}
                 emitted_flag = bool(out.get('emitted') or event_id)
             if emitted_flag:
+                # Explicitly write to the turn archive so the hydration path can
+                # retrieve full transcript text by locomo:{sample_id}:{dia_id}
+                # regardless of what core_memory's internal processing writes.
+                _archive_locomo_turn(root=root, turn=dict(turn or {}))
                 emitted.append(
                     {
                         'turn_id': env['turn_id'],
@@ -384,15 +432,21 @@ def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'tran
             except Exception as exc:
                 association_synthesis.append({'ok': False, 'enabled': True, 'step': 'locomo_association_synthesis', 'error': str(exc), 'session_id': f'locomo:{sample_id}'})
         if str(flush_policy or 'per_session') == 'per_session':
+            if process_flush is None:
+                flushes.append({'ok': False, 'step': 'process_flush', 'error': 'core_memory_unavailable', 'session_id': f'locomo:{sample_id}'})
+            else:
+                try:
+                    flushes.append(process_flush(root=root, session_id=f'locomo:{sample_id}', promote=True, token_budget=128000, max_beads=200, source='locomo_replay'))
+                except Exception as exc:
+                    flushes.append({'ok': False, 'step': 'process_flush', 'error': str(exc), 'session_id': f'locomo:{sample_id}'})
+    if str(flush_policy or 'per_session') == 'end_only':
+        if process_flush is None:
+            flushes.append({'ok': False, 'step': 'process_flush', 'error': 'core_memory_unavailable', 'session_id': f'locomo:{sample_id}'})
+        else:
             try:
                 flushes.append(process_flush(root=root, session_id=f'locomo:{sample_id}', promote=True, token_budget=128000, max_beads=200, source='locomo_replay'))
             except Exception as exc:
                 flushes.append({'ok': False, 'step': 'process_flush', 'error': str(exc), 'session_id': f'locomo:{sample_id}'})
-    if str(flush_policy or 'per_session') == 'end_only':
-        try:
-            flushes.append(process_flush(root=root, session_id=f'locomo:{sample_id}', promote=True, token_budget=128000, max_beads=200, source='locomo_replay'))
-        except Exception as exc:
-            flushes.append({'ok': False, 'step': 'process_flush', 'error': str(exc), 'session_id': f'locomo:{sample_id}'})
     return {
         'ok': True,
         'sample_id': sample_id,

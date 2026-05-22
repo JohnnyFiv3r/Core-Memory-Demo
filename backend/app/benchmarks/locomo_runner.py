@@ -2,7 +2,12 @@ from __future__ import annotations
 
 import gc
 import re
+import threading
 from pathlib import Path
+
+
+class BenchmarkCancelledError(RuntimeError):
+    pass
 from typing import Any
 
 from app.benchmarks.locomo_answer import generate_locomo_answer
@@ -21,6 +26,10 @@ try:
     from core_memory.retrieval.tools import memory as memory_tools
 except Exception:  # pragma: no cover
     memory_tools = None  # type: ignore
+try:
+    from core_memory.retrieval.contracts import recall_result_from_memory_execute
+except Exception:  # pragma: no cover
+    recall_result_from_memory_execute = None  # type: ignore
 
 try:
     from core_memory.retrieval.trace import trace_request
@@ -36,6 +45,10 @@ try:
     from core_memory.runtime.turn_archive import find_turn_record
 except Exception:  # pragma: no cover
     find_turn_record = None  # type: ignore
+try:
+    from core_memory.retrieval.agent import recall as core_recall
+except Exception:  # pragma: no cover
+    core_recall = None  # type: ignore
 
 
 _STOP_TERMS = {
@@ -67,7 +80,6 @@ def _locomo_facets(*, sample_id: str, question: str) -> dict[str, Any]:
     metadata: dict[str, Any] = {}
     if sample:
         metadata["sample_id"] = sample
-        metadata["session_id"] = f"locomo:{sample}"
 
     must_terms: list[str] = []
     # Session references are metadata on LoCoMo turns, so they remain safe as
@@ -286,11 +298,25 @@ def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[st
         raw_dia_ids.extend([str(x).strip() for x in (row.get("dia_ids") or []) if str(x).strip()])
         if raw_dia_ids:
             dia_id_source = "row.dia_ids"
+    source_turn_ids = [str(x).strip() for x in (bead.get("source_turn_ids") or []) if str(x).strip()]
     if not raw_dia_ids:
-        raw_dia_ids.extend([str(x).strip() for x in (bead.get("source_turn_ids") or []) if str(x).strip().startswith("D")])
+        for source_turn_id in source_turn_ids:
+            if source_turn_id.startswith("locomo:"):
+                parts = source_turn_id.split(":", 2)
+                if len(parts) == 3 and parts[2]:
+                    raw_dia_ids.append(parts[2])
+            elif source_turn_id.startswith("D"):
+                raw_dia_ids.append(source_turn_id)
         if raw_dia_ids:
             dia_id_source = "bead.source_turn_ids"
     dia_ids = sorted(set(x for x in raw_dia_ids if x))
+    sample_from_source_turn = ""
+    for source_turn_id in source_turn_ids:
+        if source_turn_id.startswith("locomo:"):
+            parts = source_turn_id.split(":", 2)
+            if len(parts) == 3 and parts[1]:
+                sample_from_source_turn = parts[1]
+                break
     return {
         "rank": rank,
         "bead_id": bead_id,
@@ -304,10 +330,10 @@ def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[st
         "claim_status": str(row.get("claim_status") or "").strip(),
         "claim_value": row.get("claim_value"),
         "dia_ids": dia_ids,
-        "sample_id": str(metadata.get("sample_id") or "").strip(),
-        "session_index": int(metadata.get("session_index") or 0),
-        "speaker": str(metadata.get("speaker") or "").strip(),
-        "session_date_time": str(metadata.get("session_date_time") or "").strip(),
+        "sample_id": str(metadata.get("sample_id") or metadata.get("locomo_sample_id") or sample_from_source_turn or "").strip(),
+        "session_index": int(metadata.get("session_index") or metadata.get("locomo_session_index") or 0),
+        "speaker": str(metadata.get("speaker") or metadata.get("locomo_speaker") or "").strip(),
+        "session_date_time": str(metadata.get("session_date_time") or metadata.get("locomo_session_date_time") or "").strip(),
         "text": str(bead.get("detail") or "").strip(),
         "projection": {
             "bead_id_source": bead_id_source or "missing",
@@ -316,7 +342,7 @@ def _extract_result_row(*, root: str, rank: int, row: dict[str, Any]) -> dict[st
             "inspect_bead_found": bool(bead),
             "row_keys": sorted(str(k) for k in row.keys()),
             "metadata_keys": sorted(str(k) for k in metadata.keys()),
-            "source_turn_ids": [str(x).strip() for x in (bead.get("source_turn_ids") or []) if str(x).strip()],
+            "source_turn_ids": source_turn_ids,
         },
     }
 
@@ -344,40 +370,31 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
         "facets": _locomo_facets(sample_id=sample_id, question=str(qa.get("question") or "")),
         "constraints": {
             "sample_id": sample_id,
-            "session_id": f"locomo:{sample_id}",
         },
     }
     try:
         result = memory_tools.execute(req, root=root, explain=False)
+        recall_payload: dict[str, Any] = {}
+        if recall_result_from_memory_execute is not None:
+            recall_payload = recall_result_from_memory_execute(result, query=req["query"], effort="high", include_raw=False).to_dict()
         raw_results = list(result.get("results") or [])
-        if not raw_results and str(result.get("backend") or "").lower() != "lexical":
-            # Some local/compare benchmark roots can have a usable lexical path
-            # even when high-signal must_terms over-constrain typed filtering.
-            # Retry once with sample/session metadata intact, but without
-            # required lexical terms, before falling back to the turn archive.
-            retry_facets = dict(req.get("facets") or {})
-            retry_facets["must_terms"] = []
-            retry_req = {**req, "facets": retry_facets}
-            retry_result = memory_tools.execute(retry_req, root=root, explain=False)
-            retry_rows = list(retry_result.get("results") or [])
-            if retry_rows:
-                result = retry_result
-                raw_results = retry_rows
         retrieved = [_extract_result_row(root=root, rank=idx, row=dict(row or {})) for idx, row in enumerate(raw_results, start=1)]
         pipeline_name = str(retrieval_pipeline or "execute_trace").strip().lower() or "execute_trace"
-        force_three_phase = pipeline_name in {"execute_trace_hydrate", "forced_three_phase", "three_phase"}
-        trace_meta = {"used": False, "reason": "trace_disabled", "anchor_ids": [], "chains": [], "grounding": {}}
-        hydrate_meta = {"used": False, "reason": "not_requested", "hydrated_rows": 0}
+        # Phase 2: causal traversal anchored to semantic bead candidates.
+        # Always runs as part of the single retrieval pass — results are merged
+        # with the semantic set before hydration.
+        trace_meta = {"used": False, "reason": "trace_unavailable", "anchor_ids": [], "chains": [], "grounding": {}}
+        hydrate_meta: dict[str, Any] = {}
         trace_warning = None
         try:
             anchor_ids = [str((row or {}).get("bead_id") or "").strip() for row in raw_results if str((row or {}).get("bead_id") or "").strip()]
-            if (anchor_ids or force_three_phase) and trace_request is not None:
+            if trace_request is not None:
                 trace = trace_request(
                     root=root,
                     query=str(qa.get("question") or "").strip(),
-                    k=max(int(retrieval_k or 8), 8 if force_three_phase else 3),
+                    k=max(int(retrieval_k or 8), 8),
                     anchor_ids=anchor_ids[: max(3, int(retrieval_k or 8))] if anchor_ids else None,
-                    hydration={"max_beads": max(int(retrieval_k or 8), 8), "adjacent_before": 0, "adjacent_after": 0} if force_three_phase else None,
+                    hydration={"max_beads": max(int(retrieval_k or 8), 8), "adjacent_before": 0, "adjacent_after": 0},
                 )
                 trace_rows = [
                     _extract_result_row(root=root, rank=len(retrieved) + idx, row=dict(row or {}))
@@ -396,15 +413,16 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
                     "diagnostics": dict((trace or {}).get("trace_diagnostics") or {}),
                 }
             else:
-                trace_meta = {"used": False, "reason": "no_anchor_ids", "anchor_ids": [], "chains": [], "grounding": {}}
+                trace_meta = {"used": False, "reason": "trace_unavailable", "anchor_ids": [], "chains": [], "grounding": {}}
         except TypeError as exc:
             trace_warning = f"trace_request_type_error:{exc}"
             trace_meta = {"used": False, "reason": "trace_type_error", "anchor_ids": [], "chains": [], "grounding": {}}
         except Exception as exc:
             trace_warning = f"trace_request_failed:{exc}"
             trace_meta = {"used": False, "reason": "trace_failed", "anchor_ids": [], "chains": [], "grounding": {}}
-        if force_three_phase:
-            retrieved, hydrate_meta = _hydrate_locomo_rows(root=root, rows=retrieved, sample_id=sample_id, limit=max(int(retrieval_k or 8), 8))
+        # Phase 3: source transcript lookup — hydrate bead candidates to full
+        # archived turn text using turn refs identified in phases 1 and 2.
+        retrieved, hydrate_meta = _hydrate_locomo_rows(root=root, rows=retrieved, sample_id=sample_id, limit=max(int(retrieval_k or 8), 8))
         for row in retrieved:
             row["locomo_score"] = _locomo_score(row, sample_id=sample_id, question=str(qa.get("question") or ""))
         retrieved.sort(key=lambda r: float(r.get("locomo_score") or 0.0), reverse=True)
@@ -455,6 +473,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             "trace": trace_meta,
             "hydration": hydrate_meta,
             "retrieval_pipeline": pipeline_name,
+            "recall_result": recall_payload,
             "diagnostics": {
                 "raw_result_count": len(raw_results),
                 "raw_result_keys": sorted({str(k) for row in raw_results[:1] for k in dict(row or {}).keys()}),
@@ -469,6 +488,8 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
                 "answerer_used_dia_ids": list(answer.get("used_dia_ids") or []),
                 "answerer_unsupported": bool(answer.get("unsupported")),
                 "hydration": hydrate_meta,
+                "recall_tier_path": list(recall_payload.get("tier_path") or []),
+                "recall_status": str(recall_payload.get("status") or ""),
             },
         }
     except Exception as exc:
@@ -479,6 +500,7 @@ def run_locomo_retrieval_case(*, root: str, sample_id: str, qa: dict[str, Any], 
             "question": str(qa.get("question") or ""),
             "gold_answer": str(qa.get("answer") or ""),
             "prediction": "",
+            "used_dia_ids": [],
             "answer_f1": 0.0,
             "status": "error",
             "error": str(exc),
@@ -530,11 +552,13 @@ def _slim_locomo_case_result(result: dict[str, Any], *, retrieved_limit: int = 1
     return row
 
 
-def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, progress: Any | None = None, retrieval_pipeline: str = "execute_trace") -> dict[str, Any]:
+def run_locomo_retrieval_suite(*, root: str, qa_cases: list[dict[str, Any]], retrieval_k: int = 8, evidence_recall_k: list[int] | None = None, answer_mode: str = "none", generator_model: str | None = None, progress: Any | None = None, retrieval_pipeline: str = "execute_trace", cancel_event: threading.Event | None = None) -> dict[str, Any]:
     cases = []
     qa_rows = qa_cases or []
     total = len(qa_rows)
     for idx, case in enumerate(qa_rows, start=1):
+        if cancel_event is not None and cancel_event.is_set():
+            raise BenchmarkCancelledError("benchmark_cancelled_during_qa")
         result = run_locomo_retrieval_case(
             root=root,
             sample_id=str(case.get("sample_id") or ""),

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
 import asyncio
+import concurrent.futures
+import functools
 import json
+import threading
 import time
 import uuid
 import urllib.error
@@ -17,6 +20,7 @@ from fastapi.responses import FileResponse, JSONResponse, StreamingResponse
 
 from app.benchmarks import benchmark_store
 from app.benchmarks.locomo_loader import LocomoLoaderError
+from app.benchmarks.locomo_runner import BenchmarkCancelledError
 from app.benchmarks.locomo_suite import build_locomo_suite_metadata
 from app.core.abuse import heavy_operation_slot, rate_limit_chat, rate_limit_general, rate_limit_heavy
 from app.core.auth import auth_meta_payload, require_admin
@@ -58,8 +62,27 @@ CHAT_JOBS: dict[str, dict[str, Any]] = {}
 BENCHMARK_JOB_TTL_SECONDS = 30 * 60
 BENCHMARK_JOB_POLL_MS = 1200
 BENCHMARK_JOB_MAX_EVENTS = 128
+BENCHMARK_MAX_RUNTIME_SECONDS = max(60, int(settings.benchmark_max_runtime_seconds or (90 * 60)))
 BENCHMARK_JOBS: dict[str, dict[str, Any]] = {}
 ACTIVE_BENCHMARK_JOB_ID: str | None = None
+# Dedicated, bounded executor for benchmark worker threads. run_benchmark()
+# issues external calls (embeddings / LLM) with no client-side timeout, so a
+# hung run leaves an un-killable thread pinned to its slot even after the
+# watchdog force-finalizes the job. Isolating those threads here keeps a hang
+# from starving the shared default executor that serves chat, recall, flush and
+# seed jobs. _BENCHMARK_INFLIGHT_WORKERS tracks how many slots are occupied so a
+# new run can fail fast instead of queueing forever behind a fully-leaked pool.
+BENCHMARK_EXECUTOR_MAX_WORKERS = 4
+_BENCHMARK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=BENCHMARK_EXECUTOR_MAX_WORKERS,
+    thread_name_prefix='benchmark-worker',
+)
+_BENCHMARK_INFLIGHT_WORKERS = 0
+_BENCHMARK_INFLIGHT_LOCK = threading.Lock()
+SEED_JOB_TTL_SECONDS = 30 * 60
+SEED_JOB_POLL_MS = 3000
+SEED_JOB_MAX_EVENTS = 64
+SEED_JOBS: dict[str, dict[str, Any]] = {}
 SEED_STATUS: dict[str, Any] = {
     'active': False,
     'kind': '',
@@ -71,6 +94,25 @@ SEED_STATUS: dict[str, Any] = {
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _benchmark_inflight_count() -> int:
+    with _BENCHMARK_INFLIGHT_LOCK:
+        return _BENCHMARK_INFLIGHT_WORKERS
+
+
+def _adjust_benchmark_inflight(delta: int) -> None:
+    """Track occupied slots in the benchmark executor.
+
+    Incremented when a run_benchmark() call is submitted, decremented by the
+    worker future's done-callback when the thread finally returns — including
+    long after the watchdog abandoned the job. The count therefore reflects
+    real OS threads, not job rows, so a leaked (hung) thread keeps its slot
+    counted until it actually unwinds.
+    """
+    global _BENCHMARK_INFLIGHT_WORKERS
+    with _BENCHMARK_INFLIGHT_LOCK:
+        _BENCHMARK_INFLIGHT_WORKERS = max(0, _BENCHMARK_INFLIGHT_WORKERS + int(delta))
 
 
 def _prune_chat_jobs() -> None:
@@ -90,16 +132,57 @@ def _prune_chat_jobs() -> None:
 
 
 
+def _force_finalize_benchmark_job(row: dict[str, Any], *, status: str, message: str, error: str | None = None) -> None:
+    """Mark a benchmark job done and free the active slot without waiting on its
+    worker thread.
+
+    A worker hung inside an un-timed external call (embeddings / LLM) never
+    observes ``cancel_event``, so a cooperative-only cancel leaves the job — and
+    ``ACTIVE_BENCHMARK_JOB_ID`` — stuck forever. Cancel, supersede, the runtime
+    watchdog and the zombie pruner all reclaim the slot through here. The
+    orphaned worker has ``cancel_event`` set and exits at its next checkpoint;
+    its late result is discarded because ``done`` is already True.
+    """
+    global ACTIVE_BENCHMARK_JOB_ID
+
+    cancel_event = row.get('cancel_event')
+    if isinstance(cancel_event, threading.Event):
+        cancel_event.set()
+    row['abandoned'] = True
+    row['status'] = str(status)
+    row['done'] = True
+    row['updated_ms'] = _now_ms()
+    if error:
+        row['error'] = str(error)
+    _benchmark_event(row, status, message, **({'error': error} if error else {}))
+    if ACTIVE_BENCHMARK_JOB_ID == str(row.get('job_id') or ''):
+        ACTIVE_BENCHMARK_JOB_ID = None
+
+
 def _prune_benchmark_jobs() -> None:
     global ACTIVE_BENCHMARK_JOB_ID
 
     now = _now_ms()
     ttl_ms = int(BENCHMARK_JOB_TTL_SECONDS * 1000)
+    # Backstop for the keepalive runtime watchdog: if the keepalive task itself
+    # died, updated_ms stops advancing and the age check below would only catch
+    # the job after 60 min. A not-done job whose worker has been alive (by
+    # started_ms) past the runtime limit plus a grace window is force-failed.
+    runtime_cap_ms = int((BENCHMARK_MAX_RUNTIME_SECONDS + 5 * 60) * 1000)
     stale: list[str] = []
     for job_id, row in list(BENCHMARK_JOBS.items()):
         updated = int((row or {}).get('updated_ms') or 0)
+        started = int((row or {}).get('started_ms') or 0)
         done = bool((row or {}).get('done'))
         age_ms = now - updated
+        if not done and started and (now - started) > runtime_cap_ms:
+            _force_finalize_benchmark_job(
+                row,
+                status='failed',
+                message='Benchmark exceeded max runtime; abandoned',
+                error='benchmark_runtime_exceeded',
+            )
+            continue
         if done and age_ms > ttl_ms:
             stale.append(job_id)
         elif not done and age_ms > max(ttl_ms * 2, 10 * 60_000):
@@ -108,6 +191,13 @@ def _prune_benchmark_jobs() -> None:
         BENCHMARK_JOBS.pop(job_id, None)
         if ACTIVE_BENCHMARK_JOB_ID == job_id:
             ACTIVE_BENCHMARK_JOB_ID = None
+    # Mirror the in-memory zombie recovery to the durable Postgres store so that
+    # stale `status='running'` rows don't block new benchmark runs via
+    # benchmark_store.read_active_job().
+    try:
+        benchmark_store.timeout_stale_jobs(max_runtime_seconds=BENCHMARK_MAX_RUNTIME_SECONDS + 5 * 60)
+    except Exception:
+        pass
 
 
 def _strip_benchmark_case_payloads(value: Any) -> Any:
@@ -172,6 +262,69 @@ def _set_seed_status(*, active: bool, kind: str, status: str, message: str) -> N
     })
 
 
+def _prune_seed_jobs() -> None:
+    now = _now_ms()
+    ttl_ms = int(SEED_JOB_TTL_SECONDS * 1000)
+    stale: list[str] = []
+    for job_id, row in list(SEED_JOBS.items()):
+        updated = int((row or {}).get('updated_ms') or 0)
+        done = bool((row or {}).get('done'))
+        age_ms = now - updated
+        if done and age_ms > ttl_ms:
+            stale.append(job_id)
+        elif not done and age_ms > max(ttl_ms * 2, 10 * 60_000):
+            stale.append(job_id)
+    for job_id in stale:
+        SEED_JOBS.pop(job_id, None)
+
+
+def _seed_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> None:
+    events = list(row.get('events') or [])
+    seq = int(row.get('seq') or 0) + 1
+    evt: dict[str, Any] = {
+        'seq': seq,
+        'ts_ms': _now_ms(),
+        'stage': str(stage or ''),
+        'message': str(message or ''),
+    }
+    for k, v in dict(extra or {}).items():
+        if v is None:
+            continue
+        evt[str(k)] = v
+    events.append(evt)
+    if len(events) > SEED_JOB_MAX_EVENTS:
+        events = events[-SEED_JOB_MAX_EVENTS:]
+    row['events'] = events
+    row['seq'] = seq
+    row['stage'] = str(stage or '')
+    row['updated_ms'] = _now_ms()
+
+
+def _seed_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
+    events = [e for e in list(row.get('events') or []) if int((e or {}).get('seq') or 0) > int(cursor)]
+    next_cursor = int(cursor)
+    if events:
+        next_cursor = int((events[-1] or {}).get('seq') or cursor)
+    out: dict[str, Any] = {
+        'ok': True,
+        'job_id': str(row.get('job_id') or ''),
+        'status': str(row.get('status') or 'running'),
+        'stage': str(row.get('stage') or ''),
+        'done': bool(row.get('done')),
+        'poll_after_ms': SEED_JOB_POLL_MS,
+        'events': events,
+        'cursor_next': next_cursor,
+        'started_ms': int(row.get('started_ms') or 0),
+        'updated_ms': int(row.get('updated_ms') or 0),
+        'elapsed_ms': max(0, _now_ms() - int(row.get('started_ms') or _now_ms())),
+    }
+    if row.get('error'):
+        out['error'] = str(row['error'])
+    if bool(row.get('done')) and isinstance(row.get('result'), dict):
+        out['result'] = dict(row['result'])
+    return out
+
+
 def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
     events = [e for e in list(row.get('events') or []) if int((e or {}).get('seq') or 0) > int(cursor)]
     next_cursor = int(cursor)
@@ -183,6 +336,9 @@ def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str,
         'job_id': str(row.get('job_id') or ''),
         'status': str(row.get('status') or 'running'),
         'stage': str(row.get('stage') or ''),
+        'stage_message': str(row.get('stage_message') or ''),
+        'ingest_n': int(row.get('ingest_n') or 0),
+        'ingest_total': int(row.get('ingest_total') or 0),
         'done': bool(row.get('done')),
         'poll_after_ms': BENCHMARK_JOB_POLL_MS,
         'events': events,
@@ -203,23 +359,86 @@ def _stored_benchmark_job_payload(stored: dict[str, Any], *, cursor: int = 0) ->
     status = str((stored or {}).get('status') or '')
     done = status in {'completed', 'failed'}
     result = stored.get('result') if isinstance(stored.get('result'), dict) else None
+    progress = dict(stored.get('progress') or {}) if isinstance(stored.get('progress'), dict) else {}
+    all_events = list(stored.get('events') or []) if isinstance(stored.get('events'), list) else []
+    events = [e for e in all_events if int((e or {}).get('seq') or 0) > int(cursor)]
+    next_cursor = int(cursor)
+    if events:
+        next_cursor = int((events[-1] or {}).get('seq') or cursor)
+    stage = str(progress.get('stage') or status or '')
     out: dict[str, Any] = {
         'ok': True,
         'job_id': str((stored or {}).get('job_id') or ''),
         'status': status,
-        'stage': status,
+        'stage': stage,
+        'stage_message': str(progress.get('stage_message') or ''),
+        'ingest_n': int(progress.get('ingest_n') or 0),
+        'ingest_total': int(progress.get('ingest_total') or 0),
         'done': done,
         'error': (stored or {}).get('error'),
         'result': result,
-        'events': [],
+        'events': events,
         'cursor': int(cursor),
-        'cursor_next': int(cursor),
+        'cursor_next': next_cursor,
+        'poll_after_ms': BENCHMARK_JOB_POLL_MS,
     }
+    if progress.get('updated_ms'):
+        out['updated_ms'] = int(progress.get('updated_ms') or 0)
+    started_at_raw = str((stored or {}).get('started_at') or '').strip()
+    if started_at_raw and not out.get('elapsed_ms'):
+        try:
+            started_dt = datetime.fromisoformat(started_at_raw.replace('Z', '+00:00'))
+            out['elapsed_ms'] = max(0, int((datetime.now(timezone.utc) - started_dt).total_seconds() * 1000))
+        except Exception:
+            pass
     for key in ('created_at', 'updated_at', 'started_at', 'finished_at'):
         value = (stored or {}).get(key)
         if value:
             out[key] = value
     return out
+
+
+def _stored_active_benchmark_state(stored: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    job = _stored_benchmark_job_payload(stored, cursor=0)
+    kwargs = dict((stored or {}).get('kwargs') or {}) if isinstance((stored or {}).get('kwargs'), dict) else {}
+    request = dict((stored or {}).get('request') or {}) if isinstance((stored or {}).get('request'), dict) else {}
+    latest = dict((list((stored or {}).get('events') or []) or [{}])[-1] or {})
+    stage = str(job.get('stage') or job.get('status') or 'working')
+    job_id = str(job.get('job_id') or '')
+    summary = {
+        'run_id': '',
+        'job_id': job_id,
+        'status': str(job.get('status') or 'running'),
+        'phase': stage,
+        'stage': stage,
+        'stage_message': str(job.get('stage_message') or ''),
+        'ingest_n': int(job.get('ingest_n') or 0),
+        'ingest_total': int(job.get('ingest_total') or 0),
+        'elapsed_ms': int(job.get('elapsed_ms') or 0),
+        'started_at': str(job.get('started_at') or ''),
+        'updated_at': str(job.get('updated_at') or ''),
+        'suite': str(kwargs.get('suite') or request.get('suite') or ''),
+        'semantic_mode': str(kwargs.get('semantic_mode_name') or request.get('semantic_mode') or ''),
+        'root_mode': str(kwargs.get('root_mode') or request.get('root_mode') or ''),
+        'answer_mode': str(kwargs.get('answer_mode') or request.get('answer_mode') or ''),
+        'qa_completed': int(latest.get('qa_completed') or 0),
+        'qa_cases': int(latest.get('qa_total') or 0),
+        'sample_id': str(latest.get('sample_id') or ''),
+        'qa_id': str(latest.get('qa_id') or ''),
+        'case_status': str(latest.get('case_status') or ''),
+        'warnings': [],
+        'active': True,
+    }
+    report = {
+        'live': True,
+        'run_id': '',
+        'status': str(job.get('status') or 'running'),
+        'phase': stage,
+        'active_job_id': job_id,
+        'active': True,
+        'config': request,
+    }
+    return summary, report, job
 
 
 def _benchmark_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> None:
@@ -283,12 +502,18 @@ def _dispatch_benchmark_job(job_id: str, body: dict[str, Any], kwargs: dict[str,
 def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
     events = list(row.get('events') or [])
     latest = dict(events[-1] or {}) if events else {}
+    stage = str(row.get('stage') or latest.get('stage') or 'working')
     kwargs = dict(row.get('kwargs') or {})
     return {
         'run_id': '',
         'job_id': str(row.get('job_id') or ''),
         'status': str(row.get('status') or 'running'),
-        'phase': str(row.get('stage') or latest.get('stage') or 'working'),
+        'phase': stage,
+        'stage': stage,
+        'stage_message': str(row.get('stage_message') or ''),
+        'ingest_n': int(row.get('ingest_n') or 0),
+        'ingest_total': int(row.get('ingest_total') or 0),
+        'elapsed_ms': max(0, _now_ms() - int(row.get('started_ms') or _now_ms())),
         'started_at': datetime.fromtimestamp(int(row.get('started_ms') or _now_ms()) / 1000, timezone.utc).isoformat(),
         'updated_at': datetime.fromtimestamp(int(row.get('updated_ms') or _now_ms()) / 1000, timezone.utc).isoformat(),
         'suite': str(kwargs.get('suite') or ''),
@@ -313,104 +538,40 @@ def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
 
 
 def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any]]:
-    active_summary = _active_benchmark_summary(active_job)
-    report = dict(snapshot.get('report') or {})
+    # When a benchmark job is in flight, never merge in the previous run's
+    # snapshot: doing so leaks stale run_id, scores, and config into the live
+    # state and forces the frontend to fight it with workaround flags. The
+    # active job has its own progress (stage, qa_completed/qa_total via
+    # _active_benchmark_summary). The previous run's data belongs in a
+    # separate "last completed run" panel, not in the live state.
     active_job_id = str(active_job.get('job_id') or '')
-    if active_job_id:
-        summary = active_summary
-        summary['active'] = True
-        compact_report: dict[str, Any] = {
-            'live': True,
-            'run_id': '',
-            'status': str(summary.get('status') or active_job.get('status') or 'running'),
-            'phase': str(summary.get('phase') or active_job.get('stage') or 'working'),
-            'active_job_id': active_job_id,
-            'active': True,
-            'qa_completed': int(summary.get('qa_completed') or 0),
-            'qa_cases': int(summary.get('qa_cases') or 0),
-            'sample_id': str(summary.get('sample_id') or ''),
-            'qa_id': str(summary.get('qa_id') or ''),
-            'case_status': str(summary.get('case_status') or ''),
-            'conversation_id': str(summary.get('conversation_id') or ''),
-            'conversation_index': int(summary.get('conversation_index') or 0),
-            'conversations': int(summary.get('conversations') or 0),
-            'replay_turn_completed': int(summary.get('replay_turn_completed') or 0),
-            'replay_turn_total': int(summary.get('replay_turn_total') or 0),
-            'turn_id': str(summary.get('turn_id') or ''),
-        }
-        for key in (
-            'started_at',
-            'finished_at',
-            'suite',
-            'root_mode',
-            'semantic_mode',
-            'answer_mode',
-            'retrieval_k',
-            'artifact_path',
-            'warnings',
-            'samples',
-            'qa_cases',
-            'turns_ingested',
-            'preload_turn_count',
-            'backend_modes',
-        ):
-            if key in summary:
-                compact_report[key] = summary.get(key)
-        config = report.get('config')
-        kwargs = dict(active_job.get('kwargs') or {})
-        if isinstance(config, dict) and config:
-            compact_report['config'] = {
-                'suite': str(kwargs.get('suite') or config.get('suite') or summary.get('suite') or ''),
-                'root_mode': str(kwargs.get('root_mode') or config.get('root_mode') or summary.get('root_mode') or ''),
-                'semantic_mode': str(kwargs.get('semantic_mode_name') or config.get('semantic_mode') or summary.get('semantic_mode') or ''),
-                'answer_mode': str(kwargs.get('answer_mode') or config.get('answer_mode') or summary.get('answer_mode') or ''),
-                'retrieval_k': int(kwargs.get('retrieval_k') or config.get('retrieval_k') or summary.get('retrieval_k') or 0),
-                'qa_session_mode': str(kwargs.get('qa_session_mode') or config.get('qa_session_mode') or ''),
-            }
-        elif summary:
-            compact_report['config'] = {
-                'suite': str(summary.get('suite') or ''),
-                'root_mode': str(summary.get('root_mode') or ''),
-                'semantic_mode': str(summary.get('semantic_mode') or ''),
-                'answer_mode': str(summary.get('answer_mode') or ''),
-                'retrieval_k': int(summary.get('retrieval_k') or 0),
-                'qa_session_mode': str(kwargs.get('qa_session_mode') or ''),
-            }
-        dataset = report.get('dataset')
-        if isinstance(dataset, dict) and dataset:
-            compact_report['dataset'] = {
-                'dataset_path': str(dataset.get('dataset_path') or summary.get('dataset_path') or ''),
-                'samples': int(dataset.get('samples') or summary.get('samples') or 0),
-                'qa_total': int(dataset.get('qa_total') or summary.get('qa_cases') or 0),
-                'turns_total': int(dataset.get('turns_total') or summary.get('turns_ingested') or 0),
-                'selected_samples': int(dataset.get('selected_samples') or summary.get('samples') or 0),
-                'selected_qa_cases': int(dataset.get('selected_qa_cases') or summary.get('qa_cases') or 0),
-                'python_version': str(dataset.get('python_version') or ''),
-            }
-            sample_ids = dataset.get('selected_sample_ids')
-            if isinstance(sample_ids, list) and sample_ids:
-                compact_report['dataset']['selected_sample_ids'] = [str(x) for x in sample_ids[:10] if str(x).strip()]
-        environment = report.get('environment')
-        if isinstance(environment, dict) and environment:
-            compact_report['environment'] = {
-                'embeddings_provider': str(environment.get('embeddings_provider') or ''),
-                'embeddings_model': str(environment.get('embeddings_model') or ''),
-            }
-        semantic_build = report.get('semantic_build')
-        if isinstance(semantic_build, dict) and semantic_build:
-            compact_report['semantic_build'] = {
-                'ok': bool(semantic_build.get('ok')),
-                'backend': semantic_build.get('backend'),
-                'entries': semantic_build.get('entries'),
-                'error': semantic_build.get('error'),
-            }
-        return summary, compact_report
-    summary = active_summary
+    summary = _active_benchmark_summary(active_job)
     report = {
+        'live': True,
+        'run_id': '',
         'status': str(active_job.get('status') or 'running'),
         'phase': str(active_job.get('stage') or 'working'),
         'active_job_id': active_job_id,
         'active': True,
+        'qa_completed': int(summary.get('qa_completed') or 0),
+        'qa_cases': int(summary.get('qa_cases') or 0),
+        'sample_id': str(summary.get('sample_id') or ''),
+        'qa_id': str(summary.get('qa_id') or ''),
+        'case_status': str(summary.get('case_status') or ''),
+        'conversation_id': str(summary.get('conversation_id') or ''),
+        'conversation_index': int(summary.get('conversation_index') or 0),
+        'conversations': int(summary.get('conversations') or 0),
+        'replay_turn_completed': int(summary.get('replay_turn_completed') or 0),
+        'replay_turn_total': int(summary.get('replay_turn_total') or 0),
+        'turn_id': str(summary.get('turn_id') or ''),
+        'config': {
+            'suite': str((active_job.get('kwargs') or {}).get('suite') or ''),
+            'root_mode': str((active_job.get('kwargs') or {}).get('root_mode') or ''),
+            'semantic_mode': str((active_job.get('kwargs') or {}).get('semantic_mode_name') or ''),
+            'answer_mode': str((active_job.get('kwargs') or {}).get('answer_mode') or ''),
+            'retrieval_k': int((active_job.get('kwargs') or {}).get('retrieval_k') or 0),
+            'qa_session_mode': str((active_job.get('kwargs') or {}).get('qa_session_mode') or ''),
+        },
     }
     return summary, report
 
@@ -476,6 +637,83 @@ async def _run_chat_job(job_id: str, message: str) -> None:
         _chat_event(current, 'failed', 'Chat failed', error=str(exc or 'chat_failed'))
 
 
+async def _run_seed_job(job_id: str, kwargs: dict[str, Any]) -> None:
+    row = SEED_JOBS.get(job_id)
+    if not isinstance(row, dict):
+        return
+    row['status'] = 'running'
+    _seed_event(row, 'starting', 'Seed started')
+
+    cancel_event: threading.Event = row.get('cancel_event') or threading.Event()
+    _hb: dict[str, Any] = {'seeded': 0, 'total': 0, 'stage': 'seeding', 'message': ''}
+
+    def progress(seeded: int, total: int) -> None:
+        _hb['seeded'] = int(seeded)
+        _hb['total'] = int(total)
+        _hb['stage'] = 'seeding'
+
+    async def _keepalive() -> None:
+        while True:
+            current = SEED_JOBS.get(job_id)
+            if not isinstance(current, dict) or bool(current.get('done')):
+                return
+            hb_stage = _hb['stage']
+            n, t = _hb['seeded'], _hb['total']
+            if hb_stage == 'seeding':
+                current['stage'] = f'seeding {n}/{t}' if t else 'seeding'
+            else:
+                current['stage'] = hb_stage
+            current['updated_ms'] = _now_ms()
+            await asyncio.sleep(2)
+
+    def heartbeat(stage: str, message: str) -> None:
+        _hb['stage'] = str(stage or '')
+        _hb['message'] = str(message or '')
+
+    keepalive_task = asyncio.create_task(_keepalive())
+    try:
+        _set_seed_status(active=True, kind='locomo', status='running', message='LoCoMo replay in progress')
+        out = await asyncio.to_thread(replay_locomo_corpus, cancel_event=cancel_event, progress=progress, heartbeat=heartbeat, **kwargs)
+        current = SEED_JOBS.get(job_id)
+        if not isinstance(current, dict):
+            return
+        current['done'] = True
+        current['result'] = dict(out or {})
+        current['updated_ms'] = _now_ms()
+        if bool((out or {}).get('cancelled')):
+            current['status'] = 'cancelled'
+            _seed_event(current, 'cancelled', 'Seed cancelled')
+            _set_seed_status(active=False, kind='locomo', status='cancelled', message='Seed cancelled')
+        elif bool((out or {}).get('ok')):
+            current['status'] = 'completed'
+            seeded = int((out or {}).get('seeded') or 0)
+            _seed_event(current, 'done', f'Seed completed: {seeded} turns ingested', seeded=seeded)
+            _set_seed_status(active=False, kind='locomo', status='completed', message=f'LoCoMo replay complete: {seeded} turns')
+        else:
+            current['status'] = 'failed'
+            turn_errors = list((out or {}).get('errors') or [])
+            first_err = str((turn_errors[0] or {}).get('error') or '') if turn_errors else ''
+            seeded_count = int((out or {}).get('seeded') or 0)
+            if seeded_count == 0:
+                err = first_err or 'no_turns_seeded'
+            else:
+                err = first_err or 'seed_partial_failure'
+            current['error'] = err
+            _seed_event(current, 'failed', f'Seed failed: {err}', error=err, seeded=seeded_count, failed_turns=len(turn_errors))
+            _set_seed_status(active=False, kind='locomo', status='failed', message=err)
+    except Exception as exc:
+        current = SEED_JOBS.get(job_id)
+        if isinstance(current, dict):
+            current['status'] = 'failed'
+            current['done'] = True
+            current['error'] = str(exc)
+            current['updated_ms'] = _now_ms()
+            _seed_event(current, 'failed', f'Seed error: {exc}', error=str(exc))
+        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
+    finally:
+        keepalive_task.cancel()
+
+
 async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
     global ACTIVE_BENCHMARK_JOB_ID
 
@@ -498,13 +736,68 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             return
         await asyncio.sleep(0.25)
 
+    cancel_event = row.get('cancel_event')
+    if not isinstance(cancel_event, threading.Event):
+        cancel_event = threading.Event()
+        row['cancel_event'] = cancel_event
+    if bool(row.get('abandoned')) or cancel_event.is_set():
+        row['status'] = 'cancelled'
+        row['done'] = True
+        row['updated_ms'] = _now_ms()
+        _benchmark_event(row, 'cancelled', 'Benchmark cancelled before start')
+        return
+
     ACTIVE_BENCHMARK_JOB_ID = job_id
     row['status'] = 'running'
+    # Reset started_ms to the actual worker start so the runtime watchdog and
+    # elapsed_ms measure execution time, not time spent waiting for the slot.
+    row['started_ms'] = _now_ms()
     _benchmark_event(row, 'starting', 'Benchmark started')
+
+    # Heartbeat: run_benchmark calls this from the worker thread to update the
+    # current phase. Written to a plain dict so the keepalive task can relay it
+    # to the job row without adding events (no memory growth).
+    _hb: dict[str, Any] = {'stage': 'starting', 'message': '', 'ingest_n': 0, 'ingest_total': 0}
+
+    def heartbeat(stage: str, message: str) -> None:
+        _hb['stage'] = str(stage or '')
+        _hb['message'] = str(message or '')
+
+    def ingest_progress(n: int, total: int) -> None:
+        _hb['ingest_n'] = int(n)
+        _hb['ingest_total'] = int(total)
+        _hb['message'] = f'Ingested {n}/{total} turns'
+
+    async def _keepalive() -> None:
+        deadline_ms = int(BENCHMARK_MAX_RUNTIME_SECONDS * 1000)
+        while True:
+            current = BENCHMARK_JOBS.get(job_id)
+            if not isinstance(current, dict) or bool(current.get('done')):
+                return
+            started = int(current.get('started_ms') or 0)
+            if started and (_now_ms() - started) > deadline_ms:
+                # Runtime watchdog: the worker thread is hung (most likely in an
+                # un-timed external call). Free the slot now — the orphaned
+                # thread keeps cancel_event set and exits at its next checkpoint.
+                _force_finalize_benchmark_job(
+                    current,
+                    status='failed',
+                    message=f'Benchmark exceeded {BENCHMARK_MAX_RUNTIME_SECONDS // 60}m runtime limit',
+                    error='benchmark_timeout',
+                )
+                return
+            current['stage'] = _hb['stage']
+            current['stage_message'] = _hb['message']
+            current['ingest_n'] = _hb['ingest_n']
+            current['ingest_total'] = _hb['ingest_total']
+            current['updated_ms'] = _now_ms()
+            await asyncio.sleep(2)
+
+    keepalive_task = asyncio.create_task(_keepalive())
 
     def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
         current = BENCHMARK_JOBS.get(job_id)
-        if not isinstance(current, dict):
+        if not isinstance(current, dict) or bool(current.get('done')):
             return
         current['status'] = 'running'
         current['updated_ms'] = _now_ms()
@@ -528,9 +821,28 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         )
 
     try:
-        out = await asyncio.to_thread(run_benchmark, progress=progress, **kwargs)
+        # Run on the dedicated benchmark executor (not the shared default pool).
+        # The done-callback decrements the inflight count whenever the thread
+        # returns — even if the watchdog already abandoned the job and this
+        # coroutine resumed late — so a thread hung in an un-timed external call
+        # keeps its slot counted until it genuinely unwinds.
+        loop = asyncio.get_running_loop()
+        worker_fn = functools.partial(
+            run_benchmark,
+            progress=progress,
+            ingest_progress=ingest_progress,
+            cancel_event=cancel_event,
+            heartbeat=heartbeat,
+            **kwargs,
+        )
+        worker_future = loop.run_in_executor(_BENCHMARK_EXECUTOR, worker_fn)
+        _adjust_benchmark_inflight(1)
+        worker_future.add_done_callback(lambda _f: _adjust_benchmark_inflight(-1))
+        out = await worker_future
         current = BENCHMARK_JOBS.get(job_id)
-        if not isinstance(current, dict):
+        if not isinstance(current, dict) or bool(current.get('done')):
+            # Force-finalized by the watchdog, cancel, or supersede while the
+            # worker ran — discard the late result, the slot is already freed.
             return
         current['status'] = 'completed' if bool((out or {}).get('ok')) else 'failed'
         current['done'] = True
@@ -543,9 +855,16 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         else:
             current['error'] = str((out or {}).get('error') or 'benchmark_failed')
             _benchmark_event(current, 'failed', 'Benchmark failed', error=current['error'])
+    except BenchmarkCancelledError:
+        current = BENCHMARK_JOBS.get(job_id)
+        if isinstance(current, dict) and not bool(current.get('done')):
+            current['status'] = 'cancelled'
+            current['done'] = True
+            current['updated_ms'] = _now_ms()
+            _benchmark_event(current, 'cancelled', 'Benchmark cancelled')
     except Exception as exc:
         current = BENCHMARK_JOBS.get(job_id)
-        if not isinstance(current, dict):
+        if not isinstance(current, dict) or bool(current.get('done')):
             return
         current['status'] = 'failed'
         current['done'] = True
@@ -553,6 +872,7 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         current['updated_ms'] = _now_ms()
         _benchmark_event(current, 'failed', 'Benchmark failed', error=current['error'])
     finally:
+        keepalive_task.cancel()
         if ACTIVE_BENCHMARK_JOB_ID == job_id:
             ACTIVE_BENCHMARK_JOB_ID = None
 
@@ -738,8 +1058,11 @@ async def chat(request: Request):
 @router.post('/flush')
 async def flush(request: Request):
     try:
-        with heavy_operation_slot(request):
-            await rate_limit_heavy(request)
+        # Manual flush is a UI ergonomics action, not a benchmark/seed operation.
+        # Keep a tiny concurrency gate to prevent double-click races, but do not spend
+        # the shared heavy-operation rate bucket; story-pack seeding can otherwise make
+        # the user's explicit "flush session" button return a confusing 429.
+        with heavy_operation_slot(request, slot_key=f"flush:{request.client.host if request.client else 'unknown'}"):
             return run_flush()
     except HTTPException as exc:
         return _http_exc_response(exc)
@@ -849,6 +1172,7 @@ def demo_control_state():
     _prune_benchmark_jobs()
     active_job = BENCHMARK_JOBS.get(str(ACTIVE_BENCHMARK_JOB_ID or '').strip()) if ACTIVE_BENCHMARK_JOB_ID else None
     benchmark_job = _benchmark_job_payload(active_job, cursor=0) if isinstance(active_job, dict) else None
+    stored_active = None if isinstance(active_job, dict) and not bool(active_job.get('done')) else benchmark_store.read_active_job()
     snapshot = get_last_benchmark_snapshot(history_limit=3)
     benchmark_summary = dict(snapshot.get('summary') or {})
     benchmark_report = _strip_benchmark_case_payloads(dict(snapshot.get('report') or {}))
@@ -856,12 +1180,15 @@ def demo_control_state():
     if isinstance(active_job, dict):
         benchmark_summary, benchmark_report = _active_benchmark_state(active_job, snapshot)
         benchmark_history = benchmark_history[:2]
+    elif isinstance(stored_active, dict):
+        benchmark_summary, benchmark_report, benchmark_job = _stored_active_benchmark_state(stored_active)
+        benchmark_history = benchmark_history[:2]
     return {
         'ok': True,
         'seed': dict(SEED_STATUS),
         'benchmark': {
-            'active_job_id': str(ACTIVE_BENCHMARK_JOB_ID or ''),
-            'active': bool(isinstance(active_job, dict) and not bool(active_job.get('done'))),
+            'active_job_id': str((benchmark_job or {}).get('job_id') or ACTIVE_BENCHMARK_JOB_ID or ''),
+            'active': bool((isinstance(active_job, dict) and not bool(active_job.get('done'))) or isinstance(stored_active, dict)),
             'job': benchmark_job,
             'summary': benchmark_summary,
             'report': benchmark_report,
@@ -881,49 +1208,79 @@ async def locomo_replay(request: Request):
     max_turns_raw = (body or {}).get('max_turns')
     start_session_raw = (body or {}).get('start_session')
     max_sessions_raw = (body or {}).get('max_sessions')
-    wait_for_idle = bool((body or {}).get('wait_for_idle', True))
-    idle_timeout_ms = int((body or {}).get('idle_timeout_ms') or 120000)
-    idle_poll_ms = int((body or {}).get('idle_poll_ms') or 250)
     auto_flush = bool((body or {}).get('auto_flush', True))
     flush_threshold_ratio = float((body or {}).get('flush_threshold_ratio') or 0.80)
     flush_every_turns = int((body or {}).get('flush_every_turns') or 0)
     max_compaction_per_pass = int((body or {}).get('max_compaction_per_pass') or 2)
     max_side_effects_per_pass = int((body or {}).get('max_side_effects_per_pass') or 8)
     reset_session = bool((body or {}).get('reset_session', False))
+    drain_timeout_ms = int((body or {}).get('drain_timeout_ms') or 600_000)
 
     max_turns = int(max_turns_raw) if isinstance(max_turns_raw, (int, float)) and int(max_turns_raw) > 0 else None
     start_session = int(start_session_raw) if isinstance(start_session_raw, (int, float)) and int(start_session_raw) > 0 else None
     max_sessions = int(max_sessions_raw) if isinstance(max_sessions_raw, (int, float)) and int(max_sessions_raw) > 0 else None
-    try:
-        _set_seed_status(active=True, kind='locomo', status='running', message='LoCoMo replay in progress')
-        out = await replay_locomo_corpus(
-            sample_mode=sample_mode,
-            sample_id=str(sample_id).strip() if sample_id is not None else None,
-            replay_mode=replay_mode,
-            max_turns=max_turns,
-            start_session=start_session,
-            max_sessions=max_sessions,
-            wait_for_idle=wait_for_idle,
-            idle_timeout_ms=idle_timeout_ms,
-            idle_poll_ms=idle_poll_ms,
-            auto_flush=auto_flush,
-            flush_threshold_ratio=flush_threshold_ratio,
-            flush_every_turns=flush_every_turns,
-            max_compaction_per_pass=max_compaction_per_pass,
-            max_side_effects_per_pass=max_side_effects_per_pass,
-            reset_session=reset_session,
-        )
-        _set_seed_status(active=False, kind='locomo', status='completed' if bool((out or {}).get('ok')) else 'failed', message=str((out or {}).get('error') or 'LoCoMo replay complete'))
-        return out
-    except FileNotFoundError as exc:
-        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
-        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=404)
-    except ValueError as exc:
-        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
-        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=400)
-    except Exception as exc:
-        _set_seed_status(active=False, kind='locomo', status='failed', message=str(exc))
-        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+
+    kwargs = {
+        'sample_mode': sample_mode,
+        'sample_id': str(sample_id).strip() if sample_id is not None else None,
+        'replay_mode': replay_mode,
+        'max_turns': max_turns,
+        'start_session': start_session,
+        'max_sessions': max_sessions,
+        'auto_flush': auto_flush,
+        'flush_threshold_ratio': flush_threshold_ratio,
+        'flush_every_turns': flush_every_turns,
+        'max_compaction_per_pass': max_compaction_per_pass,
+        'max_side_effects_per_pass': max_side_effects_per_pass,
+        'reset_session': reset_session,
+        'drain_after_ingest': True,
+        'drain_timeout_ms': drain_timeout_ms,
+    }
+
+    job_id = uuid.uuid4().hex[:12]
+    row: dict[str, Any] = {
+        'job_id': job_id,
+        'status': 'queued',
+        'stage': 'queued',
+        'done': False,
+        'error': None,
+        'result': None,
+        'events': [],
+        'seq': 0,
+        'started_ms': _now_ms(),
+        'updated_ms': _now_ms(),
+        'cancel_event': threading.Event(),
+    }
+    SEED_JOBS[job_id] = row
+    _seed_event(row, 'queued', 'Seed request accepted')
+    asyncio.create_task(_run_seed_job(job_id, kwargs))
+    return {'ok': True, 'job_id': job_id, 'status': 'queued'}
+
+
+@router.get('/locomo/replay/job/{job_id}')
+def locomo_replay_job_status(job_id: str, cursor: int = 0):
+    _prune_seed_jobs()
+    job_id_s = str(job_id or '').strip()
+    row = SEED_JOBS.get(job_id_s)
+    if not isinstance(row, dict):
+        return JSONResponse({'ok': False, 'error': 'seed_job_not_found'}, status_code=404)
+    return _seed_job_payload(row, cursor=max(0, int(cursor)))
+
+
+@router.post('/locomo/replay/job/{job_id}/cancel')
+async def locomo_replay_job_cancel(job_id: str):
+    job_id_s = str(job_id or '').strip()
+    row = SEED_JOBS.get(job_id_s)
+    if not isinstance(row, dict):
+        return JSONResponse({'ok': False, 'error': 'seed_job_not_found'}, status_code=404)
+    if bool(row.get('done')):
+        return {'ok': True, 'job_id': job_id_s, 'status': str(row.get('status') or ''), 'already_done': True}
+    cancel_event = row.get('cancel_event')
+    if isinstance(cancel_event, threading.Event):
+        cancel_event.set()
+    row['updated_ms'] = _now_ms()
+    _seed_event(row, 'cancelling', 'Cancel requested')
+    return {'ok': True, 'job_id': job_id_s, 'status': 'cancelling'}
 
 
 @router.post('/story-pack/replay')
@@ -1018,6 +1375,8 @@ def benchmark_preflight(
     suite_name = str(suite or 'locomo_mini').strip().lower() or 'locomo_mini'
     semantic_mode_name = str(semantic_mode or 'required').strip().lower() or 'required'
     answer_mode_name = str(answer_mode or 'none').strip().lower() or 'none'
+    if answer_mode_name not in {'none', 'extractive', 'llm'}:
+        answer_mode_name = 'none'
     generator_model_name = str(generator_model or '').strip()
     if answer_mode_name == 'llm' and not generator_model_name:
         generator_model_name = detect_model()
@@ -1129,19 +1488,21 @@ async def benchmark_run(request: Request):
     retrieval_k = int((body or {}).get('retrieval_k') or settings.locomo_default_retrieval_k)
     retrieval_k = max(1, retrieval_k)
     ingestion_mode = str((body or {}).get('ingestion_mode') or settings.locomo_ingest_mode_default).strip() or settings.locomo_ingest_mode_default
-    answer_mode = str((body or {}).get('answer_mode') or '').strip() or None
+    answer_mode = str((body or {}).get('answer_mode') or '').strip().lower() or None
+    if answer_mode not in {None, 'none', 'extractive', 'llm'}:
+        answer_mode = 'none'
     generator_model = str((body or {}).get('generator_model') or '').strip() or None
     embeddings_provider = str((body or {}).get('embeddings_provider') or '').strip() or None
     evidence_recall_k = [int(x) for x in ((body or {}).get('evidence_recall_k') or [1, 3, 5, 8, 10]) if str(x).strip()]
     persist_case_artifacts = bool((body or {}).get('persist_case_artifacts', True))
     compare_paths = bool((body or {}).get('compare_paths', False))
     compare_retrieval_modes = bool((body or {}).get('compare_retrieval_modes', False))
-    retrieval_pipeline = str((body or {}).get('retrieval_pipeline') or 'execute_trace').strip().lower() or 'execute_trace'
-    if retrieval_pipeline not in {'execute_trace', 'execute_trace_hydrate', 'forced_three_phase', 'three_phase'}:
-        retrieval_pipeline = 'execute_trace'
     qa_session_mode = str((body or {}).get('qa_session_mode') or 'shared').strip().lower() or 'shared'
     if qa_session_mode not in {'shared', 'isolated'}:
         qa_session_mode = 'shared'
+    retrieval_pipeline = str((body or {}).get('retrieval_pipeline') or 'execute_trace').strip().lower() or 'execute_trace'
+    if retrieval_pipeline not in {'execute_trace', 'execute_trace_hydrate', 'forced_three_phase', 'three_phase'}:
+        retrieval_pipeline = 'execute_trace'
 
     kwargs = dict(
         suite=suite,
@@ -1171,11 +1532,13 @@ async def benchmark_run(request: Request):
     )
 
     _prune_benchmark_jobs()
+    run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
     prior_job_id = ACTIVE_BENCHMARK_JOB_ID
     prior_row = BENCHMARK_JOBS.get(prior_job_id or '') if prior_job_id else None
-    if isinstance(prior_row, dict) and not bool(prior_row.get('done')):
+    if run_mode in {'disabled', 'off'}:
+        return JSONResponse({'ok': False, 'job_id': None, 'status': 'failed', 'error': 'benchmark_run_disabled'}, status_code=503)
+    if run_mode in {'queue', 'queued', 'cron', 'external', 'dispatch'} and isinstance(prior_row, dict) and not bool(prior_row.get('done')):
         prior_row['updated_ms'] = _now_ms()
-        _benchmark_event(prior_row, 'running', 'Benchmark request reused active job')
         return {
             'ok': True,
             'job_id': prior_job_id,
@@ -1184,18 +1547,43 @@ async def benchmark_run(request: Request):
             'already_running': True,
             'superseded_job_id': None,
         }
-    stored_active = benchmark_store.read_active_job()
-    if isinstance(stored_active, dict):
-        active_job_id = str(stored_active.get('job_id') or '').strip()
-        if active_job_id:
-            return {
-                'ok': True,
-                'job_id': active_job_id,
-                'status': str(stored_active.get('status') or 'running'),
-                'active_job_id': active_job_id,
-                'already_running': True,
-                'superseded_job_id': None,
-            }
+    if run_mode in {'queue', 'queued', 'cron', 'external', 'dispatch'}:
+        stored_active = benchmark_store.read_active_job()
+        if isinstance(stored_active, dict):
+            active_job_id = str(stored_active.get('job_id') or '').strip()
+            if active_job_id:
+                return {
+                    'ok': True,
+                    'job_id': active_job_id,
+                    'status': str(stored_active.get('status') or 'running'),
+                    'active_job_id': active_job_id,
+                    'already_running': True,
+                    'superseded_job_id': None,
+                }
+
+    # A worker thread hung inside an un-timed external call cannot be killed; it
+    # keeps its slot in the dedicated benchmark executor until (if ever) the
+    # call returns. For modes that run the benchmark in-process, refuse a new
+    # run once every slot is occupied rather than queueing a job that would
+    # block indefinitely behind the leaked threads.
+    if run_mode not in {'queue', 'queued', 'cron', 'external', 'dispatch'}:
+        inflight = _benchmark_inflight_count()
+        if inflight >= BENCHMARK_EXECUTOR_MAX_WORKERS:
+            return JSONResponse(
+                {
+                    'ok': False,
+                    'job_id': None,
+                    'status': 'failed',
+                    'error': 'benchmark_workers_exhausted',
+                    'detail': (
+                        f'{inflight} benchmark worker thread(s) are stuck in un-timed '
+                        'external calls and cannot be reclaimed. New runs are blocked '
+                        'until those calls unwind or the service is restarted.'
+                    ),
+                    'inflight_workers': inflight,
+                },
+                status_code=503,
+            )
 
     job_id = uuid.uuid4().hex[:12]
     row = {
@@ -1211,11 +1599,15 @@ async def benchmark_run(request: Request):
         'started_ms': _now_ms(),
         'updated_ms': _now_ms(),
         'abandoned': False,
+        'cancel_event': threading.Event(),
     }
     BENCHMARK_JOBS[job_id] = row
     if isinstance(prior_row, dict) and not bool(prior_row.get('done')):
         prior_row['superseded_by'] = job_id
-    run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
+        # Force-finalize the prior job so the new run never queues behind a hung
+        # worker. _run_benchmark_job's slot-wait loop exits as soon as
+        # ACTIVE_BENCHMARK_JOB_ID is cleared.
+        _force_finalize_benchmark_job(prior_row, status='cancelled', message='Benchmark superseded by a newer run')
     if run_mode in {'queue', 'queued', 'cron'}:
         try:
             queued = benchmark_store.enqueue_job(job_id=job_id, request=dict(body or {}), kwargs=kwargs)
@@ -1254,18 +1646,12 @@ async def benchmark_run(request: Request):
             'external_job_id': row['external_job_id'],
             'superseded_job_id': prior_job_id,
         }
-    if run_mode in {'disabled', 'off'}:
-        row['status'] = 'failed'
-        row['done'] = True
-        row['error'] = 'benchmark_run_disabled'
-        _benchmark_event(row, 'failed', 'Benchmark run disabled')
-        return JSONResponse({'ok': False, 'job_id': job_id, 'status': 'failed', 'error': row['error']}, status_code=503)
-    if run_mode in {'inline', 'sync', 'synchronous'}:
-        _benchmark_event(row, 'queued', 'Benchmark queued', supersedes=prior_job_id or '')
+    if run_mode in {'inline', 'local', 'sync'}:
         await _run_benchmark_job(job_id, kwargs)
-        if isinstance(row.get('result'), dict):
-            return dict(row.get('result') or {})
-        return _benchmark_job_payload(row)
+        result = row.get('result') if isinstance(row.get('result'), dict) else None
+        if isinstance(result, dict):
+            return result
+        return JSONResponse({'ok': False, 'job_id': job_id, 'status': row.get('status') or 'failed', 'error': row.get('error') or 'benchmark_failed'}, status_code=500)
     task = asyncio.create_task(_run_benchmark_job(job_id, kwargs))
     row['task'] = task
     _benchmark_event(row, 'queued', 'Benchmark queued', supersedes=prior_job_id or '')
@@ -1301,6 +1687,57 @@ def benchmark_job_status(job_id: str, cursor: int = 0):
     return _benchmark_job_payload(row, cursor=max(0, int(cursor)))
 
 
+@router.post('/demo/benchmark/force-clear')
+async def benchmark_force_clear():
+    """Admin escape hatch: force-finalize every in-flight benchmark job and free
+    the active slot. For recovering from a worker hung inside an un-timed
+    external call when the per-job Cancel could not reach a checkpoint."""
+    global ACTIVE_BENCHMARK_JOB_ID
+
+    cleared: list[str] = []
+    for job_id, row in list(BENCHMARK_JOBS.items()):
+        if isinstance(row, dict) and not bool(row.get('done')):
+            _force_finalize_benchmark_job(row, status='cancelled', message='Benchmark force-cleared by admin')
+            cleared.append(job_id)
+    prior_active = ACTIVE_BENCHMARK_JOB_ID
+    ACTIVE_BENCHMARK_JOB_ID = None
+    # Also finalize any zombie rows in the durable Postgres store so they don't
+    # surface as a ghost active job on the next benchmark attempt.
+    store_cleared: list[str] = []
+    try:
+        store_cleared = benchmark_store.timeout_stale_jobs(
+            max_runtime_seconds=0,
+            error_reason='force_cleared_by_admin',
+        )
+    except Exception:
+        pass
+    # force-clear frees the slot and Postgres rows, but it cannot kill a worker
+    # thread stuck in an un-timed external call. Surface the still-occupied slot
+    # count so the admin knows whether a restart is still needed.
+    return {
+        'ok': True,
+        'cleared': cleared,
+        'store_cleared': store_cleared,
+        'prior_active_job_id': prior_active,
+        'inflight_workers': _benchmark_inflight_count(),
+    }
+
+
+@router.post('/demo/benchmark/job/{job_id}/cancel')
+async def benchmark_job_cancel(job_id: str):
+    job_id_s = str(job_id or '').strip()
+    row = BENCHMARK_JOBS.get(job_id_s)
+    if not isinstance(row, dict):
+        return JSONResponse({'ok': False, 'error': 'benchmark_job_not_found'}, status_code=404)
+    if bool(row.get('done')):
+        return {'ok': True, 'job_id': job_id_s, 'status': str(row.get('status') or ''), 'already_done': True}
+    # Authoritative cancel: finalize the job and free the slot immediately
+    # rather than waiting for the worker to observe cancel_event. A worker hung
+    # inside an un-timed external call never reaches a checkpoint.
+    _force_finalize_benchmark_job(row, status='cancelled', message='Benchmark cancelled')
+    return {'ok': True, 'job_id': job_id_s, 'status': 'cancelled'}
+
+
 @router.get('/demo/benchmark/last')
 def benchmark_last():
     _prune_benchmark_jobs()
@@ -1308,6 +1745,7 @@ def benchmark_last():
     history = list(snapshot.get('history') or [])
     latest_compare = None
     active_job = next((row for row in BENCHMARK_JOBS.values() if isinstance(row, dict) and not bool(row.get('done'))), None)
+    stored_active = None if isinstance(active_job, dict) else benchmark_store.read_active_job()
 
     summary = dict(snapshot.get('summary') or {})
     report = dict(snapshot.get('report') or {})
@@ -1315,6 +1753,9 @@ def benchmark_last():
 
     if isinstance(active_job, dict):
         summary, report = _active_benchmark_state(active_job, snapshot)
+        ok = True
+    elif isinstance(stored_active, dict):
+        summary, report, _job = _stored_active_benchmark_state(stored_active)
         ok = True
 
     if len(history) >= 2:
@@ -1326,7 +1767,7 @@ def benchmark_last():
                 latest_compare = cmp.get('compare') if cmp.get('ok') else None
             except Exception:
                 latest_compare = None
-    if isinstance(active_job, dict):
+    if isinstance(active_job, dict) or isinstance(stored_active, dict):
         history = history[:2]
     history = _slim_benchmark_history(history)
     report = _strip_benchmark_case_payloads(report) if isinstance(report, dict) else report

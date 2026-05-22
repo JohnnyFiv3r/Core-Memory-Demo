@@ -26,7 +26,14 @@ def _normalize_qa_per_category(raw: dict[int | str, int] | None) -> dict[int, in
     return out
 
 
-def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]]]:
+# Industry standard: evaluate only categories 1-4. Category 5 (adversarial /
+# unanswerable) is excluded from all published benchmarks (Mem0, Zep, ByteRover)
+# and the original evaluation code has broken answer keys for 444 of 446 cat-5
+# questions (see locomo-audit). Pass category_filter=[1,2,3,4,5] to opt in.
+_OFFICIAL_LOCOMO_CATEGORIES: list[int] = [1, 2, 3, 4]
+
+
+def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None) -> tuple[dict[str, Any], list[dict[str, Any]], list[dict[str, Any]], dict[str, dict[str, Any]]]:
     samples, meta = load_locomo_dataset()
     selected = list(samples)
 
@@ -38,8 +45,18 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
     if isinstance(sample_limit, int) and sample_limit > 0:
         selected = selected[: sample_limit]
 
+    # Default to official categories 1-4 when neither category_filter nor
+    # qa_per_category is specified. If qa_per_category is given without an
+    # explicit filter, its keys define the effective set (original behaviour).
+    # An empty category_filter list means "no preference", same as None.
     category_caps = _normalize_qa_per_category(qa_per_category)
-    category_set = {int(x) for x in (category_filter or [])}
+    if category_filter:
+        effective_filter = list(category_filter)
+    elif category_caps:
+        effective_filter = []  # let category_caps drive the set via the existing or-logic below
+    else:
+        effective_filter = _OFFICIAL_LOCOMO_CATEGORIES
+    category_set = {int(x) for x in effective_filter}
     if category_caps:
         category_set = set(category_set or category_caps.keys())
     selected_cases: list[dict[str, Any]] = []
@@ -125,6 +142,8 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
                 for sample_id in [str(s.get("sample_id") or "") for s in selected]
             },
             "category_filter": sorted(category_set),
+            "official_categories": _OFFICIAL_LOCOMO_CATEGORIES,
+            "category_5_excluded": 5 not in category_set,
             "qa_limit": qa_limit,
             "qa_per_category": {str(k): int(v) for k, v in sorted(category_caps.items())},
             "available_qa_by_category": {str(k): int(v) for k, v in sorted(available_by_category.items())},
@@ -134,11 +153,16 @@ def build_locomo_suite_metadata(*, suite: str, sample_limit: int | None = None, 
         }
     )
 
+    # Do not expose a gold-context text map from suite construction. Retrieval
+    # scoring may use evidence ids, but answer generation must only see retrieved
+    # context from the demo/Core-Memory path.
+    unused_answer_context: dict[str, dict[str, Any]] = {}
+
     return {
         "suite": suite,
         "source": "locomo_dataset",
         "dataset": dataset_meta,
-    }, selected_cases, selected
+    }, selected_cases, selected, unused_answer_context
 
 
 def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], ingestion_mode: str = "turns", ingest_path_override: str | None = None) -> dict[str, Any]:
@@ -147,7 +171,7 @@ def ingest_locomo_samples(*, base_root: str, samples: list[dict[str, Any]], inge
     ingested_turns = 0
     skipped_existing = 0
     claims_written = 0
-    ingest_path = str(ingest_path_override or settings.locomo_ingest_path or 'bead_direct').strip().lower() or 'bead_direct'
+    ingest_path = str(ingest_path_override or settings.locomo_ingest_path or 'canonical_replay').strip().lower() or 'canonical_replay'
     replay_mode = str(settings.locomo_replay_mode or 'transcript_only').strip().lower() or 'transcript_only'
     flush_policy = str(settings.locomo_replay_flush_policy or 'per_session').strip().lower() or 'per_session'
     for sample in samples:
