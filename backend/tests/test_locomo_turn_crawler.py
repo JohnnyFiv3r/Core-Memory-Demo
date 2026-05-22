@@ -40,6 +40,18 @@ class TestLocomoTurnCrawler(unittest.TestCase):
         self.assertEqual('bead-cur', out['associations'][0]['source_bead_id'])
         self.assertEqual('bead-prev', out['associations'][0]['target_bead_id'])
 
+    def test_uses_turn_text_when_user_assistant_fields_are_empty(self):
+        out = locomo_crawler_callable({
+            'request': {
+                'turn_id': 'locomo:conv-26:D1:1',
+                'turn_text': 'Caroline [other]: Caroline met mentors before June.',
+                'metadata': {'replay_source': 'locomo', 'locomo_dia_id': 'D1:1', 'locomo_speaker': 'Caroline'},
+            },
+            'crawler_context': {'beads': []},
+        })
+        self.assertIn('Caroline met mentors', out['beads_create'][0]['title'])
+        self.assertTrue(out['beads_create'][0]['retrieval_eligible'])
+
     def test_uses_current_turn_alias_before_current_bead_exists(self):
         out = locomo_crawler_callable({
             'request': {

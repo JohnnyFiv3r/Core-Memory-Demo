@@ -1,7 +1,9 @@
 from __future__ import annotations
 
+import os
 import shutil
 import time
+from contextlib import contextmanager
 from pathlib import Path
 from typing import Any, Callable
 
@@ -22,6 +24,52 @@ ProcessTurnFinalized = Callable[..., dict[str, Any]]
 ProcessFlush = Callable[..., dict[str, Any]]
 RunAsyncJobs = Callable[..., dict[str, Any]]
 RecallFunc = Callable[..., Any]
+
+_LOCOMO_CRAWLER_CALLABLE = "app.benchmarks.locomo_turn_crawler:locomo_crawler_callable"
+
+
+@contextmanager
+def _locomo_lifecycle_crawler_env(conversation: BenchmarkConversation):
+    """Ensure faithful LoCoMo replay exercises the normal crawler hook.
+
+    Core Memory only invokes turn-time crawler updates when the invoke flag or a
+    callable is configured. The lifecycle runner previously called
+    process_turn_finalized without either setting, so the gate correctly
+    reported invocation_disabled/agent_updates_missing and fell back to an empty
+    corpus. For LoCoMo lifecycle replay, default the hook to the benchmark-local
+    crawler callable unless deployment already supplied a production callable.
+    """
+
+    is_locomo = str(getattr(conversation, "benchmark_name", "") or "").strip().lower() == "locomo"
+    if not is_locomo:
+        yield
+        return
+    previous_invoke = os.environ.get("CORE_MEMORY_AGENT_CRAWLER_INVOKE")
+    previous_callable = os.environ.get("CORE_MEMORY_AGENT_CRAWLER_CALLABLE")
+    previous_enrichment_queue = os.environ.get("CORE_MEMORY_ENRICHMENT_QUEUE")
+    os.environ["CORE_MEMORY_AGENT_CRAWLER_INVOKE"] = "1"
+    # The queued enrichment delta path currently validates associations before
+    # resolving the __current_turn__ alias. LoCoMo lifecycle replay needs the
+    # same-turn alias to be resolved immediately, so run enrichment inline for
+    # this benchmark until Core Memory's queued delta path supports the alias.
+    os.environ["CORE_MEMORY_ENRICHMENT_QUEUE"] = "off"
+    if not str(previous_callable or "").strip():
+        os.environ["CORE_MEMORY_AGENT_CRAWLER_CALLABLE"] = _LOCOMO_CRAWLER_CALLABLE
+    try:
+        yield
+    finally:
+        if previous_invoke is None:
+            os.environ.pop("CORE_MEMORY_AGENT_CRAWLER_INVOKE", None)
+        else:
+            os.environ["CORE_MEMORY_AGENT_CRAWLER_INVOKE"] = previous_invoke
+        if previous_callable is None:
+            os.environ.pop("CORE_MEMORY_AGENT_CRAWLER_CALLABLE", None)
+        else:
+            os.environ["CORE_MEMORY_AGENT_CRAWLER_CALLABLE"] = previous_callable
+        if previous_enrichment_queue is None:
+            os.environ.pop("CORE_MEMORY_ENRICHMENT_QUEUE", None)
+        else:
+            os.environ["CORE_MEMORY_ENRICHMENT_QUEUE"] = previous_enrichment_queue
 
 
 def _default_process_turn_finalized() -> ProcessTurnFinalized:
@@ -287,28 +335,30 @@ def replay_conversation_turns(
         )
         t0 = time.perf_counter()
         try:
-            out = process_turn_finalized_fn(
-                root=str(root),
-                session_id=conversation.session_id,
-                turn_id=turn.turn_id,
-                transaction_id=f"tx:{turn.turn_id}",
-                trace_id=f"trace:{turn.turn_id}",
-                turns=[
-                    {
-                        "speaker": turn.speaker,
-                        "role": turn.role,
-                        "content": turn.content,
-                    }
-                ],
-                metadata={
-                    "benchmark_name": conversation.benchmark_name,
-                    "benchmark_phase": "conversation_replay",
-                    "conversation_id": conversation.conversation_id,
-                    "source_turn_id": turn.turn_id,
-                    **dict(turn.metadata or {}),
-                },
-                origin="BENCHMARK_REPLAY",
-            )
+            with _locomo_lifecycle_crawler_env(conversation):
+                out = process_turn_finalized_fn(
+                    root=str(root),
+                    session_id=conversation.session_id,
+                    turn_id=turn.turn_id,
+                    transaction_id=f"tx:{turn.turn_id}",
+                    trace_id=f"trace:{turn.turn_id}",
+                    turns=[
+                        {
+                            "speaker": turn.speaker,
+                            "role": turn.role,
+                            "content": turn.content,
+                        }
+                    ],
+                    metadata={
+                        "benchmark_name": conversation.benchmark_name,
+                        "benchmark_phase": "conversation_replay",
+                        "conversation_id": conversation.conversation_id,
+                        "source_turn_id": turn.turn_id,
+                        "replay_source": "locomo" if str(conversation.benchmark_name or "").strip().lower() == "locomo" else str(conversation.benchmark_name or ""),
+                        **dict(turn.metadata or {}),
+                    },
+                    origin="BENCHMARK_REPLAY",
+                )
             ok = bool((out or {}).get("ok", True))
             calls.append(
                 {
@@ -318,6 +368,15 @@ def replay_conversation_turns(
                     "result": dict(out or {}),
                 }
             )
+            gate = (((out or {}).get("crawler_handoff") or {}).get("agent_authored_gate") or {})
+            invocation = dict(gate.get("agent_invocation") or {}) if isinstance(gate, dict) else {}
+            if str(gate.get("error_code") or "") == "agent_updates_missing" or str(invocation.get("reason") or "") == "invocation_disabled":
+                errors.append({
+                    "turn_id": turn.turn_id,
+                    "error": "locomo_crawler_not_invoked",
+                    "error_code": str(gate.get("error_code") or ""),
+                    "invocation_reason": str(invocation.get("reason") or ""),
+                })
             if not ok:
                 errors.append({"turn_id": turn.turn_id, "error": str((out or {}).get("error") or "turn_replay_failed")})
         except Exception as exc:
