@@ -4284,6 +4284,12 @@ async function runBenchmark() {
             sample_id: String(evt.sample_id || ''),
             qa_id: String(evt.qa_id || ''),
             case_status: String(evt.case_status || ''),
+            conversation_id: String(evt.conversation_id || ''),
+            conversation_index: Number(evt.conversation_index || 0),
+            conversations: Number(evt.conversations || 0),
+            replay_turn_completed: Number(evt.replay_turn_completed || 0),
+            replay_turn_total: Number(evt.replay_turn_total || 0),
+            turn_id: String(evt.turn_id || ''),
           };
           updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
           renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});

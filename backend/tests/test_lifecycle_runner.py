@@ -69,6 +69,7 @@ class TestLifecycleRunner(unittest.TestCase):
 
     def test_replay_calls_capture_once_per_turn(self):
         calls = []
+        progress_events = []
 
         def fake_process_turn_finalized(**kwargs):
             calls.append(kwargs)
@@ -79,6 +80,11 @@ class TestLifecycleRunner(unittest.TestCase):
                 root=td,
                 conversation=_conversation(),
                 process_turn_finalized_fn=fake_process_turn_finalized,
+                progress=lambda completed, total, case, result: progress_events.append((completed, total, case, result)),
+                progress_completed=4,
+                progress_total=9,
+                conversation_index=2,
+                conversation_total=3,
             )
 
         self.assertTrue(out["ok"])
@@ -88,6 +94,16 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual("BENCHMARK_REPLAY", calls[0]["origin"])
         self.assertEqual("conversation_replay", calls[0]["metadata"]["benchmark_phase"])
         self.assertEqual("locomo:conv-1:D1:1:1", calls[0]["metadata"]["source_turn_id"])
+        self.assertEqual(4, progress_events[0][0])
+        self.assertEqual(9, progress_events[0][1])
+        self.assertEqual("conv-1", progress_events[0][2]["sample_id"])
+        self.assertEqual("locomo_lifecycle", progress_events[0][3]["phase"])
+        self.assertEqual(2, progress_events[0][3]["conversation_index"])
+        self.assertEqual(3, progress_events[0][3]["conversations"])
+        self.assertEqual(0, progress_events[0][3]["replay_turn_completed"])
+        self.assertEqual(2, progress_events[0][3]["replay_turn_total"])
+        self.assertEqual("locomo:conv-1:D1:1:1", progress_events[0][3]["turn_id"])
+        self.assertEqual(2, progress_events[-1][3]["replay_turn_completed"])
 
     def test_pre_qa_flush_runs_after_replay_boundary_shape(self):
         flush_calls = []
@@ -304,7 +320,7 @@ class TestLifecycleRunner(unittest.TestCase):
                 run_async_jobs_fn=lambda **kwargs: {"ok": True},
                 recall_fn=fake_recall,
                 write_qa_beads=False,
-                progress=lambda completed, total, case, result: progress_events.append((completed, total, case.get("qa_id"), result.get("status"))),
+                progress=lambda completed, total, case, result: progress_events.append((completed, total, case.get("qa_id"), result.get("status"), result)),
             )
 
         self.assertTrue(out["ok"])
@@ -318,8 +334,11 @@ class TestLifecycleRunner(unittest.TestCase):
             [("recall", "low", "locomo:conv-1:q0001"), ("recall", "medium", "locomo:conv-1:q0001"), ("recall", "high", "locomo:conv-1:q0001")],
             events,
         )
-        self.assertIn((0, 1, "locomo:conv-1:q0001", "retrieving"), progress_events)
-        self.assertIn((1, 1, "locomo:conv-1:q0001", "ok"), progress_events)
+        self.assertIn((0, 1, "locomo:conv-1:q0001", "retrieving", {"status": "retrieving", "phase": "lifecycle_qa", "conversation_id": "locomo:conv-1"}), progress_events)
+        self.assertIn((1, 1, "locomo:conv-1:q0001", "ok", {"status": "ok", "phase": "lifecycle_qa", "conversation_id": "locomo:conv-1"}), progress_events)
+        replay_progress = [evt for evt in progress_events if (evt[4] or {}).get("phase") == "locomo_lifecycle"]
+        self.assertTrue(replay_progress)
+        self.assertEqual(1, replay_progress[-1][4].get("replay_turn_completed"))
 
 
 if __name__ == "__main__":

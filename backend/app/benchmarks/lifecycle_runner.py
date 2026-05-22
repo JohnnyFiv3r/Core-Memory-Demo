@@ -230,6 +230,11 @@ def replay_conversation_turns(
     root: str | Path,
     conversation: BenchmarkConversation,
     process_turn_finalized_fn: ProcessTurnFinalized | None = None,
+    progress: Any | None = None,
+    progress_completed: int = 0,
+    progress_total: int = 0,
+    conversation_index: int = 1,
+    conversation_total: int = 1,
 ) -> dict[str, Any]:
     """Replay normalized source turns through the capture/finalized-turn hook."""
 
@@ -237,7 +242,24 @@ def replay_conversation_turns(
     calls: list[dict[str, Any]] = []
     errors: list[dict[str, Any]] = []
 
-    for turn in conversation.turns:
+    total_turns = len(conversation.turns)
+    for idx, turn in enumerate(conversation.turns, start=1):
+        _emit_progress(
+            progress,
+            progress_completed,
+            progress_total,
+            None,
+            {
+                "status": "replaying",
+                "phase": "locomo_lifecycle",
+                "conversation_id": conversation.conversation_id,
+                "conversation_index": conversation_index,
+                "conversations": conversation_total,
+                "replay_turn_completed": idx - 1,
+                "replay_turn_total": total_turns,
+                "turn_id": turn.turn_id,
+            },
+        )
         t0 = time.perf_counter()
         try:
             out = process_turn_finalized_fn(
@@ -283,6 +305,23 @@ def replay_conversation_turns(
                     "error": str(exc),
                 }
             )
+
+        _emit_progress(
+            progress,
+            progress_completed,
+            progress_total,
+            None,
+            {
+                "status": "replayed" if not errors or errors[-1].get("turn_id") != turn.turn_id else "failed",
+                "phase": "locomo_lifecycle",
+                "conversation_id": conversation.conversation_id,
+                "conversation_index": conversation_index,
+                "conversations": conversation_total,
+                "replay_turn_completed": idx,
+                "replay_turn_total": total_turns,
+                "turn_id": turn.turn_id,
+            },
+        )
 
     snapshot = corpus_snapshot(root)
     warnings = lifecycle_corpus_warnings(snapshot, phase="after_replay")
@@ -484,11 +523,16 @@ def _emit_progress(progress: Any | None, completed: int, total: int, qa: Benchma
         "sample_id": str(metadata.get("sample_id") or metadata.get("locomo_sample_id") or ""),
         "question": str((qa.question if qa else "") or ""),
     }
+    result_payload = dict(result or {})
+    if not case["sample_id"]:
+        conversation_id = str(result_payload.get("conversation_id") or "")
+        if conversation_id.startswith("locomo:"):
+            case["sample_id"] = conversation_id.split(":", 1)[1]
     try:
-        progress(int(completed), int(total), case, dict(result or {}))
+        progress(int(completed), int(total), case, result_payload)
     except TypeError:
         try:
-            progress({"completed": int(completed), "total": int(total), "case": case, "result": dict(result or {})})
+            progress({"completed": int(completed), "total": int(total), "case": case, "result": result_payload})
         except Exception:
             pass
     except Exception:
@@ -520,7 +564,16 @@ def run_lifecycle_conversation(
     if qa_session_mode_name not in {"shared", "isolated"}:
         raise BenchmarkLifecycleError("qa_session_mode must be shared or isolated")
 
-    replay = replay_conversation_turns(root=root, conversation=conversation, process_turn_finalized_fn=process_turn_finalized_fn)
+    replay = replay_conversation_turns(
+        root=root,
+        conversation=conversation,
+        process_turn_finalized_fn=process_turn_finalized_fn,
+        progress=progress,
+        progress_completed=progress_completed_offset,
+        progress_total=progress_total if progress_total is not None else len(conversation.qa_cases),
+        conversation_index=int((conversation.metadata or {}).get("conversation_index") or 1),
+        conversation_total=int((conversation.metadata or {}).get("conversation_total") or 1),
+    )
     pre_qa_flush = run_pre_qa_flush(
         root=root,
         conversation=conversation,
@@ -654,6 +707,8 @@ def run_locomo_lifecycle_suite(
     failed = 0
     total_qa = sum(len(conv.qa_cases) for conv in conversations)
     for idx, conversation in enumerate(conversations, start=1):
+        conversation.metadata["conversation_index"] = idx
+        conversation.metadata["conversation_total"] = len(conversations)
         _emit_progress(progress, completed_qa, total_qa, None, {"status": "replaying", "phase": "locomo_lifecycle", "conversation_index": idx, "conversations": len(conversations), "conversation_id": conversation.conversation_id})
         out = run_lifecycle_conversation(
             root=root,

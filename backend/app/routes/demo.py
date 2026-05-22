@@ -301,6 +301,12 @@ def _active_benchmark_summary(row: dict[str, Any]) -> dict[str, Any]:
         'sample_id': str(latest.get('sample_id') or ''),
         'qa_id': str(latest.get('qa_id') or ''),
         'case_status': str(latest.get('case_status') or ''),
+        'conversation_id': str(latest.get('conversation_id') or ''),
+        'conversation_index': int(latest.get('conversation_index') or 0),
+        'conversations': int(latest.get('conversations') or 0),
+        'replay_turn_completed': int(latest.get('replay_turn_completed') or 0),
+        'replay_turn_total': int(latest.get('replay_turn_total') or 0),
+        'turn_id': str(latest.get('turn_id') or ''),
         'warnings': [],
         'active': True,
     }
@@ -325,6 +331,12 @@ def _active_benchmark_state(active_job: dict[str, Any], snapshot: dict[str, Any]
             'sample_id': str(summary.get('sample_id') or ''),
             'qa_id': str(summary.get('qa_id') or ''),
             'case_status': str(summary.get('case_status') or ''),
+            'conversation_id': str(summary.get('conversation_id') or ''),
+            'conversation_index': int(summary.get('conversation_index') or 0),
+            'conversations': int(summary.get('conversations') or 0),
+            'replay_turn_completed': int(summary.get('replay_turn_completed') or 0),
+            'replay_turn_total': int(summary.get('replay_turn_total') or 0),
+            'turn_id': str(summary.get('turn_id') or ''),
         }
         for key in (
             'started_at',
@@ -507,6 +519,12 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             sample_id=str((case or {}).get('sample_id') or ''),
             qa_id=str((case or {}).get('qa_id') or ''),
             case_status=status,
+            conversation_id=str((result or {}).get('conversation_id') or ''),
+            conversation_index=int((result or {}).get('conversation_index') or 0),
+            conversations=int((result or {}).get('conversations') or 0),
+            replay_turn_completed=int((result or {}).get('replay_turn_completed') or 0),
+            replay_turn_total=int((result or {}).get('replay_turn_total') or 0),
+            turn_id=str((result or {}).get('turn_id') or ''),
         )
 
     try:

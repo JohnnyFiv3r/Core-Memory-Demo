@@ -33,6 +33,12 @@ class TestBenchmarkRoutesLocomo(unittest.TestCase):
                     "sample_id": "conv-1",
                     "qa_id": "locomo:conv-1:q0003",
                     "case_status": "retrieving",
+                    "conversation_id": "locomo:conv-1",
+                    "conversation_index": 1,
+                    "conversations": 2,
+                    "replay_turn_completed": 4,
+                    "replay_turn_total": 9,
+                    "turn_id": "locomo:conv-1:D1:4",
                 }
             ],
         }
@@ -48,6 +54,9 @@ class TestBenchmarkRoutesLocomo(unittest.TestCase):
         self.assertEqual("running", summary.get("status"))
         self.assertEqual(3, summary.get("qa_completed"))
         self.assertEqual("locomo:conv-1:q0003", summary.get("qa_id"))
+        self.assertEqual(4, summary.get("replay_turn_completed"))
+        self.assertEqual(9, summary.get("replay_turn_total"))
+        self.assertEqual("locomo:conv-1:D1:4", report.get("turn_id"))
         self.assertEqual("job-live", report.get("active_job_id"))
         self.assertEqual("isolated", (report.get("config") or {}).get("qa_session_mode"))
 

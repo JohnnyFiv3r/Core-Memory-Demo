@@ -47,6 +47,12 @@ function BenchmarkPane(props) {
   const activeSampleId = String((summary || {}).sample_id || '').trim()
   const activeQaId = String((summary || {}).qa_id || '').trim()
   const activeCaseStatus = String((summary || {}).case_status || '').trim()
+  const activeConversationId = String((summary || {}).conversation_id || '').trim()
+  const conversationIndex = Number((summary || {}).conversation_index || 0)
+  const conversationTotal = Number((summary || {}).conversations || 0)
+  const replayTurnCompleted = Number((summary || {}).replay_turn_completed || 0)
+  const replayTurnTotal = Number((summary || {}).replay_turn_total || 0)
+  const activeTurnId = String((summary || {}).turn_id || '').trim()
   const isActiveRun = !!((runId || activeJobId) && !hasFinishedAt && status !== 'completed' && status !== 'failed')
   const runLabel = isActiveRun
     ? (activeJobId ? ('job_id=' + activeJobId) : (runId ? ('run_id=' + runId) : ''))
@@ -62,7 +68,7 @@ function BenchmarkPane(props) {
     ingested: 50,
     semantic_built: 70,
     retrieving: 82,
-    locomo_lifecycle: 58,
+    locomo_lifecycle: replayTurnTotal > 0 ? Math.max(24, Math.min(58, 24 + Math.round((replayTurnCompleted / replayTurnTotal) * 34))) : 58,
     lifecycle_qa: 82,
     scoring: 92,
     writing_artifacts: 97,
@@ -323,7 +329,11 @@ function BenchmarkPane(props) {
               (runLabel ? (' · ' + runLabel) : '') +
               (turnsIngested > 0 ? (' · turns=' + String(turnsIngested)) : '') +
               (qaCases > 0 ? (' · qa=' + String(qaCompleted) + '/' + String(qaCases)) : '') +
+              (conversationTotal > 0 ? (' · conversation=' + String(conversationIndex || 1) + '/' + String(conversationTotal)) : '') +
+              (replayTurnTotal > 0 ? (' · replay_turn=' + String(replayTurnCompleted) + '/' + String(replayTurnTotal)) : '') +
+              (activeConversationId ? (' · conv=' + activeConversationId) : '') +
               (activeSampleId ? (' · sample=' + activeSampleId) : '') +
+              (activeTurnId ? (' · turn=' + activeTurnId) : '') +
               (activeQaId ? (' · qa_id=' + activeQaId) : '') +
               (activeCaseStatus ? (' · status=' + activeCaseStatus) : '')
           ),
