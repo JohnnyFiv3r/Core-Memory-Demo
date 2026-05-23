@@ -71,39 +71,27 @@ class TestLifecycleRunner(unittest.TestCase):
     def test_replay_calls_capture_once_per_turn(self):
         calls = []
         progress_events = []
-        seen_invoke = []
-        seen_callable = []
-        seen_enrichment_queue = []
+        before_env = {
+            "CORE_MEMORY_AGENT_CRAWLER_INVOKE": os.environ.get("CORE_MEMORY_AGENT_CRAWLER_INVOKE"),
+            "CORE_MEMORY_AGENT_CRAWLER_CALLABLE": os.environ.get("CORE_MEMORY_AGENT_CRAWLER_CALLABLE"),
+            "CORE_MEMORY_ENRICHMENT_QUEUE": os.environ.get("CORE_MEMORY_ENRICHMENT_QUEUE"),
+        }
 
         def fake_process_turn_finalized(**kwargs):
             calls.append(kwargs)
-            seen_invoke.append(os.environ.get("CORE_MEMORY_AGENT_CRAWLER_INVOKE"))
-            seen_callable.append(os.environ.get("CORE_MEMORY_AGENT_CRAWLER_CALLABLE"))
-            seen_enrichment_queue.append(os.environ.get("CORE_MEMORY_ENRICHMENT_QUEUE"))
             return {"ok": True, "turn_id": kwargs["turn_id"]}
 
         with tempfile.TemporaryDirectory() as td:
-            old_invoke = os.environ.pop("CORE_MEMORY_AGENT_CRAWLER_INVOKE", None)
-            old_callable = os.environ.pop("CORE_MEMORY_AGENT_CRAWLER_CALLABLE", None)
-            old_enrichment_queue = os.environ.pop("CORE_MEMORY_ENRICHMENT_QUEUE", None)
-            try:
-                out = replay_conversation_turns(
-                    root=td,
-                    conversation=_conversation(),
-                    process_turn_finalized_fn=fake_process_turn_finalized,
-                    progress=lambda completed, total, case, result: progress_events.append((completed, total, case, result)),
-                    progress_completed=4,
-                    progress_total=9,
-                    conversation_index=2,
-                    conversation_total=3,
-                )
-            finally:
-                if old_invoke is not None:
-                    os.environ["CORE_MEMORY_AGENT_CRAWLER_INVOKE"] = old_invoke
-                if old_callable is not None:
-                    os.environ["CORE_MEMORY_AGENT_CRAWLER_CALLABLE"] = old_callable
-                if old_enrichment_queue is not None:
-                    os.environ["CORE_MEMORY_ENRICHMENT_QUEUE"] = old_enrichment_queue
+            out = replay_conversation_turns(
+                root=td,
+                conversation=_conversation(),
+                process_turn_finalized_fn=fake_process_turn_finalized,
+                progress=lambda completed, total, case, result: progress_events.append((completed, total, case, result)),
+                progress_completed=4,
+                progress_total=9,
+                conversation_index=2,
+                conversation_total=3,
+            )
 
         self.assertTrue(out["ok"])
         self.assertEqual(2, out["turns_replayed"])
@@ -113,9 +101,13 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual("conversation_replay", calls[0]["metadata"]["benchmark_phase"])
         self.assertEqual("locomo", calls[0]["metadata"]["replay_source"])
         self.assertEqual("locomo:conv-1:D1:1:1", calls[0]["metadata"]["source_turn_id"])
-        self.assertTrue(all(value == "1" for value in seen_invoke))
-        self.assertTrue(all(value == "app.benchmarks.locomo_turn_crawler:locomo_crawler_callable" for value in seen_callable))
-        self.assertTrue(all(value == "off" for value in seen_enrichment_queue))
+        self.assertIn("crawler_updates", calls[0]["metadata"])
+        self.assertEqual("locomo_lifecycle", calls[0]["metadata"]["_crawler_updates_source"])
+        self.assertEqual(before_env, {
+            "CORE_MEMORY_AGENT_CRAWLER_INVOKE": os.environ.get("CORE_MEMORY_AGENT_CRAWLER_INVOKE"),
+            "CORE_MEMORY_AGENT_CRAWLER_CALLABLE": os.environ.get("CORE_MEMORY_AGENT_CRAWLER_CALLABLE"),
+            "CORE_MEMORY_ENRICHMENT_QUEUE": os.environ.get("CORE_MEMORY_ENRICHMENT_QUEUE"),
+        })
         self.assertEqual(4, progress_events[0][0])
         self.assertEqual(9, progress_events[0][1])
         self.assertEqual("conv-1", progress_events[0][2]["sample_id"])
