@@ -803,10 +803,16 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         current['updated_ms'] = _now_ms()
         stage = str((result or {}).get('phase') or 'retrieving').strip().lower() or 'retrieving'
         status = str((result or {}).get('status') or '').strip()
+        replay_done = int((result or {}).get('replay_turn_completed') or 0)
+        replay_total = int((result or {}).get('replay_turn_total') or 0)
+        if stage == 'locomo_lifecycle' and replay_total > 0:
+            message = f'Replaying turns {replay_done}/{replay_total} · QA {int(completed)}/{int(total)}'
+        else:
+            message = f'QA {int(completed)}/{int(total)}'
         _benchmark_event(
             current,
             stage,
-            f'QA {int(completed)}/{int(total)}',
+            message,
             qa_completed=int(completed),
             qa_total=int(total),
             sample_id=str((case or {}).get('sample_id') or ''),
