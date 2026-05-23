@@ -809,6 +809,10 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             message = f'Replaying turns {replay_done}/{replay_total} · QA {int(completed)}/{int(total)}'
         else:
             message = f'QA {int(completed)}/{int(total)}'
+        # Keep _hb in sync so the keepalive loop relays the actual lifecycle phase
+        # instead of overwriting it back to 'starting' every 2 s.
+        _hb['stage'] = stage
+        _hb['message'] = message
         _benchmark_event(
             current,
             stage,
