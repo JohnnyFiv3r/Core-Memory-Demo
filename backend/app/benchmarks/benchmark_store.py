@@ -307,7 +307,7 @@ def update_job_progress(
                 """
                 UPDATE benchmarks.jobs
                 SET progress = %s, events = %s, updated_at = now()
-                WHERE job_id = %s
+                WHERE job_id = %s AND status IN ('queued', 'running')
                 """,
                 (Jsonb(merged_progress), Jsonb(events), job_id_s),
             )
@@ -316,7 +316,7 @@ def update_job_progress(
                 """
                 UPDATE benchmarks.jobs
                 SET status = %s, progress = %s, events = %s, updated_at = now()
-                WHERE job_id = %s
+                WHERE job_id = %s AND status IN ('queued', 'running')
                 """,
                 (str(status or ''), Jsonb(merged_progress), Jsonb(events), job_id_s),
             )
@@ -438,6 +438,50 @@ def claim_next_job() -> dict[str, Any] | None:
     return dict(row) if row else None
 
 
+def cancel_job(job_id: str, *, message: str = 'Benchmark cancelled') -> bool:
+    if not enabled():
+        return False
+    ensure_schema()
+    job_id_s = str(job_id or '').strip()
+    if not job_id_s:
+        return False
+    event = {
+        'seq': 1,
+        'ts_ms': _now_ms(),
+        'stage': 'cancelled',
+        'message': str(message or 'Benchmark cancelled'),
+    }
+    with psycopg.connect(_database_url(), autocommit=True, row_factory=dict_row) as conn:
+        row = conn.execute(
+            "SELECT events FROM benchmarks.jobs WHERE job_id = %s AND status IN ('queued', 'running')",
+            (job_id_s,),
+        ).fetchone()
+        if not row:
+            return False
+        events = list(row.get('events') or [])
+        event['seq'] = int((events[-1] or {}).get('seq') or 0) + 1 if events else 1
+        events.append(event)
+        events = events[-_MAX_JOB_EVENTS:]
+        conn.execute(
+            """
+            UPDATE benchmarks.jobs
+            SET status = 'cancelled',
+                progress = COALESCE(progress, '{}'::jsonb) || %s::jsonb,
+                events = %s,
+                error = NULL,
+                finished_at = now(),
+                updated_at = now()
+            WHERE job_id = %s AND status IN ('queued', 'running')
+            """,
+            (
+                Jsonb({'stage': 'cancelled', 'stage_message': str(message or 'Benchmark cancelled'), 'updated_ms': _now_ms()}),
+                Jsonb(events),
+                job_id_s,
+            ),
+        )
+    return True
+
+
 def finish_job(job_id: str, *, result: dict[str, Any] | None = None, error: str | None = None) -> bool:
     if not enabled():
         return False
@@ -445,8 +489,8 @@ def finish_job(job_id: str, *, result: dict[str, Any] | None = None, error: str 
     status = 'failed' if error else 'completed'
     stage = 'failed' if error else 'completed'
     message = str(error or 'Benchmark completed')
-    with psycopg.connect(_database_url(), autocommit=True) as conn:
-        conn.execute(
+    with psycopg.connect(_database_url(), autocommit=True, row_factory=dict_row) as conn:
+        row = conn.execute(
             """
             UPDATE benchmarks.jobs
             SET status = %s,
@@ -455,7 +499,8 @@ def finish_job(job_id: str, *, result: dict[str, Any] | None = None, error: str 
                 progress = COALESCE(progress, '{}'::jsonb) || %s::jsonb,
                 finished_at = now(),
                 updated_at = now()
-            WHERE job_id = %s
+            WHERE job_id = %s AND status IN ('queued', 'running')
+            RETURNING job_id
             """,
             (
                 status,
@@ -464,8 +509,8 @@ def finish_job(job_id: str, *, result: dict[str, Any] | None = None, error: str 
                 Jsonb({'stage': stage, 'stage_message': message, 'updated_ms': _now_ms()}),
                 str(job_id),
             ),
-        )
-    return True
+        ).fetchone()
+    return bool(row)
 
 
 def read_artifact(run_id: str, filename: str) -> dict[str, Any] | None:

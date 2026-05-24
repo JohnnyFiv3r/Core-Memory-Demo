@@ -34,6 +34,7 @@ let seedStatusState = {active: false, kind: '', status: 'idle', message: ''};
 let activeSeedJobId = null;
 let benchmarkProgressEl = null;
 let activeBenchmarkPollJobId = null;
+const cancelledBenchmarkJobIds = new Set();
 let completedBenchmarkRunId = null;
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
@@ -3648,11 +3649,20 @@ function benchmarkSummaryHasLiveJob(summary, report) {
 }
 
 async function cancelBenchmarkJob(jobId) {
-  if (!jobId) return;
+  const jobIdS = String(jobId || '').trim();
+  if (!jobIdS) return;
+  cancelledBenchmarkJobIds.add(jobIdS);
+  activeBenchmarkPollJobId = null;
+  lastBenchmarkSummary = { ...(lastBenchmarkSummary || {}), job_id: jobIdS, status: 'cancelled', phase: 'cancelled', stage: 'cancelled', stage_message: 'Benchmark cancelled' };
+  lastBenchmarkReport = { ...(lastBenchmarkReport || {}), active_job_id: jobIdS, status: 'cancelled', phase: 'cancelled', active: false };
+  renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+  syncBenchmarkButton(lastBenchmarkSummary || {});
   try {
-    await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobId) + '/cancel', { method: 'POST' });
-  } catch (_) {
-    // best effort
+    const res = await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobIdS) + '/cancel', { method: 'POST' });
+    const data = await parseApiJsonResponse(res, 'benchmark-cancel');
+    if (!res.ok || !data.ok) throw new Error(data.error || ('HTTP ' + res.status));
+  } catch (err) {
+    addMsg('system', 'Benchmark cancel request failed: ' + String((err && err.message) || err || 'cancel_failed'));
   }
 }
 
@@ -4493,6 +4503,10 @@ async function runBenchmark() {
         }
         throw pollErr;
       }
+      if (cancelledBenchmarkJobIds.has(jobId)) {
+        done = true;
+        break;
+      }
       // Relay heartbeat stage + message + ingest progress + elapsed from the keepalive.
       if (job.stage && !job.done) {
         lastBenchmarkSummary = {
@@ -4533,6 +4547,7 @@ async function runBenchmark() {
         if (stage === 'failed') {
           addMsg('system', 'Benchmark failed: ' + String(evt.error || evt.message || 'benchmark_failed'));
         } else if (stage === 'cancelled') {
+          cancelledBenchmarkJobIds.add(jobId);
           lastBenchmarkSummary = { ...(lastBenchmarkSummary || {}), status: 'cancelled', phase: 'cancelled' };
           renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
           updateBenchmarkProgressMessage(lastBenchmarkSummary, null);
@@ -4564,6 +4579,11 @@ async function runBenchmark() {
         renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
         syncBenchmarkButton(lastBenchmarkSummary || {});
         addMsg('system', formatBenchmarkSummary(lastBenchmarkSummary || {}));
+      } else if (String(job.status || '').toLowerCase() === 'cancelled' || cancelledBenchmarkJobIds.has(jobId)) {
+        cancelledBenchmarkJobIds.add(jobId);
+        lastBenchmarkSummary = { ...(lastBenchmarkSummary || {}), status: 'cancelled', phase: 'cancelled', stage: 'cancelled', stage_message: 'Benchmark cancelled' };
+        renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+        syncBenchmarkButton(lastBenchmarkSummary || {});
       } else if (job.error) {
         throw new Error(job.error || 'benchmark_failed');
       }
