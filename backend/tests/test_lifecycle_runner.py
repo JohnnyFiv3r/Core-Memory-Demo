@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -222,6 +223,33 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual(1.0, out["efforts"]["high"]["answer_f1"])
         self.assertEqual(1.0, out["efforts"]["high"]["evidence_recall"]["recall@5"])
         self.assertEqual(["D1:1"], out["efforts"]["high"]["retrieved"][0]["dia_ids"])
+
+    def test_qa_efforts_generates_high_effort_answer_when_configured(self):
+        conv = _conversation()
+        qa = BenchmarkQA(
+            qa_id="qa-1",
+            question="who likes pizza?",
+            expected_answer="Alice likes pizza",
+            gold_evidence=["D1:1"],
+            category="2",
+            bucket_labels=(),
+            metadata={"category": 2},
+        )
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            return {"raw": {"results": [{"bead_id": "b1", "dia_ids": ["D1:1"], "snippet": "Alice likes pizza."}]}}
+
+        with tempfile.TemporaryDirectory() as td, patch(
+            "app.benchmarks.lifecycle_runner.generate_locomo_answer",
+            return_value={"answer": "Alice likes pizza", "used_dia_ids": ["D1:1"], "confidence": "high", "unsupported": False},
+        ) as answerer:
+            out = run_qa_efforts(root=td, conversation=conv, qa=qa, recall_fn=fake_recall, answer_mode="llm", generator_model="test:model")
+
+        self.assertEqual(1, answerer.call_count)
+        self.assertEqual(1.0, out["efforts"]["high"]["answer_f1"])
+        self.assertEqual(0.0, out["efforts"]["low"]["answer_f1"])
+        self.assertEqual("Alice likes pizza", out["efforts"]["high"]["prediction"])
+        self.assertEqual("Alice likes pizza", out["efforts"]["high"]["result"]["answer"])
 
     def test_qa_efforts_score_raw_recall_rows(self):
         conv = _conversation()

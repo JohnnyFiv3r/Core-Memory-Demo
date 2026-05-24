@@ -13,6 +13,7 @@ from app.benchmarks.contracts import (
     BenchmarkTurn,
     assert_lifecycle_faithful_mode,
 )
+from app.benchmarks.locomo_answer import generate_locomo_answer
 from app.benchmarks.locomo_loader import locomo_samples_to_benchmark_conversations
 from app.benchmarks.locomo_scoring import compute_evidence_recall, score_answer
 from app.benchmarks.locomo_turn_crawler import locomo_crawler_callable
@@ -347,7 +348,7 @@ def replay_conversation_turns(
                 "conversation_id": conversation.conversation_id,
                 "conversation_index": conversation_index,
                 "conversations": conversation_total,
-                "replay_turn_completed": idx,
+                "replay_turn_completed": idx - 1,
                 "replay_turn_total": total_turns,
                 "turn_id": turn.turn_id,
             },
@@ -513,6 +514,8 @@ def run_qa_efforts(
     recall_fn: RecallFunc | None = None,
     retrieval_efforts: tuple[str, ...] = RETRIEVAL_EFFORT_ORDER,
     k: int | None = None,
+    answer_mode: str = "none",
+    generator_model: str | None = None,
 ) -> dict[str, Any]:
     """Run every configured retrieval effort for one QA case in order."""
 
@@ -530,12 +533,47 @@ def run_qa_efforts(
         payload = _as_dict(raw)
         latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
         score_meta = _score_effort_payload(qa=qa, payload=payload, latency_ms=latency_ms)
+        warnings = list(payload.get("warnings") or [])
+        answer_payload: dict[str, Any] = {}
+        # Lifecycle recall returns evidence but does not synthesize an answer.
+        # Generate exactly the high-effort benchmark answer here so answer_f1
+        # measures the answerer over retrieved evidence instead of scoring blank
+        # recall payloads as zero.
+        if effort == "high" and str(answer_mode or "none").strip().lower() != "none":
+            try:
+                sample_id = str(conversation.conversation_id or "").replace("locomo:", "", 1)
+                answer_payload = generate_locomo_answer(
+                    mode=str(answer_mode or "none"),
+                    root=str(root),
+                    sample_id=sample_id,
+                    qa={
+                        "question": qa.question,
+                        "answer": qa.expected_answer,
+                        "category": qa.category,
+                        "sample_id": sample_id,
+                        "qa_id": qa.qa_id,
+                    },
+                    retrieved_context=list(score_meta.get("retrieved") or []),
+                    generator_model=generator_model,
+                )
+                prediction = str(answer_payload.get("answer") or "").strip()
+                category_raw = (qa.metadata or {}).get("category") or qa.category or 0
+                try:
+                    category = int(category_raw or 0)
+                except Exception:
+                    category = 0
+                score_meta["prediction"] = prediction
+                score_meta["answer_f1"] = float(score_answer(category=category, prediction=prediction, answer=str(qa.expected_answer or ""))) if qa.expected_answer is not None else 0.0
+                payload = {**payload, "answer": prediction, "answer_payload": answer_payload}
+            except Exception as exc:
+                warnings.append(f"answer_generation_failed:{type(exc).__name__}:{exc}")
         results[effort] = {
             "effort": effort,
             "latency_ms": latency_ms,
             "request": req,
             "result": payload,
-            "warnings": list(payload.get("warnings") or []),
+            "warnings": warnings,
+            "answer_payload": answer_payload,
             **score_meta,
         }
         order.append(effort)
@@ -647,6 +685,8 @@ def run_lifecycle_conversation(
     recall_fn: RecallFunc | None = None,
     write_qa_beads: bool = True,
     retrieval_k: int | None = None,
+    answer_mode: str = "none",
+    generator_model: str | None = None,
     progress: Any | None = None,
     progress_total: int | None = None,
     progress_completed_offset: int = 0,
@@ -700,7 +740,7 @@ def run_lifecycle_conversation(
                 "corpus_before_qa": corpus_snapshot(isolated_path),
             }
 
-        qa_result = run_qa_efforts(root=qa_root, conversation=conversation, qa=qa, recall_fn=recall_fn, k=retrieval_k)
+        qa_result = run_qa_efforts(root=qa_root, conversation=conversation, qa=qa, recall_fn=recall_fn, k=retrieval_k, answer_mode=answer_mode, generator_model=generator_model)
         if write_qa_beads:
             qa_result.update(write_qa_turn(root=qa_root, conversation=conversation, qa=qa, qa_result=qa_result, qa_session_id=qa_session_id_for_case, process_turn_finalized_fn=process_turn_finalized_fn))
         else:
@@ -859,6 +899,8 @@ def run_locomo_lifecycle_suite(
     recall_fn: RecallFunc | None = None,
     write_qa_beads: bool = True,
     retrieval_k: int | None = None,
+    answer_mode: str = "none",
+    generator_model: str | None = None,
     progress: Any | None = None,
 ) -> dict[str, Any]:
     """Run faithful LoCoMo lifecycle benchmark over selected samples.
@@ -898,6 +940,8 @@ def run_locomo_lifecycle_suite(
             recall_fn=recall_fn,
             write_qa_beads=write_qa_beads,
             retrieval_k=retrieval_k,
+            answer_mode=answer_mode,
+            generator_model=generator_model,
             progress=progress,
             progress_total=total_qa,
             progress_completed_offset=completed_qa,

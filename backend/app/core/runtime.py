@@ -3403,6 +3403,12 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             snapshot_sanitize_meta = _sanitize_locomo_benchmark_snapshot(base_root)
         if suite_name == "locomo_native_lifecycle":
             benchmark_embeddings_provider = _resolve_benchmark_embeddings_provider(embeddings_provider)
+            resolved_answer_mode = str(answer_mode or "llm").strip().lower() or "llm"
+            if resolved_answer_mode not in {"llm", "extractive", "none"}:
+                resolved_answer_mode = "llm"
+            resolved_generator_model = str(generator_model or "").strip()
+            if resolved_answer_mode == "llm" and not resolved_generator_model:
+                resolved_generator_model = detect_model()
             with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
                 lifecycle_report = run_locomo_lifecycle_suite(
                     root=str(base_root),
@@ -3410,6 +3416,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     qa_cases=selected_cases,
                     qa_session_mode=qa_session_mode,
                     retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
+                    answer_mode=resolved_answer_mode,
+                    generator_model=resolved_generator_model,
                     progress=progress,
                 )
             if snapshot_sanitize_meta:
@@ -3473,8 +3481,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "answer_f1_mean": float(lifecycle_overall.get("answer_f1_mean") or 0.0),
                 "evidence_recall_at_5": float(lifecycle_overall.get("evidence_recall@5") or 0.0),
                 "semantic_mode": semantic_mode_name,
-                "answer_mode": "lifecycle_effort_recall",
-                "generator_model": "",
+                "answer_mode": resolved_answer_mode,
+                "generator_model": resolved_generator_model,
                 "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
                 "root_mode": root_mode,
                 "warnings": warnings,
@@ -3498,6 +3506,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     "recall_scope": "full_bead_corpus",
                     "qa_session_mode": str(qa_session_mode or "isolated"),
                     "dataset_mode": "locomo_native_lifecycle",
+                    "answer_mode": resolved_answer_mode,
+                    "generator_model": resolved_generator_model,
                 },
                 "dataset": dict((dataset_meta.get("dataset") or {})),
                 "lifecycle": dict(lifecycle_report.get("lifecycle") or {}),
