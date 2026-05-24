@@ -740,7 +740,7 @@ def ingest_locomo_samples_through_core_memory(
 
     final_queue = async_jobs_status(root=target_root)
     return {
-        "ok": ingested_count > 0 and not cancelled and not any(not bool((f or {}).get("ok")) for f in flushes),
+        "ok": ingested_count > 0 and not cancelled and not errors and not any(not bool((f or {}).get("ok")) for f in flushes),
         "cancelled": cancelled,
         "mode": "core_memory_through_process_turn_finalized",
         "ingest_path": "core_memory_pipeline",
@@ -883,6 +883,14 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
             break
         try:
             replayed = _replay_locomo_row(row)
+            if not bool((replayed or {}).get("ok")):
+                errors.append({
+                    "index": idx,
+                    "dia_id": str(row.get("dia_id") or ""),
+                    "error": str(((replayed or {}).get("result") or {}).get("error") or ((replayed or {}).get("result") or {}).get("error_code") or "process_turn_finalized_failed"),
+                    "result": dict((replayed or {}).get("result") or {}),
+                })
+                continue
             seeded += 1
             seeded_since_flush += 1
             sid = str(replayed.get("session_id") or "").strip()
@@ -918,7 +926,7 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
     final_queue = async_jobs_status(root=settings.core_memory_root)
     turn_range = {"first": 1 if seeded > 0 else 0, "last": int(seeded)}
     return {
-        "ok": seeded > 0 and not cancelled,
+        "ok": seeded > 0 and not cancelled and not errors,
         "cancelled": cancelled,
         "seeded": int(seeded),
         "seeded_turns": int(seeded),

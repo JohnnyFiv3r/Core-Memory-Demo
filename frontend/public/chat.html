@@ -885,52 +885,56 @@
       </div>
       <div class="tab-content" id="tab-benchmark">
         <div class="panel-controls" id="benchmark-controls">
-          <span class="control-label">root</span>
-          <select id="bench-root-mode" class="control-select" title="Benchmark isolation mode">
+          <span class="control-label">dataset</span>
+          <select id="seed-source" class="control-select" title="Choose what this panel controls first; dataset-specific options appear below.">
+            <option value="story_pack" selected>Story Pack</option>
+            <option value="locomo">LoCoMo</option>
+            <option value="default_demo">Default Demo</option>
+          </select>
+
+          <span class="control-label" data-dataset="locomo">root</span>
+          <select id="bench-root-mode" class="control-select" title="Benchmark isolation mode" data-dataset="locomo">
             <option value="snapshot" selected>snapshot</option>
             <option value="clean">clean</option>
           </select>
-          <span class="control-label">QA</span>
-          <select id="bench-qa-session-mode" class="control-select" title="Lifecycle QA session mode">
+          <span class="control-label" data-dataset="locomo">QA</span>
+          <select id="bench-qa-session-mode" class="control-select" title="Lifecycle QA session mode" data-dataset="locomo">
             <option value="shared">shared</option>
             <option value="isolated" selected>isolated</option>
           </select>
-          <span class="control-label">embeddings</span>
-          <select id="bench-embeddings-provider" class="control-select" title="Benchmark embeddings provider">
+          <span class="control-label" data-dataset="locomo">embeddings</span>
+          <select id="bench-embeddings-provider" class="control-select" title="Benchmark embeddings provider" data-dataset="locomo">
             <option value="hash" selected>hash</option>
             <option value="openai">openai</option>
           </select>
-          <span class="control-label">source</span>
-          <select id="seed-source" class="control-select" title="Seed source">
-            <option value="story_pack" selected>story_pack</option>
-            <option value="default_demo">default_demo</option>
-            <option value="locomo">locomo</option>
-          </select>
-          <span class="control-label">preload</span>
-          <input id="bench-preload-max" class="control-input" type="number" min="0" step="50" value="200" style="width:74px" title="Max demo turns to preload">
-          <label class="control-inline" title="Preload turns from demo session">
+
+          <span class="control-label" data-dataset="story_pack default_demo">turns</span>
+          <input id="bench-preload-max" class="control-input" type="number" min="0" step="50" value="200" style="width:74px" title="Max turns to seed" data-dataset="story_pack default_demo">
+          <label class="control-inline" title="Seed/replay turns from the selected demo source" data-dataset="story_pack default_demo">
             <input id="bench-preload-enabled" type="checkbox" checked>
-            <span class="control-label" style="margin-right:0">from demo</span>
+            <span class="control-label" style="margin-right:0">enabled</span>
           </label>
-          <span class="control-label">locomo</span>
-          <select id="locomo-sample-mode" class="control-select" title="LoCoMo sample mode">
+
+          <span class="control-label" data-dataset="locomo">locomo</span>
+          <select id="locomo-sample-mode" class="control-select" title="LoCoMo sample mode" data-dataset="locomo">
             <option value="single" selected>single</option>
             <option value="all">all</option>
           </select>
-          <select id="locomo-sample-id" class="control-select" style="min-width:110px" title="LoCoMo sample id">
+          <select id="locomo-sample-id" class="control-select" style="min-width:110px" title="LoCoMo sample id" data-dataset="locomo">
             <option value="">loading...</option>
           </select>
-          <input id="locomo-max-turns" class="control-input" type="number" min="1" step="10" value="200" style="width:74px" title="Max LoCoMo turns">
-          <span class="control-label">answer</span>
-          <select id="bench-answer-mode" class="control-select" title="Answer synthesis mode (auto=suite default, none=retrieval only, extractive=top row text, llm=model-generated)">
+          <input id="locomo-max-turns" class="control-input" type="number" min="1" step="10" value="200" style="width:74px" title="LoCoMo QA limit for benchmark, or max turns for LoCoMo seed" data-dataset="locomo">
+
+          <span class="control-label" data-dataset="locomo">answer</span>
+          <select id="bench-answer-mode" class="control-select" title="Answer synthesis mode (auto=suite default, none=retrieval only, extractive=top row text, llm=model-generated)" data-dataset="locomo">
             <option value="auto" selected>auto</option>
             <option value="llm">llm</option>
             <option value="extractive">extractive</option>
             <option value="none">none</option>
           </select>
-          <input id="bench-generator-model" class="control-input" placeholder="model (auto)" style="width:130px" title="Generator model for LLM answer mode — leave blank to auto-detect from current session">
+          <input id="bench-generator-model" class="control-input" placeholder="model (auto)" style="width:130px" title="Generator model for LLM answer mode — leave blank to auto-detect from current session" data-dataset="locomo">
           <button class="btn" id="btn-seed">Seed</button>
-          <button class="btn" id="btn-benchmark">Run LOCOMO Test</button>
+          <button class="btn" id="btn-benchmark" data-dataset="locomo">Run LoCoMo Benchmark</button>
         </div>
         <div id="tab-benchmark-content"></div>
       </div>

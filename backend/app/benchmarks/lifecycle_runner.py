@@ -334,7 +334,7 @@ def replay_conversation_turns(
                 "conversation_id": conversation.conversation_id,
                 "conversation_index": conversation_index,
                 "conversations": conversation_total,
-                "replay_turn_completed": idx - 1,
+                "replay_turn_completed": idx,
                 "replay_turn_total": total_turns,
                 "turn_id": turn.turn_id,
             },
@@ -711,6 +711,10 @@ def run_lifecycle_conversation(
             "lifecycle_faithful": dataset_mode == "locomo_native_lifecycle" and not flags.any_enabled(),
             "conversations": 1,
             "turns_replayed": int(replay.get("turns_replayed") or 0),
+            "replay_turns_original": int((conversation.metadata or {}).get("replay_turns_original") or len(conversation.turns)),
+            "replay_turns_required": int((conversation.metadata or {}).get("replay_turns_required") or len(conversation.turns)),
+            "bounded_replay": bool((conversation.metadata or {}).get("bounded_replay")),
+            "bounded_replay_reason": str((conversation.metadata or {}).get("bounded_replay_reason") or ""),
             "capture_hook_calls": int(replay.get("capture_hook_calls") or 0),
             "pre_qa_flush_ran": bool(pre_qa_flush.get("ran")),
             "qa_session_mode": qa_session_mode_name,
@@ -737,17 +741,88 @@ def _case_identity(row: dict[str, Any]) -> str:
     return f"locomo:{raw}" if raw else ""
 
 
+def _evidence_turn_refs(raw: str) -> list[str]:
+    refs: list[str] = []
+    normalized = str(raw or "").replace(",", " ").replace(";", " ")
+    for chunk in normalized.split():
+        ref = chunk.strip()
+        if ref:
+            refs.append(ref)
+    return refs
+
+
+def _bounded_replay_turns_for_qa(conversation: BenchmarkConversation, qa_cases: list[BenchmarkQA]) -> tuple[list[BenchmarkTurn], dict[str, Any]]:
+    """Trim replay to the latest source turn required by the selected QA evidence.
+
+    LoCoMo QA limits select questions, not turns. Replaying the full conversation for
+    a small QA subset makes the UI look frozen and turns a 50-QA smoke run into a
+    full-conversation replay. For selected QA subsets, keep faithful chronology but
+    stop after the latest gold evidence turn referenced by those selected cases.
+    """
+
+    turns = list(conversation.turns)
+    if not turns or not qa_cases:
+        return turns, {"bounded_replay": False}
+
+    turn_index_by_ref: dict[str, int] = {}
+    for idx, turn in enumerate(turns, start=1):
+        metadata = dict(turn.metadata or {})
+        refs = [
+            str(turn.turn_id or "").strip(),
+            str(metadata.get("locomo_dia_id") or "").strip(),
+        ]
+        for ref in refs:
+            if ref:
+                turn_index_by_ref[ref] = idx
+
+    max_required = 0
+    missing_refs: list[str] = []
+    evidence_refs = 0
+    for qa in qa_cases:
+        for raw_ref in list(qa.gold_evidence or []):
+            for ref in _evidence_turn_refs(str(raw_ref or "")):
+                evidence_refs += 1
+                idx = turn_index_by_ref.get(ref)
+                if idx is None:
+                    missing_refs.append(ref)
+                    continue
+                max_required = max(max_required, idx)
+
+    if max_required <= 0:
+        return turns, {
+            "bounded_replay": False,
+            "bounded_replay_reason": "no_selected_qa_evidence_refs_matched",
+            "selected_qa_cases": len(qa_cases),
+            "selected_evidence_refs": evidence_refs,
+            "missing_evidence_refs": missing_refs[:20],
+        }
+
+    bounded = turns[:max_required]
+    return bounded, {
+        "bounded_replay": max_required < len(turns),
+        "bounded_replay_reason": "selected_qa_latest_evidence_turn",
+        "selected_qa_cases": len(qa_cases),
+        "selected_evidence_refs": evidence_refs,
+        "missing_evidence_refs": missing_refs[:20],
+        "replay_turns_original": len(turns),
+        "replay_turns_required": max_required,
+    }
+
+
 def _filter_conversation_qa(conversation: BenchmarkConversation, selected_case_ids: set[str]) -> BenchmarkConversation:
     if not selected_case_ids:
         return conversation
     qa_cases = [qa for qa in conversation.qa_cases if qa.qa_id in selected_case_ids]
+    turns, replay_meta = _bounded_replay_turns_for_qa(conversation, qa_cases)
+    metadata = dict(conversation.metadata or {})
+    metadata.update(replay_meta)
     return BenchmarkConversation(
         benchmark_name=conversation.benchmark_name,
         conversation_id=conversation.conversation_id,
         session_id=conversation.session_id,
-        turns=list(conversation.turns),
+        turns=turns,
         qa_cases=qa_cases,
-        metadata=dict(conversation.metadata or {}),
+        metadata=metadata,
     )
 
 
@@ -832,6 +907,9 @@ def run_locomo_lifecycle_suite(
             "lifecycle_faithful": dataset_mode == "locomo_native_lifecycle" and not flags.any_enabled(),
             "conversations": len(conversations),
             "turns_replayed": sum(int(((r.get("lifecycle") or {}).get("turns_replayed") or 0)) for r in results),
+            "replay_turns_original": sum(int(((r.get("lifecycle") or {}).get("replay_turns_original") or 0)) for r in results),
+            "replay_turns_required": sum(int(((r.get("lifecycle") or {}).get("replay_turns_required") or 0)) for r in results),
+            "bounded_replay": any(bool((r.get("lifecycle") or {}).get("bounded_replay")) for r in results),
             "capture_hook_calls": sum(int(((r.get("lifecycle") or {}).get("capture_hook_calls") or 0)) for r in results),
             "pre_qa_flush_ran": all(bool((r.get("lifecycle") or {}).get("pre_qa_flush_ran")) for r in results) if results else False,
             "qa_session_mode": qa_session_mode,

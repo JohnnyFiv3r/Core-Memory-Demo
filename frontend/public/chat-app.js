@@ -751,6 +751,28 @@ function refreshStoryCursorLabel() {
   label.textContent = 'Story cursor: turn ' + String(getStoryCursorTurn());
 }
 
+function updateDatasetScopedControls() {
+  const dataset = String(document.getElementById('seed-source')?.value || 'story_pack').trim() || 'story_pack';
+  document.querySelectorAll('[data-dataset]').forEach((el) => {
+    const allowed = String(el.getAttribute('data-dataset') || '').split(/\s+/).filter(Boolean);
+    const visible = allowed.includes(dataset);
+    el.style.display = visible ? '' : 'none';
+  });
+
+  const benchmarkBtn = document.getElementById('btn-benchmark');
+  if (benchmarkBtn) {
+    benchmarkBtn.textContent = dataset === 'locomo' ? 'Run LoCoMo Benchmark' : 'Run Benchmark';
+  }
+  const seedBtn = document.getElementById('btn-seed');
+  if (seedBtn && !activeSeedJobId) {
+    seedBtn.textContent = dataset === 'locomo' ? 'Seed LoCoMo' : (dataset === 'story_pack' ? 'Seed Story Pack' : 'Seed Demo');
+  }
+  const subset = document.getElementById('bench-subset');
+  if (subset && dataset === 'locomo') {
+    subset.value = 'locomo_native_lifecycle';
+  }
+}
+
 function openReagraphArchive() {
   const overlay = document.getElementById('graph-overlay');
   const frame = document.getElementById('graph-overlay-frame');
@@ -950,6 +972,9 @@ function bindUiEventHandlers() {
 
   const sendBtn = document.getElementById('btn-send-message');
   if (sendBtn) sendBtn.addEventListener('click', sendMessage);
+
+  const seedSourceSelect = document.getElementById('seed-source');
+  if (seedSourceSelect) seedSourceSelect.addEventListener('change', updateDatasetScopedControls);
 
   const tabSelect = document.getElementById('tab-selector');
   if (tabSelect) {
@@ -3692,28 +3717,54 @@ async function refreshMemory() {
         if (!activeBenchmarkPollJobId) {
           // No dedicated poll loop — use control-state as the complete source of truth.
           if (bench.summary) {
+            const events = Array.isArray(benchJob.events) ? benchJob.events : [];
+            const latestEvent = events.length ? (events[events.length - 1] || {}) : {};
             lastBenchmarkSummary = {
               ...(bench.summary || {}),
-              heartbeat_stage: String(benchJob.stage || ''),
-              stage: String(benchJob.stage || ''),
-              stage_message: String(benchJob.stage_message || ''),
+              heartbeat_stage: String(latestEvent.stage || benchJob.stage || ''),
+              stage: String(latestEvent.stage || benchJob.stage || ''),
+              stage_message: String(latestEvent.message || benchJob.stage_message || ''),
               ingest_n: Number(benchJob.ingest_n || 0),
               ingest_total: Number(benchJob.ingest_total || 0),
               elapsed_ms: Number(benchJob.elapsed_ms || 0),
+              qa_cases: Number(latestEvent.qa_total || (bench.summary || {}).qa_cases || 0),
+              qa_completed: Number(latestEvent.qa_completed || (bench.summary || {}).qa_completed || 0),
+              sample_id: String(latestEvent.sample_id || (bench.summary || {}).sample_id || ''),
+              qa_id: String(latestEvent.qa_id || (bench.summary || {}).qa_id || ''),
+              case_status: String(latestEvent.case_status || (bench.summary || {}).case_status || ''),
+              conversation_id: String(latestEvent.conversation_id || (bench.summary || {}).conversation_id || ''),
+              conversation_index: Number(latestEvent.conversation_index || (bench.summary || {}).conversation_index || 0),
+              conversations: Number(latestEvent.conversations || (bench.summary || {}).conversations || 0),
+              replay_turn_completed: Number(latestEvent.replay_turn_completed || (bench.summary || {}).replay_turn_completed || 0),
+              replay_turn_total: Number(latestEvent.replay_turn_total || (bench.summary || {}).replay_turn_total || 0),
+              turn_id: String(latestEvent.turn_id || (bench.summary || {}).turn_id || ''),
             };
           }
           if (bench.report) lastBenchmarkReport = bench.report || lastBenchmarkReport;
         } else if (benchJob.stage && !benchJob.done) {
           // Poll loop owns the summary — only spread the job's live stage fields so the
           // pane repaints every refreshMemory tick even between poll responses.
+          const events = Array.isArray(benchJob.events) ? benchJob.events : [];
+          const latestEvent = events.length ? (events[events.length - 1] || {}) : {};
           lastBenchmarkSummary = {
             ...(lastBenchmarkSummary || {}),
-            heartbeat_stage: String(benchJob.stage || ''),
-            stage: String(benchJob.stage || ''),
-            stage_message: String(benchJob.stage_message || ''),
+            heartbeat_stage: String(latestEvent.stage || benchJob.stage || ''),
+            stage: String(latestEvent.stage || benchJob.stage || ''),
+            stage_message: String(latestEvent.message || benchJob.stage_message || ''),
             ingest_n: Number(benchJob.ingest_n || 0),
             ingest_total: Number(benchJob.ingest_total || 0),
             elapsed_ms: Number(benchJob.elapsed_ms || 0),
+            qa_cases: Number(latestEvent.qa_total || (lastBenchmarkSummary || {}).qa_cases || 0),
+            qa_completed: Number(latestEvent.qa_completed || (lastBenchmarkSummary || {}).qa_completed || 0),
+            sample_id: String(latestEvent.sample_id || (lastBenchmarkSummary || {}).sample_id || ''),
+            qa_id: String(latestEvent.qa_id || (lastBenchmarkSummary || {}).qa_id || ''),
+            case_status: String(latestEvent.case_status || (lastBenchmarkSummary || {}).case_status || ''),
+            conversation_id: String(latestEvent.conversation_id || (lastBenchmarkSummary || {}).conversation_id || ''),
+            conversation_index: Number(latestEvent.conversation_index || (lastBenchmarkSummary || {}).conversation_index || 0),
+            conversations: Number(latestEvent.conversations || (lastBenchmarkSummary || {}).conversations || 0),
+            replay_turn_completed: Number(latestEvent.replay_turn_completed || (lastBenchmarkSummary || {}).replay_turn_completed || 0),
+            replay_turn_total: Number(latestEvent.replay_turn_total || (lastBenchmarkSummary || {}).replay_turn_total || 0),
+            turn_id: String(latestEvent.turn_id || (lastBenchmarkSummary || {}).turn_id || ''),
           };
         }
         updateBenchmarkProgressMessage(lastBenchmarkSummary || {}, lastBenchmarkReport || null);
@@ -3908,6 +3959,8 @@ function closeModal() {
 function syncBenchmarkButton(summary) {
   const btn = document.getElementById('btn-benchmark');
   if (!btn) return;
+  const dataset = String(document.getElementById('seed-source')?.value || 'story_pack').trim() || 'story_pack';
+  const idleLabel = dataset === 'locomo' ? 'Run LoCoMo Benchmark' : 'Run Benchmark';
   const s = summary || {};
   const status = String(s.status || '').trim().toLowerCase();
   const phase = String(s.phase || '').trim().toLowerCase();
@@ -3924,12 +3977,12 @@ function syncBenchmarkButton(summary) {
   btn.disabled = blocked;
   btn.title = blocked ? ('Waiting for seeding to finish' + (seedStatusState.kind ? (' (' + seedStatusState.kind + ')') : '')) : '';
   if (blocked) {
-    btn.dataset.prevLabel = btn.dataset.prevLabel || btn.textContent || 'Run LOCOMO Test';
+    btn.dataset.prevLabel = btn.dataset.prevLabel || btn.textContent || idleLabel;
     btn.textContent = 'Waiting for Seed...';
   } else if (btn.textContent === 'Waiting for Seed...') {
-    btn.textContent = btn.dataset.prevLabel || 'Run LOCOMO Test';
-  } else if (btn.textContent !== 'Run LOCOMO Test') {
-    btn.textContent = 'Run LOCOMO Test';
+    btn.textContent = btn.dataset.prevLabel || idleLabel;
+  } else if (btn.textContent !== idleLabel) {
+    btn.textContent = idleLabel;
   }
 }
 
@@ -4552,6 +4605,7 @@ function startDemoUi() {
   loadSeedResetPrefs();
   bindSessionPopoverControls();
   loadDemoModels();
+  updateDatasetScopedControls();
   refreshLocomoMeta();
   refreshSeedStatus();
   refreshErrorStreak = 0;
