@@ -97,6 +97,40 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('stored-active', out['job_id'])
         self.assertFalse(enqueue.called)
 
+    async def test_locomo_lifecycle_refuses_non_queue_web_execution(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        req = _Req({'suite': 'locomo_native_lifecycle', 'root_mode': 'snapshot'})
+        old_mode = demo_routes.settings.benchmark_run_mode
+        demo_routes.settings.benchmark_run_mode = 'background'
+        try:
+            with patch.object(demo_routes, '_prune_benchmark_jobs'):
+                out = await demo_routes.benchmark_run(req)
+        finally:
+            demo_routes.settings.benchmark_run_mode = old_mode
+        self.assertEqual(503, out.status_code)
+        self.assertIn('locomo_benchmark_requires_cron_queue', out.body.decode())
+
+    async def test_locomo_lifecycle_queue_forces_clean_isolated_llm(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        req = _Req({'suite': 'locomo_native_lifecycle', 'root_mode': 'snapshot', 'qa_session_mode': 'shared', 'answer_mode': 'none'})
+        old_mode = demo_routes.settings.benchmark_run_mode
+        demo_routes.settings.benchmark_run_mode = 'queue'
+        try:
+            with patch.object(demo_routes, '_prune_benchmark_jobs'), \
+                 patch.object(demo_routes.benchmark_store, 'read_active_job', return_value=None), \
+                 patch.object(demo_routes.benchmark_store, 'enqueue_job', return_value=True) as enqueue:
+                out = await demo_routes.benchmark_run(req)
+        finally:
+            demo_routes.settings.benchmark_run_mode = old_mode
+        self.assertTrue(out['ok'])
+        kwargs = enqueue.call_args.kwargs['kwargs']
+        self.assertEqual('clean', kwargs['root_mode'])
+        self.assertEqual('isolated', kwargs['qa_session_mode'])
+        self.assertEqual('llm', kwargs['answer_mode'])
+        demo_routes.BENCHMARK_JOBS.pop(out['job_id'], None)
+
     def test_job_status_prefers_stored_completion_over_web_placeholder(self):
         if demo_routes is None:
             self.skipTest('pydantic_settings unavailable')

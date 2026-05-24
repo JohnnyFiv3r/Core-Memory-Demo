@@ -1474,6 +1474,11 @@ async def benchmark_run(request: Request):
     root_mode = str((body or {}).get('root_mode') or 'snapshot').strip().lower() or 'snapshot'
     if root_mode not in {'snapshot', 'clean'}:
         root_mode = 'snapshot'
+    # LoCoMo lifecycle benchmarks are self-contained corpus replays. Snapshot is
+    # for story-pack/demo-state seeding and unnecessarily copies the live demo
+    # root into a memory-heavy benchmark path.
+    if suite == 'locomo_native_lifecycle':
+        root_mode = 'clean'
     preload_from_demo = bool((body or {}).get('preload_from_demo', False))
     preload_turns_max = int((body or {}).get('preload_turns_max') or 200)
     preload_turns_max = min(max(1, preload_turns_max), max(1, int(settings.benchmark_preload_turns_max)))
@@ -1509,6 +1514,10 @@ async def benchmark_run(request: Request):
     if answer_mode not in {None, 'none', 'extractive', 'llm'}:
         answer_mode = 'none'
     generator_model = str((body or {}).get('generator_model') or '').strip() or None
+    if suite == 'locomo_native_lifecycle':
+        # Lifecycle QA should always answer from retrieved evidence. Leave the
+        # model unset for auto-detection unless explicitly supplied.
+        answer_mode = 'llm'
     embeddings_provider = str((body or {}).get('embeddings_provider') or '').strip() or None
     evidence_recall_k = [int(x) for x in ((body or {}).get('evidence_recall_k') or [1, 3, 5, 8, 10]) if str(x).strip()]
     persist_case_artifacts = bool((body or {}).get('persist_case_artifacts', True))
@@ -1516,6 +1525,10 @@ async def benchmark_run(request: Request):
     compare_retrieval_modes = bool((body or {}).get('compare_retrieval_modes', False))
     qa_session_mode = str((body or {}).get('qa_session_mode') or 'isolated').strip().lower() or 'isolated'
     if qa_session_mode not in {'shared', 'isolated'}:
+        qa_session_mode = 'isolated'
+    if suite == 'locomo_native_lifecycle':
+        # Keep QA turns from contaminating the replay corpus and from changing
+        # subsequent QA retrieval state.
         qa_session_mode = 'isolated'
     retrieval_pipeline = str((body or {}).get('retrieval_pipeline') or 'execute_trace').strip().lower() or 'execute_trace'
     if retrieval_pipeline not in {'execute_trace', 'execute_trace_hydrate', 'forced_three_phase', 'three_phase'}:
@@ -1554,6 +1567,18 @@ async def benchmark_run(request: Request):
     prior_row = BENCHMARK_JOBS.get(prior_job_id or '') if prior_job_id else None
     if run_mode in {'disabled', 'off'}:
         return JSONResponse({'ok': False, 'job_id': None, 'status': 'failed', 'error': 'benchmark_run_disabled'}, status_code=503)
+    if suite == 'locomo_native_lifecycle' and run_mode not in {'queue', 'queued', 'cron'}:
+        return JSONResponse(
+            {
+                'ok': False,
+                'job_id': None,
+                'status': 'failed',
+                'error': 'locomo_benchmark_requires_cron_queue',
+                'detail': 'LoCoMo lifecycle benchmarks must be queued for the 8GB cron worker; refusing to run in the 2GB web service.',
+                'configured_run_mode': run_mode,
+            },
+            status_code=503,
+        )
     if run_mode in {'queue', 'queued', 'cron', 'external', 'dispatch'} and isinstance(prior_row, dict) and not bool(prior_row.get('done')):
         prior_row['updated_ms'] = _now_ms()
         return {

@@ -4384,8 +4384,9 @@ async function runBenchmark() {
   const subset = document.getElementById('bench-subset')?.value || 'locomo_native_lifecycle';
   const semanticMode = document.getElementById('bench-semantic')?.value || 'required';
   const myelination = document.getElementById('bench-myelination')?.value || 'off';
-  const rootMode = document.getElementById('bench-root-mode')?.value || 'snapshot';
-  const qaSessionMode = document.getElementById('bench-qa-session-mode')?.value || 'isolated';
+  const rootModeRaw = document.getElementById('bench-root-mode')?.value || 'snapshot';
+  const rootMode = subset === 'locomo_native_lifecycle' ? 'clean' : rootModeRaw;
+  const qaSessionMode = 'isolated';
   const embeddingsProvider = document.getElementById('bench-embeddings-provider')?.value || 'hash';
   const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
   const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
@@ -4394,9 +4395,8 @@ async function runBenchmark() {
   const locomoSampleId = String(document.getElementById('locomo-sample-id')?.value || '').trim();
   const locomoMaxTurnsRaw = Number(document.getElementById('locomo-max-turns')?.value || 200);
   const locomoMaxTurns = Number.isFinite(locomoMaxTurnsRaw) ? Math.max(1, Math.floor(locomoMaxTurnsRaw)) : 200;
-  const answerModeRaw = document.getElementById('bench-answer-mode')?.value || 'auto';
-  const answerModeIsAuto = answerModeRaw === 'auto' || !answerModeRaw;
-  const answerMode = answerModeIsAuto ? '' : answerModeRaw;
+  const answerModeRaw = document.getElementById('bench-answer-mode')?.value || 'llm';
+  const answerMode = subset === 'locomo_native_lifecycle' ? 'llm' : ((answerModeRaw === 'auto' || !answerModeRaw) ? '' : answerModeRaw);
   const generatorModel = String(document.getElementById('bench-generator-model')?.value || '').trim();
 
   const prev = btn.textContent;
