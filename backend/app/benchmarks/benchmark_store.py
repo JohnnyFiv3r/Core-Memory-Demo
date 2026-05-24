@@ -408,9 +408,38 @@ def timeout_stale_jobs(max_runtime_seconds: int = 35 * 60, *, error_reason: str 
     return [str(row['job_id']) for row in rows]
 
 
+def timeout_stale_queued_jobs(max_queue_seconds: int = 5 * 60, *, error_reason: str = 'benchmark_queue_unclaimed') -> list[str]:
+    """Fail benchmark jobs that sat in the durable queue without being claimed."""
+    if not enabled():
+        return []
+    ensure_schema()
+    with psycopg.connect(_database_url(), autocommit=True, row_factory=dict_row) as conn:
+        rows = conn.execute(
+            """
+            UPDATE benchmarks.jobs
+            SET status      = 'failed',
+                finished_at = now(),
+                error       = %s,
+                progress    = COALESCE(progress, '{}'::jsonb) || %s::jsonb,
+                updated_at  = now()
+            WHERE status = 'queued'
+              AND COALESCE(request->>'kind', 'benchmark') != 'transcript_ingest'
+              AND created_at < now() - (%s * interval '1 second')
+            RETURNING job_id
+            """,
+            (
+                str(error_reason),
+                Jsonb({'stage': 'failed', 'stage_message': 'Benchmark queue was not claimed by worker', 'updated_ms': _now_ms()}),
+                int(max_queue_seconds),
+            ),
+        ).fetchall()
+    return [str(row['job_id']) for row in rows]
+
+
 def claim_next_job() -> dict[str, Any] | None:
     if not enabled():
         return None
+    timeout_stale_queued_jobs(max_queue_seconds=5 * 60)
     ensure_schema()
     with psycopg.connect(_database_url(), autocommit=True, row_factory=dict_row) as conn:
         row = conn.execute(

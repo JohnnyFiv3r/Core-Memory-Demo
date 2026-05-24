@@ -162,6 +162,11 @@ def _force_finalize_benchmark_job(row: dict[str, Any], *, status: str, message: 
 def _prune_benchmark_jobs() -> None:
     global ACTIVE_BENCHMARK_JOB_ID
 
+    try:
+        benchmark_store.timeout_stale_queued_jobs(max_queue_seconds=5 * 60)
+    except Exception:
+        pass
+
     now = _now_ms()
     ttl_ms = int(BENCHMARK_JOB_TTL_SECONDS * 1000)
     # Backstop for the keepalive runtime watchdog: if the keepalive task itself
@@ -357,7 +362,7 @@ def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str,
 
 def _stored_benchmark_job_payload(stored: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
     status = str((stored or {}).get('status') or '')
-    done = status in {'completed', 'failed'}
+    done = status in {'completed', 'failed', 'cancelled'}
     result = stored.get('result') if isinstance(stored.get('result'), dict) else None
     progress = dict(stored.get('progress') or {}) if isinstance(stored.get('progress'), dict) else {}
     all_events = list(stored.get('events') or []) if isinstance(stored.get('events'), list) else []
@@ -1678,7 +1683,7 @@ def benchmark_job_status(job_id: str, cursor: int = 0):
     row = BENCHMARK_JOBS.get(job_id_s)
     if isinstance(stored, dict):
         stored_status = str(stored.get('status') or '')
-        stored_done = stored_status in {'completed', 'failed'}
+        stored_done = stored_status in {'completed', 'failed', 'cancelled'}
         # Queue/cron mode leaves a short-lived in-memory row in the web
         # process. The cron worker owns the durable job status in Postgres, so
         # prefer it whenever it has advanced beyond the initial web-only
