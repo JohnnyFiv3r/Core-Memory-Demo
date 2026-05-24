@@ -3509,6 +3509,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "corpus_after_qa": dict(lifecycle_report.get("corpus_after_qa") or {}),
                 "corpus_after_suite": dict(lifecycle_report.get("corpus_after_suite") or {}),
                 "corpus_snapshots": dict(lifecycle_report.get("corpus_snapshots") or {}),
+                "semantic_build": dict(lifecycle_report.get("semantic_build") or {}),
                 "environment": {
                     "python_version": platform.python_version(),
                     "semantic_mode": semantic_mode_name,

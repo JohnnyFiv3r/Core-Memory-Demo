@@ -96,6 +96,12 @@ def _default_run_async_jobs() -> RunAsyncJobs:
     return run_async_jobs
 
 
+def _build_semantic_index(root: str | Path) -> dict[str, Any]:
+    from core_memory.retrieval.semantic_index import build_semantic_index
+
+    return dict(build_semantic_index(Path(root)) or {})
+
+
 def _default_recall() -> RecallFunc:
     try:
         from core_memory.retrieval.agent import recall
@@ -669,6 +675,11 @@ def run_lifecycle_conversation(
         process_flush_fn=process_flush_fn,
         run_async_jobs_fn=run_async_jobs_fn,
     )
+    semantic_build: dict[str, Any] = {}
+    try:
+        semantic_build = _build_semantic_index(root)
+    except Exception as exc:
+        semantic_build = {"ok": False, "error": str(exc)}
 
     qa_session_id = conversation.session_id.replace(":replay", ":qa") if conversation.session_id.endswith(":replay") else f"{conversation.session_id}:qa"
     qa_results: list[dict[str, Any]] = []
@@ -735,6 +746,7 @@ def run_lifecycle_conversation(
         "qa_session_id": qa_session_id,
         "replay": replay,
         "pre_qa_flush": pre_qa_flush,
+        "semantic_build": semantic_build,
         "scores": scores,
         "cases": qa_results,
         "corpus_after_qa": corpus_after_qa,
@@ -901,6 +913,10 @@ def run_locomo_lifecycle_suite(
     scores = aggregate_lifecycle_effort_scores(cases)
     corpus_after_suite = corpus_snapshot(root)
     snapshots = suite_corpus_snapshots(results, corpus_after_suite)
+    semantic_builds = [dict(r.get("semantic_build") or {}) for r in results if isinstance(r.get("semantic_build"), dict)]
+    semantic_build = dict(semantic_builds[-1] if semantic_builds else {})
+    if semantic_builds:
+        semantic_build["conversation_builds"] = semantic_builds
     warnings = _dedupe_warnings(
         [w for result in results for w in list(result.get("warnings") or [])]
         + lifecycle_corpus_warnings(corpus_after_suite, phase="after_suite")
@@ -935,4 +951,5 @@ def run_locomo_lifecycle_suite(
         "corpus_after_qa": dict(snapshots.get("corpus_after_qa") or {}),
         "corpus_after_suite": corpus_after_suite,
         "corpus_snapshots": snapshots,
+        "semantic_build": semantic_build,
     }
