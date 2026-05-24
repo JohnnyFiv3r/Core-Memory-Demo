@@ -123,10 +123,17 @@ def _result_prediction(payload: dict[str, Any]) -> str:
 
 
 def _result_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
-    for key in ("results", "retrieved", "rows", "beads"):
-        rows = (payload or {}).get(key)
+    payload = dict(payload or {})
+    for key in ("results", "retrieved", "rows", "beads", "evidence"):
+        rows = payload.get(key)
         if isinstance(rows, list):
             return [dict(row or {}) for row in rows if isinstance(row, dict)]
+    raw = payload.get("raw")
+    if isinstance(raw, dict):
+        for key in ("results", "anchors", "retrieved", "rows", "beads"):
+            rows = raw.get(key)
+            if isinstance(rows, list):
+                return [dict(row or {}) for row in rows if isinstance(row, dict)]
     return []
 
 
