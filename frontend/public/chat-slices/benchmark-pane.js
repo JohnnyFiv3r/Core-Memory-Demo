@@ -93,7 +93,9 @@ function BenchmarkPane(props) {
     failed: 'Failed',
     cancelled: 'Cancelled',
   }
-  const stageForProgress = heartbeatStage || phase
+  const hasReplayProgress = replayTurnTotal > 0
+  const hasQaProgress = qaCases > 0 && (!!activeQaId || qaCompleted > 0 || phase === 'lifecycle_qa' || heartbeatStage === 'lifecycle_qa')
+  const stageForProgress = hasReplayProgress && !hasQaProgress ? 'locomo_lifecycle' : (heartbeatStage || phase)
   const stageLabel = stageLabels[stageForProgress] || stageForProgress || 'Working'
 
   // Elapsed timer formatted as m:ss
@@ -406,9 +408,11 @@ function BenchmarkPane(props) {
         'div',
         { style: { marginTop: '3px', color: 'var(--text-dim)', fontSize: '12px' } },
         [
-          stageMessage || null,
+          hasReplayProgress ? ('Replay ' + String(replayTurnCompleted) + '/' + String(replayTurnTotal) + ' turns') : (stageMessage || null),
           ingestTotal > 0 && stageForProgress === 'ingesting' ? (ingestN + '/' + ingestTotal + ' turns') : null,
-          qaCases > 0 ? ('QA ' + qaCompleted + '/' + qaCases) : null,
+          hasQaProgress ? ('QA ' + qaCompleted + '/' + qaCases) : null,
+          conversationTotal > 0 ? ('conversation=' + String(conversationIndex || 1) + '/' + String(conversationTotal)) : null,
+          activeConversationId ? ('conv=' + activeConversationId) : null,
           activeSampleId ? ('sample=' + activeSampleId) : null,
           elapsedLabel ? (elapsedLabel + ' elapsed') : null,
           runLabel || null,

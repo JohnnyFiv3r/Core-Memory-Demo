@@ -31,6 +31,7 @@ def run_once() -> int:
         else:
             last_heartbeat_write = 0.0
             last_ingest_write = 0.0
+            last_replay_progress_write = 0.0
 
             def heartbeat(stage: str, message: str) -> None:
                 nonlocal last_heartbeat_write
@@ -64,20 +65,40 @@ def run_once() -> int:
                 )
 
             def progress(completed: int, total: int, case: dict[str, Any], result: dict[str, Any]) -> None:
+                nonlocal last_replay_progress_write
+                result_d = dict(result or {})
+                stage = str(result_d.get('phase') or 'retrieving').strip().lower() or 'retrieving'
+                replay_done = int(result_d.get('replay_turn_completed') or 0)
+                replay_total = int(result_d.get('replay_turn_total') or 0)
+                if stage == 'locomo_lifecycle' and replay_total > 0:
+                    now = time.monotonic()
+                    if now - last_replay_progress_write < 2.0 and replay_done < replay_total:
+                        return
+                    last_replay_progress_write = now
+                    message = f'Replayed {replay_done}/{replay_total} turns'
+                else:
+                    message = f'QA {int(completed)}/{int(total)}'
+                event = {
+                    'stage': stage,
+                    'message': message,
+                    'qa_completed': int(completed),
+                    'qa_total': int(total),
+                    'sample_id': str((case or {}).get('sample_id') or ''),
+                    'qa_id': str((case or {}).get('qa_id') or ''),
+                    'case_status': str(result_d.get('status') or ''),
+                    'conversation_id': str(result_d.get('conversation_id') or ''),
+                    'conversation_index': int(result_d.get('conversation_index') or 0),
+                    'conversations': int(result_d.get('conversations') or 0),
+                    'replay_turn_completed': replay_done,
+                    'replay_turn_total': replay_total,
+                    'turn_id': str(result_d.get('turn_id') or ''),
+                }
                 benchmark_store.update_job_progress(
                     job_id,
                     status='running',
-                    stage='retrieving',
-                    message=f'QA {int(completed)}/{int(total)}',
-                    event={
-                        'stage': 'retrieving',
-                        'message': f'QA {int(completed)}/{int(total)}',
-                        'qa_completed': int(completed),
-                        'qa_total': int(total),
-                        'sample_id': str((case or {}).get('sample_id') or ''),
-                        'qa_id': str((case or {}).get('qa_id') or ''),
-                        'case_status': str((result or {}).get('status') or ''),
-                    },
+                    stage=stage,
+                    message=message,
+                    event=event,
                 )
 
             benchmark_store.update_job_progress(job_id, status='running', stage='starting', message='Benchmark started')

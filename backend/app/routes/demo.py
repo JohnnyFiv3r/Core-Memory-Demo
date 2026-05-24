@@ -764,6 +764,7 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         _hb['message'] = str(message or '')
 
     def ingest_progress(n: int, total: int) -> None:
+        _hb['stage'] = 'ingesting'
         _hb['ingest_n'] = int(n)
         _hb['ingest_total'] = int(total)
         _hb['message'] = f'Ingested {n}/{total} turns'
@@ -806,9 +807,14 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         replay_done = int((result or {}).get('replay_turn_completed') or 0)
         replay_total = int((result or {}).get('replay_turn_total') or 0)
         if stage == 'locomo_lifecycle' and replay_total > 0:
-            message = f'Replaying turns {replay_done}/{replay_total} · QA {int(completed)}/{int(total)}'
+            message = f'Replayed {replay_done}/{replay_total} turns'
         else:
             message = f'QA {int(completed)}/{int(total)}'
+        # Keepalive copies _hb onto the row every two seconds. Keep it aligned
+        # with lifecycle progress so it does not overwrite real phases like
+        # locomo_lifecycle/lifecycle_qa with stale "starting".
+        _hb['stage'] = stage
+        _hb['message'] = message
         _benchmark_event(
             current,
             stage,
@@ -821,8 +827,8 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             conversation_id=str((result or {}).get('conversation_id') or ''),
             conversation_index=int((result or {}).get('conversation_index') or 0),
             conversations=int((result or {}).get('conversations') or 0),
-            replay_turn_completed=int((result or {}).get('replay_turn_completed') or 0),
-            replay_turn_total=int((result or {}).get('replay_turn_total') or 0),
+            replay_turn_completed=replay_done,
+            replay_turn_total=replay_total,
             turn_id=str((result or {}).get('turn_id') or ''),
         )
 

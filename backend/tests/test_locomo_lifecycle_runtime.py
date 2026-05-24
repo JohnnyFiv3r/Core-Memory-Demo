@@ -7,6 +7,8 @@ from unittest.mock import patch
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parents[4] / "Core-Memory"))
 
+from app.benchmarks.contracts import BenchmarkConversation, BenchmarkQA, BenchmarkTurn  # noqa: E402
+from app.benchmarks.lifecycle_runner import _evidence_turn_refs, _filter_conversation_qa  # noqa: E402
 from app.core import runtime as runtime_mod  # noqa: E402
 
 
@@ -126,6 +128,39 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
         self.assertEqual(selected_samples, kwargs["samples"])
         self.assertEqual(selected_cases, kwargs["qa_cases"])
         self.assertEqual("isolated", kwargs["qa_session_mode"])
+
+    def test_bounded_replay_parses_whitespace_delimited_evidence_refs(self):
+        turns = [
+            BenchmarkTurn(
+                turn_id=f"locomo:conv-1:D1:{idx}:{idx}",
+                speaker="A",
+                role="other",
+                content=f"turn {idx}",
+                metadata={"locomo_dia_id": f"D1:{idx}"},
+            )
+            for idx in range(1, 7)
+        ]
+        conv = BenchmarkConversation(
+            benchmark_name="locomo",
+            conversation_id="locomo:conv-1",
+            session_id="bench:locomo:conv-1:replay",
+            turns=turns,
+            qa_cases=[
+                BenchmarkQA(
+                    qa_id="locomo:conv-1:q0001",
+                    question="q",
+                    gold_evidence=["D1:2 D1:4 D1:6"],
+                    metadata={"locomo_sample_id": "conv-1"},
+                )
+            ],
+        )
+
+        bounded = _filter_conversation_qa(conv, {"locomo:conv-1:q0001"})
+
+        self.assertEqual(["D1:2", "D1:4", "D1:6"], _evidence_turn_refs("D1:2 D1:4; D1:6"))
+        self.assertEqual(6, len(bounded.turns))
+        self.assertEqual(6, bounded.metadata["replay_turns_required"])
+        self.assertFalse(bounded.metadata["missing_evidence_refs"])
 
 
 if __name__ == "__main__":
