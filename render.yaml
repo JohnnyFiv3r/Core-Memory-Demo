@@ -13,6 +13,8 @@ services:
     envVars:
       - key: APP_ENV
         value: production
+      - key: PYTHON_VERSION
+        value: "3.11.9"
       - key: ALLOWED_ORIGIN
         sync: false
       - key: CORE_MEMORY_ROOT
@@ -59,6 +61,8 @@ services:
     envVars:
       - key: APP_ENV
         value: production
+      - key: PYTHON_VERSION
+        value: "3.11.9"
       - key: CORE_MEMORY_ROOT
         value: /var/data/core-memory
       - key: CORE_MEMORY_DEMO_BENCHMARK_ROOT
