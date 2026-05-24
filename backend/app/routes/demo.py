@@ -357,7 +357,7 @@ def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str,
 
 def _stored_benchmark_job_payload(stored: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
     status = str((stored or {}).get('status') or '')
-    done = status in {'completed', 'failed'}
+    done = status in {'completed', 'failed', 'cancelled'}
     result = stored.get('result') if isinstance(stored.get('result'), dict) else None
     progress = dict(stored.get('progress') or {}) if isinstance(stored.get('progress'), dict) else {}
     all_events = list(stored.get('events') or []) if isinstance(stored.get('events'), list) else []
@@ -1678,7 +1678,7 @@ def benchmark_job_status(job_id: str, cursor: int = 0):
     row = BENCHMARK_JOBS.get(job_id_s)
     if isinstance(stored, dict):
         stored_status = str(stored.get('status') or '')
-        stored_done = stored_status in {'completed', 'failed'}
+        stored_done = stored_status in {'completed', 'failed', 'cancelled'}
         # Queue/cron mode leaves a short-lived in-memory row in the web
         # process. The cron worker owns the durable job status in Postgres, so
         # prefer it whenever it has advanced beyond the initial web-only
@@ -1739,15 +1739,28 @@ async def benchmark_force_clear():
 async def benchmark_job_cancel(job_id: str):
     job_id_s = str(job_id or '').strip()
     row = BENCHMARK_JOBS.get(job_id_s)
-    if not isinstance(row, dict):
-        return JSONResponse({'ok': False, 'error': 'benchmark_job_not_found'}, status_code=404)
-    if bool(row.get('done')):
-        return {'ok': True, 'job_id': job_id_s, 'status': str(row.get('status') or ''), 'already_done': True}
-    # Authoritative cancel: finalize the job and free the slot immediately
-    # rather than waiting for the worker to observe cancel_event. A worker hung
-    # inside an un-timed external call never reaches a checkpoint.
-    _force_finalize_benchmark_job(row, status='cancelled', message='Benchmark cancelled')
-    return {'ok': True, 'job_id': job_id_s, 'status': 'cancelled'}
+    if isinstance(row, dict):
+        if bool(row.get('done')):
+            return {'ok': True, 'job_id': job_id_s, 'status': str(row.get('status') or ''), 'already_done': True}
+        # Authoritative cancel: finalize the job and free the slot immediately
+        # rather than waiting for the worker to observe cancel_event. A worker hung
+        # inside an un-timed external call never reaches a checkpoint.
+        _force_finalize_benchmark_job(row, status='cancelled', message='Benchmark cancelled')
+        try:
+            benchmark_store.cancel_job(job_id_s, message='Benchmark cancelled')
+        except Exception:
+            pass
+        return {'ok': True, 'job_id': job_id_s, 'status': 'cancelled'}
+
+    stored = benchmark_store.read_job(job_id_s)
+    if isinstance(stored, dict):
+        status = str(stored.get('status') or '')
+        if status in {'completed', 'failed', 'cancelled'}:
+            return {'ok': True, 'job_id': job_id_s, 'status': status, 'already_done': True}
+        if benchmark_store.cancel_job(job_id_s, message='Benchmark cancelled'):
+            return {'ok': True, 'job_id': job_id_s, 'status': 'cancelled'}
+
+    return JSONResponse({'ok': False, 'error': 'benchmark_job_not_found'}, status_code=404)
 
 
 @router.get('/demo/benchmark/last')
