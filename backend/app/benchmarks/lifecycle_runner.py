@@ -188,6 +188,21 @@ def _normalize_retrieved_row(row: dict[str, Any], *, rank: int, bead_lookup: dic
             if content:
                 transcript_parts.append(content)
     turn_transcript = "\n".join(transcript_parts).strip()
+    turn_dates = []
+    for tid in source_turn_ids:
+        hydrated = dict((turn_lookup or {}).get(tid) or {})
+        turn = dict(hydrated.get("turn") or hydrated)
+        metadata_turn = dict(turn.get("metadata") or {})
+        date_value = str(
+            metadata_turn.get("locomo_session_date_time")
+            or metadata_turn.get("session_date_time")
+            or turn.get("session_date_time")
+            or turn.get("ts")
+            or ""
+        ).strip()
+        if date_value:
+            turn_dates.append(date_value)
+    session_date_time = next((x for x in turn_dates if x), "")
     bead_text = str(
         bead.get("title")
         or "\n".join(str(x).strip() for x in (bead.get("summary") or []) if str(x).strip())
@@ -218,7 +233,7 @@ def _normalize_retrieved_row(row: dict[str, Any], *, rank: int, bead_lookup: dic
         "turn_transcript": turn_transcript,
         "hydrated_turns": [dict((turn_lookup or {}).get(tid) or {}) for tid in source_turn_ids if (turn_lookup or {}).get(tid)],
         "speaker": str(metadata.get("speaker") or (row or {}).get("speaker") or "").strip(),
-        "session_date_time": str(metadata.get("session_date_time") or (row or {}).get("session_date_time") or "").strip(),
+        "session_date_time": str(metadata.get("session_date_time") or (row or {}).get("session_date_time") or session_date_time or "").strip(),
         "source_surface": str((row or {}).get("source_surface") or metadata.get("source_surface") or bead.get("source_surface") or "").strip(),
     }
 

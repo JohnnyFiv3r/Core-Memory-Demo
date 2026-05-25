@@ -306,6 +306,7 @@ class TestLifecycleRunner(unittest.TestCase):
                     {
                         "turn": {
                             "turn_id": "turn-1",
+                            "metadata": {"locomo_session_date_time": "4:04 pm on 8 May, 2023"},
                             "turns": [{"speaker": "Caroline", "role": "other", "content": "I went to a LGBTQ support group yesterday."}],
                         }
                     }
@@ -328,6 +329,7 @@ class TestLifecycleRunner(unittest.TestCase):
         retrieved_context = answerer.call_args.kwargs["retrieved_context"]
         self.assertEqual("Caroline went to support group", retrieved_context[0]["bead"]["title"])
         self.assertIn("Caroline: I went to a LGBTQ support group yesterday.", retrieved_context[0]["turn_transcript"])
+        self.assertEqual("4:04 pm on 8 May, 2023", retrieved_context[0]["session_date_time"])
         self.assertEqual("Caroline: I went to a LGBTQ support group yesterday.", retrieved_context[0]["text"])
         self.assertEqual(1.0, out["efforts"]["high"]["answer_f1"])
 

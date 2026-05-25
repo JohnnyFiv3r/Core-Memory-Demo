@@ -161,6 +161,7 @@ async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_i
     context_block = _format_retrieved_context(retrieved_context)
     context_prompt = (
         "Answer the question based on the retrieved conversation context below. "
+        "Use each evidence row's session_date_time to resolve relative dates like yesterday, last week, today, or next month into the absolute date/month/year when possible. "
         "If the retrieved context does not contain enough information to answer, "
         "respond exactly with 'No information available'.\n\n"
         f"Question: {question}\n\n"
