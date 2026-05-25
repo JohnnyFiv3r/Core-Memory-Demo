@@ -160,13 +160,25 @@ def _normalize_retrieved_row(row: dict[str, Any], *, rank: int) -> dict[str, Any
         if value:
             bead_id = value
             break
+    snippet = str(
+        (row or {}).get("snippet")
+        or (row or {}).get("text")
+        or metadata.get("snippet")
+        or metadata.get("text")
+        or metadata.get("title")
+        or (row or {}).get("title")
+        or ""
+    ).strip()
     return {
         "rank": int((row or {}).get("rank") or rank),
         "bead_id": bead_id,
         "dia_ids": sorted(set(dia_values)),
         "score": float((row or {}).get("score") or 0.0),
-        "snippet": str((row or {}).get("snippet") or (row or {}).get("text") or "").strip(),
-        "source_surface": str((row or {}).get("source_surface") or "").strip(),
+        "snippet": snippet,
+        "text": snippet,
+        "speaker": str(metadata.get("speaker") or (row or {}).get("speaker") or "").strip(),
+        "session_date_time": str(metadata.get("session_date_time") or (row or {}).get("session_date_time") or "").strip(),
+        "source_surface": str((row or {}).get("source_surface") or metadata.get("source_surface") or "").strip(),
     }
 
 
