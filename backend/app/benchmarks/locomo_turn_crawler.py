@@ -80,6 +80,7 @@ def locomo_crawler_callable(payload: dict[str, Any]) -> dict[str, Any]:
 
     turn_id = str(req.get('turn_id') or '').strip()
     dia_id = str(md.get('locomo_dia_id') or '').strip()
+    source_turn_ids = [x for x in [turn_id, dia_id] if x]
     speaker = str(md.get('locomo_speaker') or '').strip()
     session_date_time = str(md.get('locomo_session_date_time') or md.get('session_date_time') or '').strip()
     blip_caption = str(md.get('blip_caption') or '').strip()
@@ -157,12 +158,14 @@ def locomo_crawler_callable(payload: dict[str, Any]) -> dict[str, Any]:
             'title': title or 'LoCoMo replay turn',
             'summary': [(source_text or 'LoCoMo replay turn')[:240]],
             'detail': bead_detail,
-            'source_turn_ids': [turn_id] if turn_id else ([dia_id] if dia_id else []),
+            'source_turn_ids': source_turn_ids,
             'entities': sorted(x for x in current_entities if x)[:12],
+            'topics': [x for x in ['locomo', speaker] if x][:8],
+            'supporting_facts': [source_text[:240]] if source_text else [],
             'retrieval_eligible': True,
             'retrieval_title': title or 'LoCoMo replay turn',
             'retrieval_facts': [source_text[:240]] if source_text else [],
-            'tags': ['crawler_reviewed', 'turn_finalized', 'locomo_replay'],
+            'tags': ['crawler_reviewed', 'turn_finalized', 'locomo_replay', 'agent_authored_semantic'],
         }],
         'associations': associations,
     }

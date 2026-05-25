@@ -545,6 +545,7 @@ def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[
         "adapter_status": "benchmark",
         "benchmark_name": "locomo",
         "replay_mode": "locomo_transcript_row",
+        "_crawler_updates_source": "locomo_lifecycle",
         "locomo_sample_id": sample_id,
         "locomo_session_index": session_index,
         "locomo_session_date_time": str(row.get("session_date_time") or ""),
@@ -563,7 +564,12 @@ def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[
                     "detail": detail,
                     "source_turn_ids": [turn_id, dia_id],
                     "entities": [x for x in [speaker, f"locomo:{sample_id}"] if x],
-                    "tags": ["crawler_reviewed", "turn_finalized", "locomo_replay"],
+                    "topics": [x for x in ["locomo", speaker] if x],
+                    "supporting_facts": [display[:240] or "LoCoMo replay turn"],
+                    "retrieval_eligible": True,
+                    "retrieval_title": display[:160] or "LoCoMo replay turn",
+                    "retrieval_facts": [display[:240] or "LoCoMo replay turn"],
+                    "tags": ["crawler_reviewed", "turn_finalized", "locomo_replay", "agent_authored_semantic"],
                     "metadata": {
                         "locomo_sample_id": sample_id,
                         "locomo_session_index": session_index,
@@ -1521,7 +1527,12 @@ def _seed_crawler_updates(*, user_query: str, turn_id: str) -> dict[str, Any]:
                 "because": [uq[:240]] if uq else [],
                 "source_turn_ids": [str(turn_id or "")],
                 "entities": entities,
-                "tags": ["demo_seed", "crawler_reviewed", "turn_finalized"],
+                "topics": ["demo_chat"],
+                "supporting_facts": [uq[:240]] if uq else [],
+                "retrieval_eligible": bool(uq),
+                "retrieval_title": title or "Turn memory",
+                "retrieval_facts": [uq[:240]] if uq else [],
+                "tags": ["demo_seed", "crawler_reviewed", "turn_finalized", "agent_authored_semantic"],
             }
         ]
     }
@@ -2281,6 +2292,7 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
     turn_metadata = {
         "source": "core_memory_demo_backend",
         "crawler_updates": seed_updates,
+        "_crawler_updates_source": "adapter",
     }
     chat_semantic_mode = _chat_semantic_mode_name()
     _emit_chat_progress(progress, "prepare", "Preparing memory turn", turn_id=turn_id, model_id=model_id, semantic_mode=chat_semantic_mode)
@@ -2329,6 +2341,7 @@ async def run_chat(message: str, *, progress: Callable[..., Any] | None = None) 
                 "fallback_error": fallback_error,
                 "source": "core_memory_demo_backend",
                 "crawler_updates": seed_updates,
+                "_crawler_updates_source": "adapter",
             },
         )
 

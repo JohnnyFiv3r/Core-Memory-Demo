@@ -11,6 +11,12 @@ from core_memory.integrations.pydanticai.memory_tools import (
 )
 from core_memory.integrations.pydanticai.run import run_with_memory
 
+try:
+    from core_memory.integrations.bead_authoring import agent_authored_bead_spec
+except Exception:  # pragma: no cover - older core_memory during local dev
+    def agent_authored_bead_spec() -> str:
+        return ""
+
 
 def create_agent_for_root(model_id: str, *, root: str, session_id: str):
     from pydantic_ai import Agent
@@ -25,7 +31,8 @@ def create_agent_for_root(model_id: str, *, root: str, session_id: str):
             "Tool policy: call execute_memory_request first for recall questions; "
             "use search_memory as a secondary check; use trace_memory for explicit "
             "causal trace questions. Do not claim memory is missing unless both "
-            "execute and search return no anchors/results."
+            "execute and search return no anchors/results.\n\n"
+            + agent_authored_bead_spec()
         ),
         tools=[
             memory_execute_tool(root=root),
