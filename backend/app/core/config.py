@@ -47,7 +47,7 @@ class Settings(BaseSettings):
     benchmark_dispatch_url: str = ''
     benchmark_dispatch_token: str = ''
     benchmark_dispatch_timeout_seconds: int = 15
-    benchmark_max_runtime_seconds: int = 90 * 60
+    benchmark_max_runtime_seconds: int = 120 * 60
     transcript_ingest_run_mode: str = 'inline'
 
     locomo_data_file: str = ''

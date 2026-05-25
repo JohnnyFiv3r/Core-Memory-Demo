@@ -62,7 +62,7 @@ CHAT_JOBS: dict[str, dict[str, Any]] = {}
 BENCHMARK_JOB_TTL_SECONDS = 30 * 60
 BENCHMARK_JOB_POLL_MS = 1200
 BENCHMARK_JOB_MAX_EVENTS = 128
-BENCHMARK_MAX_RUNTIME_SECONDS = max(60, int(settings.benchmark_max_runtime_seconds or (90 * 60)))
+BENCHMARK_MAX_RUNTIME_SECONDS = max(60, int(settings.benchmark_max_runtime_seconds or (120 * 60)))
 BENCHMARK_JOBS: dict[str, dict[str, Any]] = {}
 ACTIVE_BENCHMARK_JOB_ID: str | None = None
 # Dedicated, bounded executor for benchmark worker threads. run_benchmark()

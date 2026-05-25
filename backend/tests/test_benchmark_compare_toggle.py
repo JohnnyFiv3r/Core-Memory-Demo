@@ -97,6 +97,12 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('stored-active', out['job_id'])
         self.assertFalse(enqueue.called)
 
+    def test_benchmark_runtime_default_is_120_minutes(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        self.assertEqual(120 * 60, demo_routes.settings.benchmark_max_runtime_seconds)
+        self.assertEqual(120 * 60, demo_routes.BENCHMARK_MAX_RUNTIME_SECONDS)
+
     async def test_locomo_lifecycle_refuses_non_queue_web_execution(self):
         if demo_routes is None:
             self.skipTest('pydantic_settings unavailable')
