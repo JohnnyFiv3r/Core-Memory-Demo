@@ -124,9 +124,12 @@ def _reconcile_used_dia_ids(*, used_dia_ids: list[str], retrieved_context: list[
     return []
 
 
-def _format_retrieved_context(retrieved_context: list[dict[str, Any]], *, limit: int = 5) -> str:
+def _format_retrieved_context(retrieved_context: list[dict[str, Any]], *, limit: int | None = None) -> str:
     lines: list[str] = []
-    for idx, row in enumerate((retrieved_context or [])[: max(1, int(limit))], start=1):
+    rows = list(retrieved_context or [])
+    if limit is not None:
+        rows = rows[: max(1, int(limit))]
+    for idx, row in enumerate(rows, start=1):
         item = dict(row or {})
         dia_ids = ", ".join(str(x).strip() for x in (item.get("dia_ids") or []) if str(x).strip()) or "unknown"
         speaker = str(item.get("speaker") or "").strip()

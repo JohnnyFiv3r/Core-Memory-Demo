@@ -532,3 +532,22 @@ class TestLifecycleRunner(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+class TestLocomoAnswerContextFormatting(unittest.TestCase):
+    def test_format_retrieved_context_includes_all_retrieved_rows_by_default(self):
+        from app.benchmarks.locomo_answer import _format_retrieved_context
+
+        rows = [
+            {
+                "dia_ids": [f"D1:{idx}"],
+                "text": f"evidence row {idx}",
+                "score": 1.0 / idx,
+            }
+            for idx in range(1, 9)
+        ]
+
+        out = _format_retrieved_context(rows)
+
+        self.assertIn("dia_ids=D1:1", out)
+        self.assertIn("dia_ids=D1:8", out)
+        self.assertIn("evidence row 8", out)
