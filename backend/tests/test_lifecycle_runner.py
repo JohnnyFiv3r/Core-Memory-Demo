@@ -284,6 +284,53 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual(1.0, out["efforts"]["low"]["evidence_recall"]["recall@5"])
         self.assertEqual(["D1:3"], out["efforts"]["low"]["retrieved"][0]["dia_ids"])
 
+    def test_qa_efforts_hydrates_full_bead_and_turn_transcript_for_answer_generation(self):
+        conv = _conversation()
+        qa = BenchmarkQA(
+            qa_id="qa-1",
+            question="when did Caroline go?",
+            expected_answer="7 May 2023",
+            gold_evidence=["D1:3"],
+            category="2",
+            bucket_labels=(),
+            metadata={"category": 2},
+        )
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            return {"raw": {"results": [{"bead_id": "bead-1", "score": 0.9, "metadata": {"dia_ids": ["D1:3"]}}]}}
+
+        def fake_hydrate(**kwargs):
+            return {
+                "beads": [{"id": "bead-1", "source_turn_ids": ["turn-1"]}],
+                "hydrated": [
+                    {
+                        "turn": {
+                            "turn_id": "turn-1",
+                            "turns": [{"speaker": "Caroline", "role": "other", "content": "I went to a LGBTQ support group yesterday."}],
+                        }
+                    }
+                ],
+            }
+
+        with tempfile.TemporaryDirectory() as td:
+            index_dir = Path(td) / ".beads"
+            index_dir.mkdir(parents=True)
+            (index_dir / "index.json").write_text(
+                '{"beads":{"bead-1":{"id":"bead-1","title":"Caroline went to support group","source_turn_ids":["turn-1"],"type":"context"}}}',
+                encoding="utf-8",
+            )
+            with patch("app.benchmarks.lifecycle_runner.hydrate_bead_sources", side_effect=fake_hydrate), patch(
+                "app.benchmarks.lifecycle_runner.generate_locomo_answer",
+                return_value={"answer": "7 May 2023", "used_dia_ids": ["D1:3"], "confidence": "high", "unsupported": False},
+            ) as answerer:
+                out = run_qa_efforts(root=td, conversation=conv, qa=qa, recall_fn=fake_recall, answer_mode="llm", generator_model="test:model")
+
+        retrieved_context = answerer.call_args.kwargs["retrieved_context"]
+        self.assertEqual("Caroline went to support group", retrieved_context[0]["bead"]["title"])
+        self.assertIn("Caroline: I went to a LGBTQ support group yesterday.", retrieved_context[0]["turn_transcript"])
+        self.assertEqual("Caroline: I went to a LGBTQ support group yesterday.", retrieved_context[0]["text"])
+        self.assertEqual(1.0, out["efforts"]["high"]["answer_f1"])
+
     def test_qa_efforts_preserves_metadata_snippet_for_answer_generation(self):
         conv = _conversation()
         qa = BenchmarkQA(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import shutil
 import time
 from pathlib import Path
@@ -16,6 +17,7 @@ from app.benchmarks.contracts import (
 from app.benchmarks.locomo_answer import generate_locomo_answer
 from app.benchmarks.locomo_loader import locomo_samples_to_benchmark_conversations
 from app.benchmarks.locomo_scoring import compute_evidence_recall, score_answer
+from core_memory.integrations.api import hydrate_bead_sources
 from app.benchmarks.locomo_turn_crawler import locomo_crawler_callable
 
 RETRIEVAL_EFFORT_ORDER = ("low", "medium", "high")
@@ -144,7 +146,7 @@ def _result_rows(payload: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def _normalize_retrieved_row(row: dict[str, Any], *, rank: int) -> dict[str, Any]:
+def _normalize_retrieved_row(row: dict[str, Any], *, rank: int, bead_lookup: dict[str, Any] | None = None, turn_lookup: dict[str, Any] | None = None) -> dict[str, Any]:
     metadata = dict((row or {}).get("metadata") or {})
     dia_values: list[str] = []
     for source in (row, metadata):
@@ -160,8 +162,42 @@ def _normalize_retrieved_row(row: dict[str, Any], *, rank: int) -> dict[str, Any
         if value:
             bead_id = value
             break
+    bead = dict((bead_lookup or {}).get(bead_id) or {}) if bead_id else {}
+    source_turn_ids = []
+    for value in (row.get("source_turn_ids"), metadata.get("source_turn_ids"), bead.get("source_turn_ids")):
+        if isinstance(value, list):
+            source_turn_ids.extend(str(x).strip() for x in value if str(x).strip())
+        elif str(value or "").strip():
+            source_turn_ids.append(str(value).strip())
+    source_turn_ids = list(dict.fromkeys(source_turn_ids))
+    transcript_parts: list[str] = []
+    for tid in source_turn_ids:
+        hydrated = dict((turn_lookup or {}).get(tid) or {})
+        turn = dict(hydrated.get("turn") or hydrated)
+        turns = turn.get("turns") if isinstance(turn.get("turns"), list) else []
+        if turns:
+            for t in turns:
+                if not isinstance(t, dict):
+                    continue
+                speaker = str(t.get("speaker") or t.get("role") or "").strip()
+                content = str(t.get("content") or "").strip()
+                if content:
+                    transcript_parts.append((f"{speaker}: " if speaker else "") + content)
+        else:
+            content = str(turn.get("content") or turn.get("assistant_final") or turn.get("user_query") or "").strip()
+            if content:
+                transcript_parts.append(content)
+    turn_transcript = "\n".join(transcript_parts).strip()
+    bead_text = str(
+        bead.get("title")
+        or "\n".join(str(x).strip() for x in (bead.get("summary") or []) if str(x).strip())
+        or bead.get("detail")
+        or ""
+    ).strip()
     snippet = str(
-        (row or {}).get("snippet")
+        turn_transcript
+        or bead_text
+        or (row or {}).get("snippet")
         or (row or {}).get("text")
         or metadata.get("snippet")
         or metadata.get("text")
@@ -176,14 +212,57 @@ def _normalize_retrieved_row(row: dict[str, Any], *, rank: int) -> dict[str, Any
         "score": float((row or {}).get("score") or 0.0),
         "snippet": snippet,
         "text": snippet,
+        "bead": bead,
+        "bead_text": bead_text,
+        "source_turn_ids": source_turn_ids,
+        "turn_transcript": turn_transcript,
+        "hydrated_turns": [dict((turn_lookup or {}).get(tid) or {}) for tid in source_turn_ids if (turn_lookup or {}).get(tid)],
         "speaker": str(metadata.get("speaker") or (row or {}).get("speaker") or "").strip(),
         "session_date_time": str(metadata.get("session_date_time") or (row or {}).get("session_date_time") or "").strip(),
-        "source_surface": str((row or {}).get("source_surface") or metadata.get("source_surface") or "").strip(),
+        "source_surface": str((row or {}).get("source_surface") or metadata.get("source_surface") or bead.get("source_surface") or "").strip(),
     }
 
 
-def _score_effort_payload(*, qa: BenchmarkQA, payload: dict[str, Any], latency_ms: float) -> dict[str, Any]:
-    retrieved = [_normalize_retrieved_row(row, rank=idx) for idx, row in enumerate(_result_rows(payload), start=1)]
+def _hydrate_retrieval_context(*, root: str | Path, rows: list[dict[str, Any]]) -> tuple[dict[str, Any], dict[str, Any], dict[str, Any]]:
+    bead_ids = []
+    turn_ids = []
+    for row in rows:
+        metadata = dict((row or {}).get("metadata") or {})
+        bid = str((row or {}).get("bead_id") or (row or {}).get("id") or "").strip()
+        if bid:
+            bead_ids.append(bid)
+        for source in (row, metadata):
+            vals = source.get("source_turn_ids") if isinstance(source, dict) else None
+            if isinstance(vals, list):
+                turn_ids.extend(str(x).strip() for x in vals if str(x).strip())
+    try:
+        hydrated = hydrate_bead_sources(root=str(root), bead_ids=list(dict.fromkeys(bead_ids)), turn_ids=list(dict.fromkeys(turn_ids)), include_tools=False, before=0, after=0)
+    except Exception as exc:
+        return {}, {}, {"ok": False, "error": str(exc), "bead_ids": list(dict.fromkeys(bead_ids)), "turn_ids": list(dict.fromkeys(turn_ids))}
+    bead_lookup = {str(b.get("id") or ""): dict(b) for b in list((hydrated or {}).get("beads") or []) if isinstance(b, dict) and str(b.get("id") or "")}
+    try:
+        idx = json.loads((Path(root) / ".beads" / "index.json").read_text(encoding="utf-8"))
+    except Exception:
+        idx = {}
+    for bid, bead in dict((idx or {}).get("beads") or {}).items():
+        if str(bid) in set(bead_ids) and isinstance(bead, dict):
+            merged = {**dict(bead_lookup.get(str(bid)) or {}), **dict(bead), "id": str(bead.get("id") or bid)}
+            bead_lookup[str(bid)] = merged
+    turn_lookup: dict[str, Any] = {}
+    for h in list((hydrated or {}).get("hydrated") or []):
+        if not isinstance(h, dict):
+            continue
+        turn = dict(h.get("turn") or {})
+        tid = str(turn.get("turn_id") or turn.get("id") or "").strip()
+        if tid:
+            turn_lookup[tid] = h
+    return bead_lookup, turn_lookup, dict(hydrated or {})
+
+
+def _score_effort_payload(*, root: str | Path, qa: BenchmarkQA, payload: dict[str, Any], latency_ms: float) -> dict[str, Any]:
+    result_rows = _result_rows(payload)
+    bead_lookup, turn_lookup, hydration = _hydrate_retrieval_context(root=root, rows=result_rows)
+    retrieved = [_normalize_retrieved_row(row, rank=idx, bead_lookup=bead_lookup, turn_lookup=turn_lookup) for idx, row in enumerate(result_rows, start=1)]
     prediction = _result_prediction(payload)
     category_raw = (qa.metadata or {}).get("category") or qa.category or 0
     try:
@@ -198,6 +277,7 @@ def _score_effort_payload(*, qa: BenchmarkQA, payload: dict[str, Any], latency_m
         "retrieved": retrieved,
         "retrieved_count": len(retrieved),
         "evidence_recall": evidence,
+        "retrieval_hydration": hydration,
         "latency_ms": float(latency_ms),
     }
 
@@ -544,7 +624,7 @@ def run_qa_efforts(
         raw = recall_fn(dict(req), effort=effort, root=str(root), explain=True, include_raw=True)
         payload = _as_dict(raw)
         latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
-        score_meta = _score_effort_payload(qa=qa, payload=payload, latency_ms=latency_ms)
+        score_meta = _score_effort_payload(root=root, qa=qa, payload=payload, latency_ms=latency_ms)
         warnings = list(payload.get("warnings") or [])
         answer_payload: dict[str, Any] = {}
         # Lifecycle recall returns evidence but does not synthesize an answer.

@@ -132,9 +132,19 @@ def _format_retrieved_context(retrieved_context: list[dict[str, Any]], *, limit:
         speaker = str(item.get("speaker") or "").strip()
         session_date_time = str(item.get("session_date_time") or "").strip()
         text = str(item.get("text") or item.get("snippet") or "").strip()
+        bead_text = str(item.get("bead_text") or "").strip()
+        turn_transcript = str(item.get("turn_transcript") or "").strip()
         score = float(item.get("locomo_score") or item.get("score") or 0.0)
+        body_parts: list[str] = []
+        if bead_text:
+            body_parts.append(f"Bead: {bead_text}")
+        if turn_transcript and turn_transcript != bead_text:
+            body_parts.append(f"Turn transcript: {turn_transcript}")
+        if text and text not in {bead_text, turn_transcript}:
+            body_parts.append(f"Snippet: {text}")
+        body = "\n".join(body_parts) or text
         lines.append(
-            f"[{idx}] dia_ids={dia_ids} speaker={speaker} session_date_time={session_date_time} score={score:.3f}\n{text}"
+            f"[{idx}] dia_ids={dia_ids} speaker={speaker} session_date_time={session_date_time} score={score:.3f}\n{body}"
         )
     return "\n\n".join(lines).strip()
 
