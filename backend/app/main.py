@@ -11,7 +11,7 @@ from app.core.semantic_env import configure_shared_semantic_backend_env
 
 configure_shared_semantic_backend_env()
 
-from core_memory.runtime.jobs import run_async_jobs
+from core_memory.runtime.queue.jobs import run_async_jobs
 from core_memory.integrations.mcp.constants import MCP_HTTP_PATH
 from core_memory.integrations.mcp.protocol_server import build_mcp_app
 from app.core.state_fallback import safe_state_fallback

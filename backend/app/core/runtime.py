@@ -48,8 +48,8 @@ from core_memory.retrieval.normalize import classify_intent
 from core_memory.persistence.store import MemoryStore
 from core_memory.persistence.store_claim_ops import write_claim_updates_to_bead, write_claims_to_bead
 from core_memory.runtime.engine import process_flush, process_turn_finalized
-from core_memory.runtime.jobs import async_jobs_status, run_async_jobs
-from core_memory.runtime.association_pass import run_association_pass
+from core_memory.runtime.queue.jobs import async_jobs_status, run_async_jobs
+from core_memory.runtime.passes.association_pass import run_association_pass
 from core_memory.schema.turn import Turn
 from core_memory.association.crawler_contract import merge_crawler_updates
 from core_memory.write_pipeline.continuity_injection import load_continuity_injection

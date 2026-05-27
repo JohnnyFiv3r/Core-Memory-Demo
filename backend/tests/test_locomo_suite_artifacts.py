@@ -19,9 +19,9 @@ class TestLocomoSuiteArtifacts(unittest.TestCase):
             try:
                 comparison = build_locomo_comparison(
                     left_label='bead_direct',
-                    left_report={'cases': [{'qa_id': 'q1', 'category': 2, 'sample_id': 'conv-1', 'answer_f1': 0.0, 'evidence_recall': {'recall@5': 0.0, 'hit_any': False, 'mrr': 0.0}}]},
+                    left_report={'cases': [{'qa_id': 'q1', 'category': 2, 'sample_id': 'conv-1', 'answer_f1': 0.0, 'evidence_recall': {'recall@5': 0.0, 'hit_any': False, 'mrr': 0.0, 'gold_evidence_count': 1}}]},
                     right_label='canonical_replay',
-                    right_report={'cases': [{'qa_id': 'q1', 'category': 2, 'sample_id': 'conv-1', 'answer_f1': 1.0, 'evidence_recall': {'recall@5': 1.0, 'hit_any': True, 'mrr': 1.0}}]},
+                    right_report={'cases': [{'qa_id': 'q1', 'category': 2, 'sample_id': 'conv-1', 'answer_f1': 1.0, 'evidence_recall': {'recall@5': 1.0, 'hit_any': True, 'mrr': 1.0, 'gold_evidence_count': 1}}]},
                 )
                 out = write_locomo_run_artifacts(
                     run_id="bench-test123",

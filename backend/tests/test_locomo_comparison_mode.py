@@ -71,8 +71,8 @@ class TestLocomoComparisonMode(unittest.TestCase):
         fake_cases = [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'question': 'Q?', 'answer': 'A', 'evidence': ['D1:1']}]
         fake_samples = [{'sample_id': 'conv-1', 'sessions': []}]
         fake_gold = {'D1:1': {'dia_ids': ['D1:1']}}
-        main_report = {'cases': [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 0.0, 'evidence_recall': {'recall@5': 0.0, 'hit_any': False, 'mrr': 0.0}, 'status': 'ok'}], 'completed': 1, 'failed': 0}
-        compare_report = {'cases': [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 1.0, 'evidence_recall': {'recall@5': 1.0, 'hit_any': True, 'mrr': 1.0}, 'status': 'ok'}], 'completed': 1, 'failed': 0}
+        main_report = {'cases': [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 0.0, 'evidence_recall': {'recall@5': 0.0, 'hit_any': False, 'mrr': 0.0, 'gold_evidence_count': 1}, 'status': 'ok'}], 'completed': 1, 'failed': 0}
+        compare_report = {'cases': [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 1.0, 'evidence_recall': {'recall@5': 1.0, 'hit_any': True, 'mrr': 1.0, 'gold_evidence_count': 1}, 'status': 'ok'}], 'completed': 1, 'failed': 0}
 
         with tempfile.TemporaryDirectory() as td:
             old_bench_root = runtime_mod.settings.core_memory_demo_benchmark_root
@@ -88,7 +88,8 @@ class TestLocomoComparisonMode(unittest.TestCase):
                      patch.object(runtime_mod, 'ingest_locomo_samples_through_core_memory', return_value={'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0, 'post_drain': {'ok': True}}), \
                      patch.object(runtime_mod, 'ingest_locomo_samples', return_value={'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0}), \
                      patch.object(runtime_mod, 'run_locomo_retrieval_suite', side_effect=[main_report, compare_report]), \
-                     patch.object(runtime_mod, 'build_semantic_index', side_effect=[{'ok': True, 'backend': 'hash', 'entries': 1}, {'ok': True, 'backend': 'hash', 'entries': 1}]):
+                     patch.object(runtime_mod, 'build_semantic_index', side_effect=[{'ok': True, 'backend': 'hash', 'entries': 1}, {'ok': True, 'backend': 'hash', 'entries': 1}]), \
+                     patch.object(runtime_mod, '_validate_locomo_benchmark_corpus', return_value={'ok': True, 'semantic_entries': 1, 'sample_scoped_turn_ids_visible': 1}):
                     out = runtime_mod.run_benchmark(
                         semantic_mode_name='required',
                         root_mode='snapshot',
@@ -117,10 +118,10 @@ class TestLocomoComparisonMode(unittest.TestCase):
         self.assertTrue(out['report']['config']['compare_paths_requested'])
         self.assertTrue(out['report']['config']['compare_paths_executed'])
         self.assertEqual('core_memory_pipeline', out['report']['config']['ingest_path_active'])
-        self.assertEqual('canonical_replay', out['report']['config']['compare_target'])
+        self.assertEqual('bead_direct', out['report']['config']['compare_target'])
         self.assertIn('comparison', out['report'])
-        self.assertEqual('bead_direct', out['report']['comparison']['left'])
-        self.assertEqual('canonical_replay', out['report']['comparison']['right'])
+        self.assertEqual('core_memory_pipeline', out['report']['comparison']['left'])
+        self.assertEqual('bead_direct', out['report']['comparison']['right'])
         self.assertGreater(out['report']['comparison']['overall']['delta']['evidence_recall@5'], 0.0)
 
     def test_compare_retrieval_modes_writes_comparison(self):
@@ -130,8 +131,8 @@ class TestLocomoComparisonMode(unittest.TestCase):
         fake_cases = [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'question': 'Q?', 'answer': 'A', 'evidence': ['D1:1']}]
         fake_samples = [{'sample_id': 'conv-1', 'sessions': []}]
         fake_gold = {'D1:1': {'dia_ids': ['D1:1']}}
-        main_report = {'cases': [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 0.0, 'evidence_recall': {'recall@5': 0.0, 'hit_any': False, 'mrr': 0.0}, 'status': 'ok'}], 'completed': 1, 'failed': 0}
-        hydrated_report = {'cases': [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 1.0, 'evidence_recall': {'recall@5': 1.0, 'hit_any': True, 'mrr': 1.0}, 'status': 'ok', 'hydration': {'used': True, 'hydrated_rows': 1}}], 'completed': 1, 'failed': 0}
+        main_report = {'cases': [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 0.0, 'evidence_recall': {'recall@5': 0.0, 'hit_any': False, 'mrr': 0.0, 'gold_evidence_count': 1}, 'status': 'ok'}], 'completed': 1, 'failed': 0}
+        hydrated_report = {'cases': [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 1.0, 'evidence_recall': {'recall@5': 1.0, 'hit_any': True, 'mrr': 1.0, 'gold_evidence_count': 1}, 'status': 'ok', 'hydration': {'used': True, 'hydrated_rows': 1}}], 'completed': 1, 'failed': 0}
 
         with tempfile.TemporaryDirectory() as td:
             old_bench_root = runtime_mod.settings.core_memory_demo_benchmark_root
@@ -144,9 +145,10 @@ class TestLocomoComparisonMode(unittest.TestCase):
             runtime_mod.settings.locomo_compare_paths_enabled = False
             try:
                 with patch.object(runtime_mod, 'build_locomo_suite_metadata', return_value=(fake_dataset_meta, fake_cases, fake_samples, fake_gold)), \
-                     patch.object(runtime_mod, 'ingest_locomo_samples', return_value={'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0}), \
+                     patch.object(runtime_mod, 'ingest_locomo_samples_through_core_memory', return_value={'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0, 'post_drain': {'ok': True}}), \
                      patch.object(runtime_mod, 'run_locomo_retrieval_suite', side_effect=[main_report, hydrated_report]), \
-                     patch.object(runtime_mod, 'build_semantic_index', return_value={'ok': True, 'backend': 'hash', 'entries': 1}):
+                     patch.object(runtime_mod, 'build_semantic_index', return_value={'ok': True, 'backend': 'hash', 'entries': 1}), \
+                     patch.object(runtime_mod, '_validate_locomo_benchmark_corpus', return_value={'ok': True, 'semantic_entries': 1, 'sample_scoped_turn_ids_visible': 1}):
                     out = runtime_mod.run_benchmark(
                         semantic_mode_name='required',
                         root_mode='clean',
@@ -186,7 +188,7 @@ class TestLocomoComparisonMode(unittest.TestCase):
         fake_cases = [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'question': 'Q?', 'answer': 'A', 'evidence': ['D1:1']}]
         fake_samples = [{'sample_id': 'conv-1', 'sessions': []}]
         fake_gold = {'D1:1': {'dia_ids': ['D1:1']}}
-        main_report = {'cases': [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 0.0, 'evidence_recall': {'recall@5': 0.0, 'hit_any': False, 'mrr': 0.0}, 'status': 'ok'}], 'completed': 1, 'failed': 0}
+        main_report = {'cases': [{'qa_id': 'q1', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 0.0, 'evidence_recall': {'recall@5': 0.0, 'hit_any': False, 'mrr': 0.0, 'gold_evidence_count': 1}, 'status': 'ok'}], 'completed': 1, 'failed': 0}
 
         with tempfile.TemporaryDirectory() as td:
             old_bench_root = runtime_mod.settings.core_memory_demo_benchmark_root
@@ -199,9 +201,11 @@ class TestLocomoComparisonMode(unittest.TestCase):
             runtime_mod.settings.locomo_compare_paths_enabled = True
             try:
                 with patch.object(runtime_mod, 'build_locomo_suite_metadata', return_value=(fake_dataset_meta, fake_cases, fake_samples, fake_gold)), \
-                     patch.object(runtime_mod, 'ingest_locomo_samples', side_effect=[{'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0}, RuntimeError('flush failed')]), \
+                     patch.object(runtime_mod, 'ingest_locomo_samples_through_core_memory', return_value={'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0, 'post_drain': {'ok': True}}), \
+                     patch.object(runtime_mod, 'ingest_locomo_samples', side_effect=RuntimeError('flush failed')), \
                      patch.object(runtime_mod, 'run_locomo_retrieval_suite', side_effect=[main_report]), \
-                     patch.object(runtime_mod, 'build_semantic_index', side_effect=[{'ok': True, 'backend': 'hash', 'entries': 1}]):
+                     patch.object(runtime_mod, 'build_semantic_index', side_effect=[{'ok': True, 'backend': 'hash', 'entries': 1}]), \
+                     patch.object(runtime_mod, '_validate_locomo_benchmark_corpus', return_value={'ok': True, 'semantic_entries': 1, 'sample_scoped_turn_ids_visible': 1}):
                     out = runtime_mod.run_benchmark(
                         semantic_mode_name='required',
                         root_mode='snapshot',
@@ -245,7 +249,7 @@ class TestLocomoComparisonMode(unittest.TestCase):
         fake_gold = {'D1:1': {'dia_ids': ['D1:1']}}
         main_report = {
             'cases': [
-                {'qa_id': f'q{i}', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 1.0, 'evidence_recall': {'recall@5': 1.0, 'hit_any': True, 'mrr': 1.0}, 'status': 'ok'}
+                {'qa_id': f'q{i}', 'sample_id': 'conv-1', 'category': 2, 'answer_f1': 1.0, 'evidence_recall': {'recall@5': 1.0, 'hit_any': True, 'mrr': 1.0, 'gold_evidence_count': 1}, 'status': 'ok'}
                 for i in range(50)
             ],
             'completed': 50,
@@ -261,9 +265,10 @@ class TestLocomoComparisonMode(unittest.TestCase):
             runtime_mod.settings.locomo_compare_paths_max_qa_cases = 12
             try:
                 with patch.object(runtime_mod, 'build_locomo_suite_metadata', return_value=(fake_dataset_meta, fake_cases, fake_samples, fake_gold)), \
-                     patch.object(runtime_mod, 'ingest_locomo_samples', return_value={'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0}) as ingest_mock, \
+                     patch.object(runtime_mod, 'ingest_locomo_samples_through_core_memory', return_value={'ingested_turns': 1, 'rows': [], 'turns_total': 1, 'ingested_count': 1, 'skipped_existing_count': 0, 'post_drain': {'ok': True}}) as ingest_mock, \
                      patch.object(runtime_mod, 'run_locomo_retrieval_suite', return_value=main_report), \
-                     patch.object(runtime_mod, 'build_semantic_index', return_value={'ok': True, 'backend': 'hash', 'entries': 1}):
+                     patch.object(runtime_mod, 'build_semantic_index', return_value={'ok': True, 'backend': 'hash', 'entries': 1}), \
+                     patch.object(runtime_mod, '_validate_locomo_benchmark_corpus', return_value={'ok': True, 'semantic_entries': 1, 'sample_scoped_turn_ids_visible': 1}):
                     out = runtime_mod.run_benchmark(
                         semantic_mode_name='required',
                         root_mode='clean',

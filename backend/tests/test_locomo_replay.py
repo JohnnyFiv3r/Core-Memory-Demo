@@ -13,7 +13,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / 'Core-Memory'))
 if importlib.util.find_spec('pydantic_settings') is not None:
     from app.benchmarks import locomo_replay as locomo_replay_mod
     from app.benchmarks.locomo_replay import replay_locomo_sample
-    from core_memory.runtime.turn_archive import find_turn_record, get_adjacent_turns
+    from core_memory.runtime.turn.turn_archive import find_turn_record, get_adjacent_turns
 else:
     replay_locomo_sample = None
     find_turn_record = None

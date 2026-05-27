@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import Any
 
 try:
-    from core_memory.integrations.openclaw_runtime import finalize_and_process_turn
+    from core_memory.integrations.openclaw.runtime import finalize_and_process_turn
 except Exception:  # pragma: no cover
     finalize_and_process_turn = None  # type: ignore
 try:
@@ -15,11 +15,11 @@ except Exception:  # pragma: no cover
     emit_turn_finalized = None  # type: ignore
     process_flush = None  # type: ignore
 try:
-    from core_memory.runtime.association_pass import run_association_pass
+    from core_memory.runtime.passes.association_pass import run_association_pass
 except Exception:  # pragma: no cover
     run_association_pass = None  # type: ignore
 try:
-    from core_memory.runtime.worker import process_memory_event
+    from core_memory.runtime.queue.worker import process_memory_event
 except Exception:  # pragma: no cover
     process_memory_event = None  # type: ignore
 
