@@ -94,7 +94,7 @@ def _default_process_flush() -> ProcessFlush:
 
 
 def _default_run_async_jobs() -> RunAsyncJobs:
-    from core_memory.runtime.jobs import run_async_jobs
+    from core_memory.runtime.queue.jobs import run_async_jobs
 
     return run_async_jobs
 

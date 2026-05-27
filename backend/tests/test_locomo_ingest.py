@@ -10,7 +10,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[3] / "Core-Memory"))
 from unittest.mock import patch
 
 from app.benchmarks.locomo_ingest import _extract_locomo_claims, build_turn_bead, ingest_locomo_turns
-from core_memory.runtime.turn_archive import find_turn_record
+from core_memory.runtime.turn.turn_archive import find_turn_record
 
 
 class TestLocomoIngest(unittest.TestCase):

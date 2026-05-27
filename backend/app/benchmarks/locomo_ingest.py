@@ -16,7 +16,7 @@ try:
 except Exception:  # pragma: no cover
     write_claims_to_bead = None  # type: ignore
 try:
-    from core_memory.runtime.turn_archive import append_turn_record
+    from core_memory.runtime.turn.turn_archive import append_turn_record
 except Exception:  # pragma: no cover
     append_turn_record = None  # type: ignore
 

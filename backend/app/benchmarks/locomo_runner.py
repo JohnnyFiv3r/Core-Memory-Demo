@@ -42,7 +42,7 @@ except Exception:  # pragma: no cover
         except Exception:  # pragma: no cover
             trace_request = None  # type: ignore
 try:
-    from core_memory.runtime.turn_archive import find_turn_record
+    from core_memory.runtime.turn.turn_archive import find_turn_record
 except Exception:  # pragma: no cover
     find_turn_record = None  # type: ignore
 try:
