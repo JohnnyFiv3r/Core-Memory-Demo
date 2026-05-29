@@ -45,6 +45,32 @@ class TestSemanticEnv(unittest.TestCase):
             self.assertEqual("on", os.environ.get("CORE_MEMORY_SEMANTIC_AUTODRAIN"))
             self.assertEqual({}, out.get("changed"))
 
+    def test_partial_pgvector_legacy_backend_gets_required_mode_and_openai_provider(self):
+        with patch.dict(
+            os.environ,
+            {
+                "CORE_MEMORY_VECTOR_BACKEND": "pgvector",
+                "CORE_MEMORY_PG_DSN": "postgresql://semantic/db",
+                "OPENAI_API_KEY": "sk-test",
+            },
+            clear=True,
+        ):
+            out = configure_shared_semantic_backend_env()
+            self.assertEqual("pgvector", os.environ.get("CORE_MEMORY_VECTOR_BACKEND"))
+            self.assertEqual("required", os.environ.get("CORE_MEMORY_CANONICAL_SEMANTIC_MODE"))
+            self.assertEqual("openai", os.environ.get("CORE_MEMORY_EMBEDDINGS_PROVIDER"))
+            self.assertEqual("off", os.environ.get("CORE_MEMORY_SEMANTIC_AUTODRAIN"))
+            self.assertEqual("required", (out.get("changed") or {}).get("CORE_MEMORY_CANONICAL_SEMANTIC_MODE"))
+            self.assertEqual("openai", (out.get("changed") or {}).get("CORE_MEMORY_EMBEDDINGS_PROVIDER"))
+
+    def test_partial_postgres_alias_legacy_backend_gets_required_mode(self):
+        with patch.dict(os.environ, {"CORE_MEMORY_VECTOR_BACKEND": "postgresql"}, clear=True):
+            out = configure_shared_semantic_backend_env()
+            self.assertEqual("postgresql", os.environ.get("CORE_MEMORY_VECTOR_BACKEND"))
+            self.assertEqual("required", os.environ.get("CORE_MEMORY_CANONICAL_SEMANTIC_MODE"))
+            self.assertIsNone(os.environ.get("CORE_MEMORY_EMBEDDINGS_PROVIDER"))
+            self.assertEqual("required", (out.get("changed") or {}).get("CORE_MEMORY_CANONICAL_SEMANTIC_MODE"))
+
     def test_benchmark_database_url_not_bridged_to_pg_dsn(self):
         with patch.dict(os.environ, {"BENCHMARK_DATABASE_URL": "postgresql://demo/db"}, clear=True):
             configure_shared_semantic_backend_env()

@@ -43,6 +43,14 @@ def configure_shared_semantic_backend_env() -> dict[str, Any]:
         os.environ["CORE_MEMORY_CANONICAL_SEMANTIC_MODE"] = "required"
         changed["CORE_MEMORY_CANONICAL_SEMANTIC_MODE"] = "required"
 
+    if _env_value("CORE_MEMORY_VECTOR_BACKEND").lower() in {"pgvector", "postgres", "postgresql"}:
+        if not _env_value("CORE_MEMORY_CANONICAL_SEMANTIC_MODE"):
+            os.environ["CORE_MEMORY_CANONICAL_SEMANTIC_MODE"] = "required"
+            changed["CORE_MEMORY_CANONICAL_SEMANTIC_MODE"] = "required"
+        if os.environ.get("OPENAI_API_KEY") and not _env_value("CORE_MEMORY_EMBEDDINGS_PROVIDER"):
+            os.environ["CORE_MEMORY_EMBEDDINGS_PROVIDER"] = "openai"
+            changed["CORE_MEMORY_EMBEDDINGS_PROVIDER"] = "openai"
+
     if not _env_value("CORE_MEMORY_SEMANTIC_AUTODRAIN"):
         os.environ["CORE_MEMORY_SEMANTIC_AUTODRAIN"] = "off"
         changed["CORE_MEMORY_SEMANTIC_AUTODRAIN"] = "off"
