@@ -28,11 +28,9 @@ services:
       - key: BENCHMARK_DATABASE_URL
         sync: false
       - key: CORE_MEMORY_VECTOR_BACKEND
-        value: pgvector
-      - key: CORE_MEMORY_CANONICAL_SEMANTIC_MODE
-        value: required
-      - key: CORE_MEMORY_EMBEDDINGS_PROVIDER
-        value: openai
+        value: qdrant
+      - key: CORE_MEMORY_GRAPH_BACKEND
+        value: kuzu
       - key: CORE_MEMORY_CLAIM_LAYER
         value: "1"
       - key: CORE_MEMORY_CLAIM_EXTRACTION_MODE
@@ -72,11 +70,11 @@ services:
       - key: BENCHMARK_DATABASE_URL
         sync: false
       - key: CORE_MEMORY_VECTOR_BACKEND
-        value: pgvector
-      - key: CORE_MEMORY_CANONICAL_SEMANTIC_MODE
-        value: required
-      - key: CORE_MEMORY_EMBEDDINGS_PROVIDER
-        value: openai
+        value: qdrant
+      - key: CORE_MEMORY_GRAPH_BACKEND
+        value: kuzu
+      - key: FASTEMBED_CACHE_PATH
+        value: /var/data/fastembed-cache
       - key: CORE_MEMORY_CLAIM_LAYER
         value: "1"
       - key: CORE_MEMORY_CLAIM_EXTRACTION_MODE

@@ -144,7 +144,7 @@ os.environ.setdefault("CORE_MEMORY_CLAIM_RESOLUTION", "1")
 os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_PROMOTION", "1")
 os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_ALLOW_SHARED_TAG", "1")
 os.environ.setdefault("CORE_MEMORY_SEMANTIC_BUILD_ON_READ", "0")
-os.environ.setdefault("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE", "degraded_allowed")
+os.environ.setdefault("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE", "required")
 
 STORY_PACK_DIR = Path(__file__).resolve().parents[3] / "demo" / "story-pack"
 LOCOMO_DIR = Path(__file__).resolve().parents[4] / "locomo"

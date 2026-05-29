@@ -4,53 +4,55 @@ import os
 from typing import Any
 
 
-def configure_shared_semantic_backend_env() -> dict[str, Any]:
-    """Wire demo semantic retrieval to the shared Postgres/pgvector backend.
+def _env_value(name: str) -> str:
+    return str(os.environ.get(name) or "").strip()
 
-    The benchmark system already has a durable Render Postgres DSN via
-    BENCHMARK_DATABASE_URL. Core-Memory's pgvector backend intentionally reads a
-    separate CORE_MEMORY_PG_DSN, so bridge it here unless the deployment provides
-    an explicit semantic DSN. This keeps benchmark storage tables separate
-    (`benchmarks.*`) while using the same database service for real semantic
-    retrieval.
+
+def configure_shared_semantic_backend_env() -> dict[str, Any]:
+    """Configure Core Memory's embedded Qdrant + Kuzu defaults for the demo.
+
+    The benchmark queue still reads BENCHMARK_DATABASE_URL directly. This bridge
+    only sets Core Memory retrieval defaults when the deployment has not provided
+    explicit overrides.
     """
 
-    before = {
-        "CORE_MEMORY_VECTOR_BACKEND": os.environ.get("CORE_MEMORY_VECTOR_BACKEND"),
-        "CORE_MEMORY_PG_DSN": os.environ.get("CORE_MEMORY_PG_DSN"),
-        "CORE_MEMORY_CANONICAL_SEMANTIC_MODE": os.environ.get("CORE_MEMORY_CANONICAL_SEMANTIC_MODE"),
-        "CORE_MEMORY_EMBEDDINGS_PROVIDER": os.environ.get("CORE_MEMORY_EMBEDDINGS_PROVIDER"),
-    }
-
-    shared_dsn = str(
-        os.environ.get("CORE_MEMORY_PG_DSN")
-        or os.environ.get("CORE_MEMORY_SHARED_PG_DSN")
-        or os.environ.get("BENCHMARK_DATABASE_URL")
-        or os.environ.get("DATABASE_URL")
-        or ""
-    ).strip()
+    keys = (
+        "CORE_MEMORY_VECTOR_BACKEND",
+        "CORE_MEMORY_GRAPH_BACKEND",
+        "CORE_MEMORY_PG_DSN",
+        "CORE_MEMORY_CANONICAL_SEMANTIC_MODE",
+        "CORE_MEMORY_SEMANTIC_AUTODRAIN",
+        "CORE_MEMORY_EMBEDDINGS_PROVIDER",
+    )
+    before = {key: os.environ.get(key) for key in keys}
 
     changed: dict[str, str] = {}
-    if shared_dsn and not str(os.environ.get("CORE_MEMORY_PG_DSN") or "").strip():
-        os.environ["CORE_MEMORY_PG_DSN"] = shared_dsn
-        changed["CORE_MEMORY_PG_DSN"] = "shared_postgres_dsn"
 
-    if str(os.environ.get("CORE_MEMORY_PG_DSN") or "").strip() and not str(os.environ.get("CORE_MEMORY_VECTOR_BACKEND") or "").strip():
-        os.environ["CORE_MEMORY_VECTOR_BACKEND"] = "pgvector"
-        changed["CORE_MEMORY_VECTOR_BACKEND"] = "pgvector"
+    if not _env_value("CORE_MEMORY_VECTOR_BACKEND"):
+        os.environ["CORE_MEMORY_VECTOR_BACKEND"] = "qdrant"
+        changed["CORE_MEMORY_VECTOR_BACKEND"] = "qdrant"
 
-    if str(os.environ.get("CORE_MEMORY_VECTOR_BACKEND") or "").strip().lower() in {"pgvector", "postgres", "postgresql"}:
-        if not str(os.environ.get("CORE_MEMORY_CANONICAL_SEMANTIC_MODE") or "").strip():
-            os.environ["CORE_MEMORY_CANONICAL_SEMANTIC_MODE"] = "required"
-            changed["CORE_MEMORY_CANONICAL_SEMANTIC_MODE"] = "required"
-        if os.environ.get("OPENAI_API_KEY") and not str(os.environ.get("CORE_MEMORY_EMBEDDINGS_PROVIDER") or "").strip():
-            os.environ["CORE_MEMORY_EMBEDDINGS_PROVIDER"] = "openai"
-            changed["CORE_MEMORY_EMBEDDINGS_PROVIDER"] = "openai"
+    if not _env_value("CORE_MEMORY_GRAPH_BACKEND"):
+        os.environ["CORE_MEMORY_GRAPH_BACKEND"] = "kuzu"
+        changed["CORE_MEMORY_GRAPH_BACKEND"] = "kuzu"
+
+    if (
+        _env_value("CORE_MEMORY_VECTOR_BACKEND").lower() == "qdrant"
+        and not _env_value("CORE_MEMORY_CANONICAL_SEMANTIC_MODE")
+    ):
+        os.environ["CORE_MEMORY_CANONICAL_SEMANTIC_MODE"] = "required"
+        changed["CORE_MEMORY_CANONICAL_SEMANTIC_MODE"] = "required"
+
+    if not _env_value("CORE_MEMORY_SEMANTIC_AUTODRAIN"):
+        os.environ["CORE_MEMORY_SEMANTIC_AUTODRAIN"] = "off"
+        changed["CORE_MEMORY_SEMANTIC_AUTODRAIN"] = "off"
 
     after = {
         "CORE_MEMORY_VECTOR_BACKEND": os.environ.get("CORE_MEMORY_VECTOR_BACKEND"),
+        "CORE_MEMORY_GRAPH_BACKEND": os.environ.get("CORE_MEMORY_GRAPH_BACKEND"),
         "CORE_MEMORY_PG_DSN": "set" if os.environ.get("CORE_MEMORY_PG_DSN") else "",
         "CORE_MEMORY_CANONICAL_SEMANTIC_MODE": os.environ.get("CORE_MEMORY_CANONICAL_SEMANTIC_MODE"),
+        "CORE_MEMORY_SEMANTIC_AUTODRAIN": os.environ.get("CORE_MEMORY_SEMANTIC_AUTODRAIN"),
         "CORE_MEMORY_EMBEDDINGS_PROVIDER": os.environ.get("CORE_MEMORY_EMBEDDINGS_PROVIDER"),
     }
     return {"changed": changed, "before": before, "after": after}

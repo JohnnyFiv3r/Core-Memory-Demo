@@ -43,7 +43,7 @@ class Settings(BaseSettings):
     benchmark_preload_turns_max: int = 400
     benchmark_history_max_rows: int = 300
     benchmark_runs_max_keep: int = 80
-    benchmark_run_mode: str = 'queue'
+    benchmark_run_mode: str = 'inline'
     benchmark_dispatch_url: str = ''
     benchmark_dispatch_token: str = ''
     benchmark_dispatch_timeout_seconds: int = 15

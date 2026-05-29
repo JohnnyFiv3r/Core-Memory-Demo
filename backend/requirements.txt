@@ -7,4 +7,4 @@ pyjwt[crypto]==2.10.1
 # and Render currently fails resolving the mistral extra (`mistralai>=2.0.0`).
 pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Pinned to explicit Core-Memory commit for deploy stability.
-core-memory[semantic,pgvector,qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@21dafdb9c8c357adbb7c47a465d5a5b72a4866fd
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@46a00645fbe5e41cae46315b742d093c87815bb1
