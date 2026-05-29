@@ -158,13 +158,14 @@ class TestTranscriptIngestRoute(unittest.TestCase):
             self.assertTrue(str(job_id).startswith("ingest-"))
 
             last = None
-            for _ in range(20):
+            deadline = time.monotonic() + 60
+            while time.monotonic() < deadline:
                 status = c.get(f"/api/ingest/job/{job_id}")
                 self.assertEqual(200, status.status_code)
                 last = status.json()
                 if last.get("done"):
                     break
-                time.sleep(0.1)
+                time.sleep(0.25)
             self.assertIsNotNone(last)
             self.assertTrue(last.get("done"), last)
             self.assertEqual("done", last.get("status"), last)

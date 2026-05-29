@@ -1,5 +1,6 @@
 import logging
 import threading
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -59,7 +60,37 @@ def _async_jobs_tick_loop() -> None:
         _async_jobs_stop.wait(timeout=float(interval))
 
 
-app = FastAPI(title=settings.app_name)
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global _async_jobs_thread, _mcp_lifespan_cm
+
+    # Mounted FastAPI sub-app lifespans are not entered by the parent app,
+    # but the MCP streamable-HTTP endpoint requires its session manager task
+    # group to be active before protocol POSTs arrive.
+    _mcp_lifespan_cm = mcp_app.state.mcp_session_manager.run()
+    await _mcp_lifespan_cm.__aenter__()
+    try:
+        ensure_roots_writable()
+        if bool(settings.async_jobs_tick_enabled):
+            _async_jobs_stop.clear()
+            t = threading.Thread(target=_async_jobs_tick_loop, name='core-memory-async-jobs-tick', daemon=True)
+            t.start()
+            _async_jobs_thread = t
+        yield
+    finally:
+        _async_jobs_stop.set()
+        t = _async_jobs_thread
+        _async_jobs_thread = None
+        if t and t.is_alive():
+            t.join(timeout=1.0)
+
+        cm = _mcp_lifespan_cm
+        _mcp_lifespan_cm = None
+        if cm is not None:
+            await cm.__aexit__(None, None, None)
+
+
+app = FastAPI(title=settings.app_name, lifespan=lifespan)
 
 app.add_middleware(
     CORSMiddleware,
@@ -95,44 +126,6 @@ async def state_error_fallback_middleware(request: Request, call_next):
     if path in STATE_PATHS and int(getattr(response, 'status_code', 200) or 200) >= 500:
         return JSONResponse(safe_state_fallback(f'http_{response.status_code}'), status_code=200)
     return response
-
-
-@app.on_event('startup')
-async def on_mcp_startup():
-    global _mcp_lifespan_cm
-    # Mounted FastAPI sub-app lifespans are not entered by the parent app,
-    # but the MCP streamable-HTTP endpoint requires its session manager task
-    # group to be active before protocol POSTs arrive.
-    _mcp_lifespan_cm = mcp_app.state.mcp_session_manager.run()
-    await _mcp_lifespan_cm.__aenter__()
-
-
-@app.on_event('startup')
-def on_startup():
-    global _async_jobs_thread
-    ensure_roots_writable()
-    if bool(settings.async_jobs_tick_enabled):
-        _async_jobs_stop.clear()
-        t = threading.Thread(target=_async_jobs_tick_loop, name='core-memory-async-jobs-tick', daemon=True)
-        t.start()
-        _async_jobs_thread = t
-
-
-@app.on_event('shutdown')
-async def on_mcp_shutdown():
-    global _mcp_lifespan_cm
-    cm = _mcp_lifespan_cm
-    _mcp_lifespan_cm = None
-    if cm is not None:
-        await cm.__aexit__(None, None, None)
-
-
-@app.on_event('shutdown')
-def on_shutdown():
-    _async_jobs_stop.set()
-    t = _async_jobs_thread
-    if t and t.is_alive():
-        t.join(timeout=1.0)
 
 
 @app.get('/')
