@@ -72,6 +72,25 @@ class TestRecallApiContract(unittest.TestCase):
         self.assertEqual(400, res.status_code)
         self.assertIn("recall effort", res.json().get("error", ""))
 
+    def test_recall_endpoint_forwards_as_of(self):
+        with patch("app.routes.demo.run_recall", return_value={"ok": True, "status": "answered"}) as recall:
+            res = self._client().post(
+                "/api/recall",
+                json={"query": "what did I say", "as_of": "2026-01-01T00:00:00Z"},
+            )
+        self.assertEqual(200, res.status_code)
+        _, kwargs = recall.call_args
+        self.assertEqual("2026-01-01T00:00:00Z", kwargs["as_of"])
+
+    def test_recall_endpoint_maps_invalid_as_of_to_400(self):
+        with patch(
+            "app.routes.demo.run_recall",
+            side_effect=ValueError("as_of must be a valid ISO 8601 timestamp, got 'nope'"),
+        ):
+            res = self._client().post("/api/recall", json={"query": "hello", "as_of": "nope"})
+        self.assertEqual(400, res.status_code)
+        self.assertIn("as_of", res.json().get("error", ""))
+
 
 class TestRecallRuntimeContract(unittest.TestCase):
     def test_recall_payload_defaults_and_raw_gating(self):
@@ -97,6 +116,36 @@ class TestRecallRuntimeContract(unittest.TestCase):
         raw_payload = _recall_result_to_payload(result, include_raw=True)
         self.assertIn("raw", raw_payload)
         self.assertEqual("bead-1", raw_payload["raw"]["results"][0]["bead_id"])
+
+    def test_recall_payload_surfaces_conflicts_and_as_of(self):
+        from app.core.runtime import _recall_result_to_payload
+        from core_memory.retrieval.contracts import ConflictItem, RecallResult
+
+        conflict = ConflictItem(
+            subject="db",
+            slot="host",
+            claim_a_id="claim-a",
+            claim_b_id="claim-b",
+            epistemic_conflict_score=0.8,
+        )
+        result = RecallResult(
+            status="answered",
+            conflicts=[conflict],
+            as_of="2026-01-01T00:00:00Z",
+            metadata={},
+        )
+        payload = _recall_result_to_payload(result, include_raw=False)
+        # conflicts is always a list in the public contract; as_of is carried through.
+        self.assertIsInstance(payload["conflicts"], list)
+        self.assertEqual("2026-01-01T00:00:00Z", payload["as_of"])
+
+    def test_recall_payload_defaults_as_of_and_conflicts_when_absent(self):
+        from app.core.runtime import _recall_result_to_payload
+        from core_memory.retrieval.contracts import RecallResult
+
+        payload = _recall_result_to_payload(RecallResult(status="empty"), include_raw=False)
+        self.assertIsInstance(payload["conflicts"], list)
+        self.assertIn("as_of", payload)
 
     def test_frontend_renders_recall_result_content_excerpt(self):
         root = Path(__file__).resolve().parents[2]

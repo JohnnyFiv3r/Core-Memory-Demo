@@ -1041,6 +1041,7 @@ async def recall_endpoint(request: Request):
         return JSONResponse({'ok': False, 'error': 'missing_query'}, status_code=400)
     effort = str((body or {}).get('effort') or 'medium').strip().lower() or 'medium'
     speaker = str((body or {}).get('speaker') or '').strip() or None
+    as_of = str((body or {}).get('as_of') or '').strip() or None
     include_raw = bool((body or {}).get('include_raw', False))
     k_raw = (body or {}).get('k')
     k: int | None = None
@@ -1050,7 +1051,7 @@ async def recall_endpoint(request: Request):
         except Exception:
             return JSONResponse({'ok': False, 'error': 'invalid_k'}, status_code=400)
     try:
-        out = run_recall(query, effort=effort, speaker=speaker, k=k, include_raw=include_raw)
+        out = run_recall(query, effort=effort, speaker=speaker, k=k, as_of=as_of, include_raw=include_raw)
         status = 200 if bool(out.get('ok', True)) else 400
         return JSONResponse(out, status_code=status)
     except ValueError as exc:

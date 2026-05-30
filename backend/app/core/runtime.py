@@ -2206,11 +2206,15 @@ def _ensure_public_recall_shape(payload: dict[str, Any], *, include_raw: bool = 
     out.setdefault("contract", "recall_result")
     out.setdefault("schema_version", "recall_result.v1")
     out.setdefault("status", "empty")
-    for key in ("evidence", "resolved_goals", "sources", "tier_path", "steps", "warnings"):
+    for key in ("evidence", "resolved_goals", "sources", "tier_path", "steps", "warnings", "conflicts"):
         if not isinstance(out.get(key), list):
             out[key] = []
     if not isinstance(out.get("claim_slots"), dict):
         out["claim_slots"] = {}
+    # Temporal recall: surface the as_of the result was filtered against (Core
+    # Memory sets RecallResult.as_of when an as_of filter was applied). Keep the
+    # key present-and-null so the contract is stable for clients that read it.
+    out.setdefault("as_of", None)
     if not isinstance(out.get("planning"), dict):
         out["planning"] = {}
     out.setdefault("metadata", {})
@@ -2237,18 +2241,24 @@ def run_recall(
     effort: str = "medium",
     speaker: str | None = None,
     k: int | None = None,
+    as_of: str | None = None,
     include_raw: bool = False,
 ) -> dict[str, Any]:
     q = str(query or "").strip()
     if not q:
         return {"ok": False, "error": "missing_query"}
     selected_effort = validate_recall_effort(effort)
+    # Normalise empty/"none" to no-filter; pass real values through. Core Memory's
+    # recall(as_of=...) validates ISO 8601 and raises ValueError on a bad value,
+    # which the route maps to HTTP 400 rather than a 500 from deep in retrieval.
+    as_of_n = _normalize_as_of(as_of)
     with semantic_mode(_chat_semantic_mode_name()):
         result = core_recall(
             q,
             effort=selected_effort,
             speaker=speaker,
             k=k,
+            as_of=as_of_n,
             root=settings.core_memory_root,
             include_raw=include_raw,
         )
