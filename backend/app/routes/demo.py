@@ -1088,6 +1088,48 @@ async def flush(request: Request):
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
 
 
+@router.post('/session/capture')
+async def session_capture(request: Request):
+    """End-of-session safety-net sync.
+
+    Replays a full conversation transcript through Core Memory's canonical
+    `capture_session` path (group ingest + end-of-session flush) so any durable
+    state that per-turn capture missed is recovered losslessly. Accepts inline
+    `turns`/`messages`; binds the demo memory root and live session id.
+    """
+    body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
+    turns = (body or {}).get('turns')
+    messages = (body or {}).get('messages')
+    if not isinstance(turns, list) and not isinstance(messages, list):
+        return JSONResponse({'ok': False, 'error': 'turns_or_messages_required'}, status_code=400)
+
+    payload: dict[str, Any] = {'root': settings.core_memory_root}
+    if isinstance(turns, list):
+        payload['turns'] = turns
+    if isinstance(messages, list):
+        payload['messages'] = messages
+    session_id = str((body or {}).get('session_id') or '').strip()
+    if session_id:
+        payload['session_id'] = session_id
+    source_system = str((body or {}).get('source_system') or '').strip()
+    if source_system:
+        payload['source_system'] = source_system
+
+    try:
+        from core_memory.integrations.mcp.tools.capture_session import capture_session_handler
+    except Exception as exc:  # pragma: no cover - depends on installed Core Memory
+        return JSONResponse({'ok': False, 'error': f'capture_session_unavailable:{exc}'}, status_code=503)
+
+    try:
+        with heavy_operation_slot(request, slot_key=f"capture:{request.client.host if request.client else 'unknown'}"):
+            out = capture_session_handler(payload)
+    except HTTPException as exc:
+        return _http_exc_response(exc)
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+    return JSONResponse(dict(out or {}), status_code=200 if bool((out or {}).get('ok')) else 400)
+
+
 @router.post('/session/reset')
 async def session_reset(request: Request):
     body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}

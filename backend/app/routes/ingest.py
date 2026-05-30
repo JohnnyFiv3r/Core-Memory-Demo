@@ -39,11 +39,18 @@ def _public_status(status: str) -> str:
 
 def _result_summary(result: dict[str, Any]) -> dict[str, Any]:
     result_d = dict(result or {})
-    return {
+    summary: dict[str, Any] = {
         "ingested_count": int(result_d.get("turns_ingested") or result_d.get("ingested_count") or 0),
         "associations_created": result_d.get("associations_created") or {"count": 0, "by_type": {}, "items": []},
         "warnings": list(result_d.get("warnings") or []),
     }
+    # Surface multi-speaker attribution from N-speaker/group ingest when present
+    # so callers can see which observed speaker labels resolved to entities.
+    for key in ("speaker_attribution", "attributed_entities"):
+        value = result_d.get(key)
+        if value:
+            summary[key] = value
+    return summary
 
 
 def _safe_job_payload(row: dict[str, Any]) -> dict[str, Any]:
@@ -158,6 +165,45 @@ async def ingest_transcript(request: Request):
     row["task"] = t
     t.start()
     return {"ok": True, "job_id": job_id, "kind": "transcript_ingest", "status": "accepted"}
+
+
+@router.post("/ingest/data-insight")
+async def ingest_data_insight(request: Request):
+    """Webhook ingest for an external PipeHouse `core_memory_insights` row.
+
+    Converts the row to a turn envelope via Core Memory's data_insight contract
+    (``data_insight`` bead type) and emits it through the canonical write path —
+    the bead store is never written directly. Missing required fields surface as
+    HTTP 400 rather than silent empty beads.
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        raise HTTPException(status_code=400, detail="invalid_json")
+    if not isinstance(body, dict):
+        raise HTTPException(status_code=422, detail="payload_must_be_object")
+
+    row = body.get("row") if isinstance(body.get("row"), dict) else body
+    session_id = str(body.get("session_id") or "pipehouse-insights").strip() or "pipehouse-insights"
+
+    try:
+        from core_memory.runtime.ingest.data_insight import ingest_data_insight_row
+    except Exception as exc:  # pragma: no cover - depends on installed Core Memory
+        return JSONResponse({"ok": False, "error": f"data_insight_unavailable:{exc}"}, status_code=503)
+
+    try:
+        out = ingest_data_insight_row(settings.core_memory_root, session_id, dict(row or {}))
+    except ValueError as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=400)
+    except Exception as exc:
+        return JSONResponse({"ok": False, "error": str(exc)}, status_code=500)
+
+    return {
+        "ok": bool((out or {}).get("ok", True)),
+        "bead_id": str((out or {}).get("bead_id") or ""),
+        "turn_id": str((out or {}).get("turn_id") or ""),
+        "session_id": session_id,
+    }
 
 
 @router.get("/ingest/jobs/{job_id}")
