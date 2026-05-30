@@ -422,6 +422,50 @@ class TestLifecycleRunner(unittest.TestCase):
             events,
         )
 
+    def test_lifecycle_conversation_recovers_recall_from_bead_dia_map(self):
+        # Regression: retrieval rows that carry only a bead_id (no surfaced
+        # dia_id) used to score evidence recall as zero. The bead_id -> dia_id
+        # map built from the index after replay must recover recall.
+        import json
+
+        def fake_process_turn_finalized(**kwargs):
+            root = Path(kwargs["root"])
+            beads_dir = root / ".beads"
+            beads_dir.mkdir(parents=True, exist_ok=True)
+            idx_path = beads_dir / "index.json"
+            idx = json.loads(idx_path.read_text()) if idx_path.exists() else {"beads": {}}
+            turn_id = kwargs["turn_id"]
+            dia = str((kwargs.get("metadata") or {}).get("locomo_dia_id") or "")
+            bead_id = f"bead-{dia.replace(':', '-')}"
+            idx["beads"][bead_id] = {
+                "id": bead_id,
+                "session_id": kwargs["session_id"],
+                # Demo convention: source_turn_ids carries [turn_id, dia_id].
+                "source_turn_ids": [turn_id, dia],
+            }
+            idx_path.write_text(json.dumps(idx), encoding="utf-8")
+            return {"ok": True}
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            # Rows expose ONLY a bead_id — the historical failure mode.
+            return {"answer": f"answer-{effort}", "warnings": [], "raw": {"results": [{"bead_id": "bead-D1-1"}]}}
+
+        with tempfile.TemporaryDirectory() as td:
+            out = run_lifecycle_conversation(
+                root=td,
+                conversation=_conversation(),  # gold_evidence=["D1:1"]
+                process_turn_finalized_fn=fake_process_turn_finalized,
+                process_flush_fn=lambda **kwargs: {"ok": True},
+                run_async_jobs_fn=lambda **kwargs: {"ok": True},
+                recall_fn=fake_recall,
+            )
+
+        self.assertGreaterEqual(out["lifecycle"]["dia_bead_map_size"], 1)
+        high = out["cases"][0]["efforts"]["high"]
+        self.assertEqual(["D1:1"], high["retrieved_dia_ids"])
+        self.assertEqual(1.0, high["evidence_recall"]["recall@5"])
+        self.assertTrue(high["evidence_recall"]["hit_any"])
+
     def test_lifecycle_conversation_isolated_qa_clones_post_flush_root_per_case(self):
         events = []
 
