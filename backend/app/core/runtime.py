@@ -1406,6 +1406,61 @@ def inspect_state_payload(*, as_of: str | None = None) -> dict[str, Any]:
     return out
 
 
+def _newest_benchmark_run_base() -> Path | None:
+    """Return the most recently written ``<run_id>/base`` dir under the benchmark
+    root, or None if no run has produced a bead store yet."""
+    bench_root = Path(settings.core_memory_demo_benchmark_root)
+    if not bench_root.exists():
+        return None
+    candidates: list[tuple[float, Path]] = []
+    for index_path in bench_root.glob("*/base/.beads/index.json"):
+        try:
+            candidates.append((index_path.stat().st_mtime, index_path.parent.parent))
+        except OSError:
+            continue
+    if not candidates:
+        return None
+    return max(candidates, key=lambda pair: pair[0])[1]
+
+
+def inspect_benchmark_run_state_payload() -> dict[str, Any]:
+    """Beads/associations for the most recent benchmark run's base root.
+
+    Backs the live "view of the isolated run" — the beads pane reads this while a
+    LoCoMo run is active so its replayed/QA beads are visible without polluting
+    the live demo session. Shape mirrors ``inspect_state_payload`` (beads,
+    associations, stats) so the frontend can reuse the same renderers.
+    """
+    base = _newest_benchmark_run_base()
+    if base is None:
+        return {"ok": True, "active_run": False, "run_id": "", "beads": [], "associations": [], "stats": {"total_beads": 0}}
+
+    state = inspect_state(
+        root=str(base),
+        session_id=None,
+        as_of=None,
+        limit_beads=300,
+        limit_associations=300,
+        limit_flushes=20,
+        limit_merge_proposals=40,
+    )
+    mem = dict((state or {}).get("memory") or {})
+    beads = list(mem.get("beads") or [])
+    associations = list(mem.get("associations") or [])
+    return {
+        "ok": True,
+        "active_run": True,
+        "run_id": base.parent.name,
+        "source": "benchmark_run",
+        "beads": beads,
+        "associations": associations,
+        "stats": {
+            "total_beads": len(beads),
+            "total_associations": len(associations),
+        },
+    }
+
+
 def _token_estimator_model_name(model_id: str | None) -> str:
     mid = str(model_id or "").strip()
     if ":" in mid:

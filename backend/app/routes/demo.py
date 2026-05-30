@@ -35,6 +35,7 @@ from app.core.runtime import (
     get_last_benchmark_snapshot,
     inspect_bead_hydration_payload,
     inspect_bead_payload,
+    inspect_benchmark_run_state_payload,
     inspect_claim_slot_payload,
     inspect_state_payload,
     inspect_turns_payload,
@@ -820,6 +821,12 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         # locomo_lifecycle/lifecycle_qa with stale "starting".
         _hb['stage'] = stage
         _hb['message'] = message
+        # Per-QA live payload (present on the post-QA "ok" event): the question,
+        # the generated answer, and the beads it retrieved. Lets the frontend
+        # echo each LoCoMo QA into the chat and surface its beads live.
+        question = str((case or {}).get('question') or (result or {}).get('question') or '')
+        answer = str((result or {}).get('answer') or '')
+        evidence_bead_ids = [str(b) for b in ((result or {}).get('evidence_bead_ids') or []) if str(b)]
         _benchmark_event(
             current,
             stage,
@@ -835,6 +842,10 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             replay_turn_completed=replay_done,
             replay_turn_total=replay_total,
             turn_id=str((result or {}).get('turn_id') or ''),
+            question=question or None,
+            answer=answer or None,
+            answer_f1=(float((result or {}).get('answer_f1') or 0.0) if status == 'ok' else None),
+            evidence_bead_ids=evidence_bead_ids or None,
         )
 
     try:
@@ -938,6 +949,19 @@ def demo_entities():
         'entities': state.get('entities') or {},
         'session': state.get('session') or {},
     }
+
+
+@router.get('/demo/benchmark/run-state')
+def demo_benchmark_run_state():
+    """Beads/associations for the most recent benchmark run's isolated root.
+
+    The frontend reads this while a LoCoMo run is live so its beads surface in
+    the beads pane without mixing into the live demo session.
+    """
+    try:
+        return inspect_benchmark_run_state_payload()
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'active_run': False, 'error': str(exc), 'beads': [], 'associations': []}, status_code=200)
 
 
 @router.get('/demo/runtime')

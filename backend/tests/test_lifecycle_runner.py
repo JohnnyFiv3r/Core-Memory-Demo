@@ -568,7 +568,15 @@ class TestLifecycleRunner(unittest.TestCase):
             events,
         )
         self.assertIn((0, 1, "locomo:conv-1:q0001", "retrieving", {"status": "retrieving", "phase": "lifecycle_qa", "conversation_id": "locomo:conv-1"}), progress_events)
-        self.assertIn((1, 1, "locomo:conv-1:q0001", "ok", {"status": "ok", "phase": "lifecycle_qa", "conversation_id": "locomo:conv-1"}), progress_events)
+        # The post-QA "ok" event carries the live summary (question + generated
+        # answer) so the demo can echo each QA into the chat as it runs.
+        ok_events = [e for e in progress_events if e[0] == 1 and e[3] == "ok"]
+        self.assertTrue(ok_events)
+        ok_payload = ok_events[-1][4]
+        self.assertEqual("lifecycle_qa", ok_payload["phase"])
+        self.assertEqual("selected?", ok_payload["question"])
+        self.assertEqual("answer-high", ok_payload["answer"])
+        self.assertIn("evidence_bead_ids", ok_payload)
         replay_progress = [evt for evt in progress_events if (evt[4] or {}).get("phase") == "locomo_lifecycle"]
         self.assertTrue(replay_progress)
         self.assertEqual(1, replay_progress[-1][4].get("replay_turn_completed"))

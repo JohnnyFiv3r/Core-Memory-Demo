@@ -791,6 +791,36 @@ def _isolated_qa_root(*, root: str | Path, conversation: BenchmarkConversation, 
     return out
 
 
+def _qa_live_summary(qa: BenchmarkQA, qa_result: dict[str, Any]) -> dict[str, Any]:
+    """Compact per-QA payload for live UI: question, generated answer, evidence.
+
+    Lets the demo echo each LoCoMo QA into the chat and surface the beads it
+    retrieved without waiting for the final report.
+    """
+    high = dict((dict((qa_result or {}).get("efforts") or {}).get("high") or {}))
+    high_result = dict(high.get("result") or {})
+    answer = str(high_result.get("answer") or high.get("prediction") or "").strip()
+    retrieved = list(high.get("retrieved") or [])
+    evidence = [
+        {
+            "bead_id": str(r.get("bead_id") or ""),
+            "dia_ids": list(r.get("dia_ids") or []),
+            "snippet": str(r.get("snippet") or r.get("text") or "")[:180],
+        }
+        for r in retrieved[:5]
+        if isinstance(r, dict) and str(r.get("bead_id") or "")
+    ]
+    return {
+        "question": str(qa.question or ""),
+        "answer": answer,
+        "answer_f1": float(high.get("answer_f1") or 0.0),
+        "category": str(qa.category or ""),
+        "evidence": evidence,
+        "evidence_bead_ids": [e["bead_id"] for e in evidence],
+        "retrieved_dia_ids": list(high.get("retrieved_dia_ids") or []),
+    }
+
+
 def _emit_progress(progress: Any | None, completed: int, total: int, qa: BenchmarkQA | None, result: dict[str, Any]) -> None:
     if progress is None:
         return
@@ -905,7 +935,13 @@ def run_lifecycle_conversation(
         qa_result["qa_session_mode"] = qa_session_mode_name
         qa_result["isolated_qa"] = isolated_meta
         qa_results.append(qa_result)
-        _emit_progress(progress, offset_for_progress + idx, total_for_progress, qa, {"status": "ok", "phase": "lifecycle_qa", "conversation_id": conversation.conversation_id})
+        _emit_progress(
+            progress,
+            offset_for_progress + idx,
+            total_for_progress,
+            qa,
+            {"status": "ok", "phase": "lifecycle_qa", "conversation_id": conversation.conversation_id, **_qa_live_summary(qa, qa_result)},
+        )
 
     scores = aggregate_lifecycle_effort_scores(qa_results)
     corpus_after_qa = corpus_snapshot(root)
