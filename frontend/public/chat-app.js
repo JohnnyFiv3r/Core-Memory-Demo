@@ -35,6 +35,8 @@ let activeSeedJobId = null;
 let benchmarkProgressEl = null;
 let activeBenchmarkPollJobId = null;
 let completedBenchmarkRunId = null;
+// QA cases already echoed into the chat for the current LoCoMo run (de-dup by qa_id).
+const echoedBenchmarkQaIds = new Set();
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
@@ -976,10 +978,13 @@ function bindUiEventHandlers() {
   const seedSourceSelect = document.getElementById('seed-source');
   if (seedSourceSelect) seedSourceSelect.addEventListener('change', updateDatasetScopedControls);
 
-  const tabSelect = document.getElementById('tab-selector');
-  if (tabSelect) {
-    tabSelect.addEventListener('change', (event) => {
-      const next = String((event && event.target && event.target.value) || '').trim();
+  const tabRow = document.getElementById('tab-row');
+  if (tabRow && !tabRow.dataset.bound) {
+    tabRow.dataset.bound = '1';
+    tabRow.addEventListener('click', (event) => {
+      const btn = event.target && event.target.closest ? event.target.closest('.tab-btn') : null;
+      if (!btn || !tabRow.contains(btn)) return;
+      const next = String(btn.dataset.tab || '').trim();
       if (next) switchTab(next);
     });
   }
@@ -1131,6 +1136,41 @@ async function hydrateChatFromTurns(sessionId) {
     if (items.length) renderChatTurns(items.slice().reverse());
   } catch (_) {
     // best effort only
+  }
+}
+
+// Echo a LoCoMo QA case (question + generated answer) into the chat as it runs.
+// De-duplicated by qa_id so repeated polls don't double-post.
+function echoBenchmarkQaEvent(evt) {
+  const qaId = String((evt && evt.qa_id) || '').trim();
+  const question = String((evt && evt.question) || '').trim();
+  if (!qaId || !question || echoedBenchmarkQaIds.has(qaId)) return;
+  echoedBenchmarkQaIds.add(qaId);
+  const cat = String((evt && evt.category) || '').trim();
+  const answer = String((evt && evt.answer) || '').trim();
+  const f1 = Number((evt && evt.answer_f1) || 0);
+  addMsg('user', '🧪 LoCoMo' + (cat ? ' · cat ' + cat : '') + ' — ' + question);
+  const f1Note = Number.isFinite(f1) && f1 > 0 ? '  ·  answer F1 ' + f1.toFixed(2) : '';
+  addMsg('assistant', (answer || '(no answer generated for this case)') + f1Note);
+}
+
+// While a LoCoMo run is live, show that run's (isolated) beads in the beads pane
+// so the replay/QA work is visible without polluting the live demo session.
+async function refreshBenchmarkRunBeads() {
+  try {
+    const res = await fetch('/api/demo/benchmark/run-state');
+    const data = await parseApiJsonResponse(res, 'benchmark-run-state');
+    if (!data || !data.active_run) return;
+    const beads = arrayOrEmpty(data.beads);
+    const assocs = arrayOrEmpty(data.associations);
+    safeRenderSection('beads', () => renderBeads(beads));
+    safeRenderSection('associations', () => renderAssociations(assocs));
+    const statBeads = document.getElementById('stat-beads');
+    if (statBeads) statBeads.textContent = Number((data.stats || {}).total_beads || beads.length || 0);
+    const statAssoc = document.getElementById('stat-assoc');
+    if (statAssoc) statAssoc.textContent = Number((data.stats || {}).total_associations || assocs.length || 0);
+  } catch (_) {
+    // best effort — the live beads view is non-critical
   }
 }
 
@@ -3863,6 +3903,13 @@ async function refreshMemory() {
         const bench = control.benchmark || {};
         const benchJob = bench.job || {};
         lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
+        // Echo any completed QA cases into the chat (covers a page reload mid-run
+        // where there is no dedicated poll loop). De-dup is handled by qa_id.
+        for (const evt of (Array.isArray(benchJob.events) ? benchJob.events : [])) {
+          if (String(evt.stage || '').toLowerCase() === 'lifecycle_qa' && String(evt.case_status || '') === 'ok') {
+            echoBenchmarkQaEvent(evt);
+          }
+        }
         if (!activeBenchmarkPollJobId) {
           // No dedicated poll loop — use control-state as the complete source of truth.
           if (bench.summary) {
@@ -3938,6 +3985,9 @@ async function refreshMemory() {
       } catch (_) {
         // best effort only
       }
+
+      // Surface the live run's (isolated) beads in the beads pane.
+      await refreshBenchmarkRunBeads();
 
       refreshErrorStreak = 0;
       return;
@@ -4553,6 +4603,10 @@ async function runBenchmark() {
   btn.disabled = true;
   btn.textContent = 'Starting...';
   completedBenchmarkRunId = null;
+  echoedBenchmarkQaIds.clear();
+  if (subset === 'locomo_native_lifecycle') {
+    addMsg('system', 'LoCoMo benchmark started — each QA question and answer will stream into the chat, and the run’s beads appear in the Beads pane as it works.');
+  }
   const optimisticJobId = 'pending-job-' + Date.now().toString(36);
   activeBenchmarkPollJobId = optimisticJobId;
   const optimisticAnswerMode = answerMode || 'auto';
@@ -4679,6 +4733,9 @@ async function runBenchmark() {
           updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
           renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
         }
+        if (stage === 'lifecycle_qa' && String(evt.case_status || '') === 'ok') {
+          echoBenchmarkQaEvent(evt);
+        }
         if (stage === 'failed') {
           addMsg('system', 'Benchmark failed: ' + String(evt.error || evt.message || 'benchmark_failed'));
         } else if (stage === 'cancelled') {
@@ -4737,9 +4794,12 @@ async function runBenchmark() {
 }
 
 function switchTab(name) {
-  const sel = document.getElementById('tab-selector');
-  if (sel && sel.value !== name) sel.value = name;
   document.querySelectorAll('.tab-content').forEach(t => t.classList.toggle('active', t.id === 'tab-' + name));
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    const on = b.dataset.tab === name;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
 }
 
 function restartRefreshTimer(ms) {

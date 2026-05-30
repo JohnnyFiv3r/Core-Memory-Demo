@@ -169,11 +169,31 @@ class TestRecallRuntimeContract(unittest.TestCase):
         self.assertIn("payload.conflicts", js)
         # Pane + selectable effort buttons + dual config columns in markup.
         self.assertIn('id="tab-recall-lab"', html)
-        self.assertIn('value="recall-lab"', html)
+        self.assertIn('data-tab="recall-lab"', html)
         self.assertIn('id="btn-recall-compare"', html)
         self.assertIn("recall-effort-btn", html)
         self.assertIn('id="recall-lab-result-a"', html)
         self.assertIn('id="recall-lab-result-b"', html)
+
+    def test_frontend_uses_tab_buttons_not_dropdown(self):
+        root = Path(__file__).resolve().parents[2]
+        html = (root / "frontend" / "public" / "chat.html").read_text()
+        js = (root / "frontend" / "public" / "chat-app.js").read_text()
+        # Inspector navigation is real tab buttons, not the old <select> dropdown.
+        self.assertIn('id="tab-row"', html)
+        self.assertIn('class="tab-btn', html)
+        self.assertIn('role="tablist"', html)
+        self.assertNotIn('id="tab-selector"', html)
+        self.assertNotIn('id="tab-selector"', js)
+
+    def test_frontend_streams_locomo_qa_into_chat_and_beads(self):
+        root = Path(__file__).resolve().parents[2]
+        js = (root / "frontend" / "public" / "chat-app.js").read_text()
+        # LoCoMo QA cases echo into chat; the live run's beads load into the pane.
+        self.assertIn("function echoBenchmarkQaEvent", js)
+        self.assertIn("function refreshBenchmarkRunBeads", js)
+        self.assertIn("/api/demo/benchmark/run-state", js)
+        self.assertIn("echoedBenchmarkQaIds", js)
 
 
 if __name__ == "__main__":
