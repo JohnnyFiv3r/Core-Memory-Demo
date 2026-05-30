@@ -155,6 +155,26 @@ class TestRecallRuntimeContract(unittest.TestCase):
         self.assertIn("item.content_excerpt", js)
         self.assertIn("recall-evidence-panel", js)
 
+    def test_frontend_recall_lab_capability_compare_present(self):
+        root = Path(__file__).resolve().parents[2]
+        js = (root / "frontend" / "public" / "chat-app.js").read_text()
+        html = (root / "frontend" / "public" / "chat.html").read_text()
+        # Side-by-side capability compare UX wired to POST /api/recall.
+        self.assertIn("function runRecallCompare", js)
+        self.assertIn("function renderRecallLabResult", js)
+        self.assertIn("'/api/recall'", js)
+        self.assertIn("bindRecallLab()", js)
+        # Surfaces the new recall capabilities (temporal as_of + conflicts).
+        self.assertIn("body.as_of", js)
+        self.assertIn("payload.conflicts", js)
+        # Pane + selectable effort buttons + dual config columns in markup.
+        self.assertIn('id="tab-recall-lab"', html)
+        self.assertIn('value="recall-lab"', html)
+        self.assertIn('id="btn-recall-compare"', html)
+        self.assertIn("recall-effort-btn", html)
+        self.assertIn('id="recall-lab-result-a"', html)
+        self.assertIn('id="recall-lab-result-b"', html)
+
 
 if __name__ == "__main__":
     unittest.main()

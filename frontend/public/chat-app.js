@@ -1207,6 +1207,155 @@ function renderRecallEvidence(container, recallResult) {
   container.appendChild(panel);
 }
 
+// ---- Recall Lab: side-by-side capability comparison ------------------------
+const recallLabEffort = { a: 'medium', b: 'high' };
+
+function bindRecallLab() {
+  for (const which of ['a', 'b']) {
+    const group = document.getElementById('recall-effort-' + which);
+    if (group && !group.dataset.bound) {
+      group.dataset.bound = '1';
+      group.addEventListener('click', (ev) => {
+        const btn = ev.target && ev.target.closest ? ev.target.closest('.recall-effort-btn') : null;
+        if (!btn || !group.contains(btn)) return;
+        recallLabEffort[which] = String(btn.dataset.effort || 'medium');
+        group.querySelectorAll('.recall-effort-btn').forEach((b) => b.classList.toggle('active', b === btn));
+      });
+    }
+  }
+  const btn = document.getElementById('btn-recall-compare');
+  if (btn && !btn.dataset.bound) {
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => { runRecallCompare(); });
+  }
+  const query = document.getElementById('recall-lab-query');
+  if (query && !query.dataset.bound) {
+    query.dataset.bound = '1';
+    query.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') runRecallCompare(); });
+  }
+}
+
+function recallLabConfig(which) {
+  const val = (id) => {
+    const el = document.getElementById(id);
+    return el ? String(el.value || '').trim() : '';
+  };
+  const body = { query: '', effort: recallLabEffort[which] || 'medium' };
+  const k = val('recall-lab-k-' + which);
+  const speaker = val('recall-lab-speaker-' + which);
+  const asOf = val('recall-lab-asof-' + which);
+  if (k) body.k = Number(k);
+  if (speaker) body.speaker = speaker;
+  if (asOf) body.as_of = asOf;
+  return body;
+}
+
+async function runRecallCompare() {
+  const queryEl = document.getElementById('recall-lab-query');
+  const query = queryEl ? String(queryEl.value || '').trim() : '';
+  if (!query) return;
+  const btn = document.getElementById('btn-recall-compare');
+  if (btn) btn.disabled = true;
+
+  const run = async (which) => {
+    const container = document.getElementById('recall-lab-result-' + which);
+    if (container) container.innerHTML = '<div class="recall-lab-empty">running…</div>';
+    const body = recallLabConfig(which);
+    body.query = query;
+    try {
+      const res = await fetch('/api/recall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await parseApiJsonResponse(res, 'recall');
+      renderRecallLabResult(container, data, which);
+    } catch (err) {
+      if (container) {
+        container.innerHTML = '';
+        const e = document.createElement('div');
+        e.className = 'recall-lab-empty';
+        e.textContent = 'error: ' + String((err && err.message) || err || 'recall_failed');
+        container.appendChild(e);
+      }
+    }
+  };
+
+  try {
+    await Promise.all([run('a'), run('b')]);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderRecallLabResult(container, payload, which) {
+  if (!container) return;
+  container.innerHTML = '';
+  payload = payload && typeof payload === 'object' ? payload : {};
+
+  const answerText = String(payload.answer || '').trim();
+  const answer = document.createElement('div');
+  answer.className = 'recall-lab-answer';
+  answer.textContent = answerText || '(no synthesized answer — see evidence below)';
+  container.appendChild(answer);
+
+  const badges = document.createElement('div');
+  badges.className = 'recall-lab-badges';
+  const addBadge = (text, cls) => {
+    if (!text) return;
+    const b = document.createElement('span');
+    b.className = 'recall-lab-badge' + (cls ? ' ' + cls : '');
+    b.textContent = text;
+    badges.appendChild(b);
+  };
+  addBadge('effort: ' + String(recallLabEffort[which] || 'medium'));
+  if (payload.status) addBadge('status: ' + String(payload.status));
+  const tierPath = arrayOrEmpty(payload.tier_path).map((x) => String(x || '').trim()).filter(Boolean);
+  if (tierPath.length) addBadge('tiers: ' + tierPath.join(' → '));
+  if (payload.as_of) addBadge('as_of ≤ ' + String(payload.as_of), 'asof');
+  if (badges.childNodes.length) container.appendChild(badges);
+
+  const evidence = arrayOrEmpty(payload.evidence).filter((x) => x && typeof x === 'object').slice(0, 5);
+  if (evidence.length) {
+    const panel = document.createElement('div');
+    panel.className = 'recall-evidence-panel';
+    const title = document.createElement('div');
+    title.className = 'recall-evidence-title';
+    title.textContent = 'Evidence';
+    panel.appendChild(title);
+    for (const item of evidence) {
+      const row = document.createElement('div');
+      row.className = 'recall-evidence-item';
+      const label = String(item.bead_id || item.id || item.title || 'evidence').trim();
+      const score = Number(item.score || item.confidence || 0);
+      const text = String(item.content_excerpt || item.text || item.summary || item.title || item.reason || '').trim();
+      const store = String(item.source_store || '').trim();
+      row.textContent = label + (store && store !== 'core_memory' ? ' [' + store + ']' : '') + (score ? ' · ' + score.toFixed(2) : '') + (text ? ' — ' + text.slice(0, 180) : '');
+      panel.appendChild(row);
+    }
+    container.appendChild(panel);
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'recall-lab-empty';
+    empty.textContent = 'no evidence returned';
+    container.appendChild(empty);
+  }
+
+  const conflicts = arrayOrEmpty(payload.conflicts).filter((x) => x && typeof x === 'object');
+  for (const c of conflicts) {
+    const div = document.createElement('div');
+    div.className = 'recall-lab-conflict';
+    const subj = String(c.subject || '').trim();
+    const slot = String(c.slot || '').trim();
+    const score = Number(c.epistemic_conflict_score || 0);
+    const prompt = c.review_prompt && typeof c.review_prompt === 'object' ? c.review_prompt : null;
+    const question = prompt ? String(prompt.question || prompt.prompt || '').trim() : '';
+    const head = 'conflict: ' + (subj || '?') + (slot ? ' · ' + slot : '') + (score ? ' (' + score.toFixed(2) + ')' : '');
+    div.textContent = question ? head + ' — ' + question : head;
+    container.appendChild(div);
+  }
+}
+
 async function parseApiJsonResponse(res, label) {
   const status = Number(res && res.status || 0);
   const raw = await res.text();
@@ -4601,6 +4750,7 @@ function restartRefreshTimer(ms) {
 
 function startDemoUi() {
   bindUiEventHandlers();
+  bindRecallLab();
   loadClaimsStateFromUrl();
   loadSeedResetPrefs();
   bindSessionPopoverControls();
