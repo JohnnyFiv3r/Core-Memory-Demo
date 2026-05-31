@@ -4756,15 +4756,23 @@ async function runBenchmark() {
     syncBenchmarkButton(lastBenchmarkSummary);
     let cursor = 0;
     let done = false;
+    // Exponential backoff for transient network errors during polling: 2s, then
+    // doubling to a 30s cap, reset to 2s after any successful poll. Avoids a
+    // hot 2s retry loop hammering the backend through an extended outage.
+    let pollBackoffMs = 2000;
+    const POLL_BACKOFF_MIN_MS = 2000;
+    const POLL_BACKOFF_MAX_MS = 30000;
     while (!done) {
       let jr, job;
       try {
         jr = await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobId) + '?cursor=' + encodeURIComponent(String(cursor)));
         job = await parseApiJsonResponse(jr, 'benchmark-job');
+        pollBackoffMs = POLL_BACKOFF_MIN_MS;
       } catch (pollErr) {
         const pollErrMsg = String((pollErr && pollErr.message) || pollErr || '');
         if (/network_changed|network_io_suspended|failed to fetch|networkerror/i.test(pollErrMsg)) {
-          await new Promise(r => setTimeout(r, 2000));
+          await new Promise(r => setTimeout(r, pollBackoffMs));
+          pollBackoffMs = Math.min(POLL_BACKOFF_MAX_MS, pollBackoffMs * 2);
           continue;
         }
         throw pollErr;
