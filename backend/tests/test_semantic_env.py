@@ -1,12 +1,13 @@
 import os
 import sys
+import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.core.semantic_env import configure_shared_semantic_backend_env
+from app.core.semantic_env import configure_shared_semantic_backend_env, normalize_embedded_qdrant_summary
 
 
 class TestSemanticEnv(unittest.TestCase):
@@ -15,13 +16,17 @@ class TestSemanticEnv(unittest.TestCase):
             out = configure_shared_semantic_backend_env()
             self.assertEqual("qdrant", os.environ.get("CORE_MEMORY_VECTOR_BACKEND"))
             self.assertEqual("kuzu", os.environ.get("CORE_MEMORY_GRAPH_BACKEND"))
+            self.assertEqual("var/core-memory/.beads/qdrant", os.environ.get("CORE_MEMORY_QDRANT_PATH"))
+            self.assertEqual("var/core-memory/.beads/kuzu", os.environ.get("CORE_MEMORY_KUZU_PATH"))
             self.assertEqual("required", os.environ.get("CORE_MEMORY_CANONICAL_SEMANTIC_MODE"))
             self.assertEqual("off", os.environ.get("CORE_MEMORY_SEMANTIC_AUTODRAIN"))
             self.assertEqual(
                 {
                     "CORE_MEMORY_VECTOR_BACKEND": "qdrant",
                     "CORE_MEMORY_GRAPH_BACKEND": "kuzu",
+                    "CORE_MEMORY_QDRANT_PATH": "var/core-memory/.beads/qdrant",
                     "CORE_MEMORY_CANONICAL_SEMANTIC_MODE": "required",
+                    "CORE_MEMORY_KUZU_PATH": "var/core-memory/.beads/kuzu",
                     "CORE_MEMORY_SEMANTIC_AUTODRAIN": "off",
                 },
                 out.get("changed"),
@@ -76,6 +81,26 @@ class TestSemanticEnv(unittest.TestCase):
             configure_shared_semantic_backend_env()
             self.assertIsNone(os.environ.get("CORE_MEMORY_PG_DSN"))
             self.assertEqual("qdrant", os.environ.get("CORE_MEMORY_VECTOR_BACKEND"))
+
+    def test_embedded_qdrant_summary_uses_path_not_localhost_probe(self):
+        with self.subTest("path mode"):
+            with tempfile.TemporaryDirectory() as tmp:
+                with patch.dict(os.environ, {"CORE_MEMORY_VECTOR_BACKEND": "qdrant"}, clear=True):
+                    summary = normalize_embedded_qdrant_summary(
+                        {
+                            "backend": "qdrant",
+                            "rows_count": 3,
+                            "connectivity_checked": True,
+                            "connectivity_ok": False,
+                            "connectivity_error": "qdrant_unreachable:<urlopen error [Errno 111] Connection refused>",
+                            "usable_backend": False,
+                        },
+                        root=Path(tmp) / "core-memory",
+                    )
+                self.assertTrue(summary["connectivity_ok"])
+                self.assertEqual("", summary["connectivity_error"])
+                self.assertTrue(summary["usable_backend"])
+                self.assertEqual("embedded_qdrant_path", summary["deployment_profile"])
 
 
 if __name__ == "__main__":
