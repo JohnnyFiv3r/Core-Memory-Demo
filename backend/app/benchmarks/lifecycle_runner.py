@@ -12,11 +12,13 @@ from app.benchmarks.contracts import (
     BenchmarkQA,
     BenchmarkShortcutFlags,
     BenchmarkTurn,
+    assert_faithful_shortcuts,
     assert_lifecycle_faithful_mode,
 )
 from app.benchmarks.locomo_answer import generate_locomo_answer
 from app.benchmarks.locomo_loader import locomo_samples_to_benchmark_conversations
-from app.benchmarks.locomo_scoring import compute_evidence_recall, score_answer
+from app.benchmarks.locomo_scoring import compute_evidence_recall
+from app.benchmarks import locomo_faithful
 from core_memory.integrations.api import hydrate_bead_sources
 from app.benchmarks.locomo_turn_crawler import locomo_crawler_callable
 
@@ -274,24 +276,58 @@ def _hydrate_retrieval_context(*, root: str | Path, rows: list[dict[str, Any]]) 
     return bead_lookup, turn_lookup, dict(hydrated or {})
 
 
-def _score_effort_payload(*, root: str | Path, qa: BenchmarkQA, payload: dict[str, Any], latency_ms: float) -> dict[str, Any]:
+def _score_effort_payload(
+    *,
+    root: str | Path,
+    qa: BenchmarkQA,
+    payload: dict[str, Any],
+    latency_ms: float,
+    bead_to_dias: dict[str, list[str]] | None = None,
+) -> dict[str, Any]:
     result_rows = _result_rows(payload)
     bead_lookup, turn_lookup, hydration = _hydrate_retrieval_context(root=root, rows=result_rows)
     retrieved = [_normalize_retrieved_row(row, rank=idx, bead_lookup=bead_lookup, turn_lookup=turn_lookup) for idx, row in enumerate(result_rows, start=1)]
+    # ACCURACY FIX: the retrieval payload does not reliably surface a per-turn
+    # dia_id, so a row's dia_ids can come back empty and silently zero out
+    # evidence recall. Backfill each row's dia_ids from the authoritative
+    # bead_id -> dia_id map built from the bead index after ingestion. The flat,
+    # rank-ordered dia list is then scored with the upstream-faithful recall.
+    bead_to_dias = bead_to_dias or {}
+    for row in retrieved:
+        if not row.get("dia_ids"):
+            mapped = list(bead_to_dias.get(str(row.get("bead_id") or ""), []))
+            if mapped:
+                row["dia_ids"] = mapped
     prediction = _result_prediction(payload)
     category_raw = (qa.metadata or {}).get("category") or qa.category or 0
     try:
         category = int(category_raw or 0)
     except Exception:
         category = 0
-    answer_f1 = score_answer(category=category, prediction=prediction, answer=str(qa.expected_answer or "")) if qa.expected_answer is not None else 0.0
-    evidence = compute_evidence_recall(gold_evidence=list(qa.gold_evidence or []), retrieved=retrieved, ks=[1, 3, 5, 8, 10])
+    excluded = category not in locomo_faithful.OFFICIAL_CATEGORIES
+    answer_f1 = (
+        locomo_faithful.score_answer(category=category, prediction=prediction, answer=str(qa.expected_answer or ""))
+        if qa.expected_answer is not None
+        else 0.0
+    )
+    # Primary (published-comparable) recall: flat dia_id space, upstream semantics.
+    ranked_dias = locomo_faithful.ranked_dia_ids_for_rows(retrieved, bead_to_dias)
+    evidence = locomo_faithful.compute_evidence_recall(
+        gold_evidence=list(qa.gold_evidence or []),
+        retrieved=ranked_dias,
+        ks=[1, 3, 5, 8, 10],
+    )
+    # Secondary (legacy) row-based recall, retained for auditing/UI continuity.
+    evidence_rowwise = compute_evidence_recall(gold_evidence=list(qa.gold_evidence or []), retrieved=retrieved, ks=[1, 3, 5, 8, 10])
     return {
         "prediction": prediction,
         "answer_f1": float(answer_f1),
+        "excluded": bool(excluded),
         "retrieved": retrieved,
         "retrieved_count": len(retrieved),
+        "retrieved_dia_ids": ranked_dias,
         "evidence_recall": evidence,
+        "evidence_recall_rowwise": evidence_rowwise,
         "retrieval_hydration": hydration,
         "latency_ms": float(latency_ms),
     }
@@ -313,11 +349,18 @@ def aggregate_lifecycle_effort_scores(cases: list[dict[str, Any]]) -> dict[str, 
         rows = [dict(((case.get("efforts") or {}).get(effort) or {})) for case in cases]
         rows = [row for row in rows if row]
         latencies = [float(row.get("latency_ms") or 0.0) for row in rows]
-        answer_scores = [float(row.get("answer_f1") or 0.0) for row in rows]
-        recall5 = [float((row.get("evidence_recall") or {}).get("recall@5") or 0.0) for row in rows]
-        hit_any = [1.0 if bool((row.get("evidence_recall") or {}).get("hit_any")) else 0.0 for row in rows]
+        # answer F1 excludes officially-excluded categories (e.g. cat 5); evidence
+        # recall excludes vacuous (no-gold-evidence) cases — matching
+        # locomo_faithful.aggregate_case_scores so a QA set with unannotated
+        # evidence can't inflate evidence_recall@5 / hit_any in the summary.
+        scored_rows = [row for row in rows if not row.get("excluded")]
+        ev_rows = [row for row in rows if not (row.get("evidence_recall") or {}).get("vacuous")]
+        answer_scores = [float(row.get("answer_f1") or 0.0) for row in scored_rows]
+        recall5 = [float((row.get("evidence_recall") or {}).get("recall@5") or 0.0) for row in ev_rows]
+        hit_any = [1.0 if bool((row.get("evidence_recall") or {}).get("hit_any")) else 0.0 for row in ev_rows]
         by_effort[effort] = {
             "qa_count": len(rows),
+            "scored_qa_count": len(ev_rows),
             "answer_f1_mean": round(sum(answer_scores) / len(answer_scores), 4) if answer_scores else 0.0,
             "evidence_recall@5": round(sum(recall5) / len(recall5), 4) if recall5 else 0.0,
             "hit_any": round(sum(hit_any) / len(hit_any), 4) if hit_any else 0.0,
@@ -623,6 +666,7 @@ def run_qa_efforts(
     k: int | None = None,
     answer_mode: str = "none",
     generator_model: str | None = None,
+    bead_to_dias: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
     """Run every configured retrieval effort for one QA case in order."""
 
@@ -639,7 +683,7 @@ def run_qa_efforts(
         raw = recall_fn(dict(req), effort=effort, root=str(root), explain=True, include_raw=True)
         payload = _as_dict(raw)
         latency_ms = round((time.perf_counter() - t0) * 1000.0, 3)
-        score_meta = _score_effort_payload(root=root, qa=qa, payload=payload, latency_ms=latency_ms)
+        score_meta = _score_effort_payload(root=root, qa=qa, payload=payload, latency_ms=latency_ms, bead_to_dias=bead_to_dias)
         warnings = list(payload.get("warnings") or [])
         answer_payload: dict[str, Any] = {}
         # Lifecycle recall returns evidence but does not synthesize an answer.
@@ -670,7 +714,7 @@ def run_qa_efforts(
                 except Exception:
                     category = 0
                 score_meta["prediction"] = prediction
-                score_meta["answer_f1"] = float(score_answer(category=category, prediction=prediction, answer=str(qa.expected_answer or ""))) if qa.expected_answer is not None else 0.0
+                score_meta["answer_f1"] = float(locomo_faithful.score_answer(category=category, prediction=prediction, answer=str(qa.expected_answer or ""))) if qa.expected_answer is not None else 0.0
                 payload = {**payload, "answer": prediction, "answer_payload": answer_payload}
             except Exception as exc:
                 warnings.append(f"answer_generation_failed:{type(exc).__name__}:{exc}")
@@ -754,6 +798,36 @@ def _isolated_qa_root(*, root: str | Path, conversation: BenchmarkConversation, 
     return out
 
 
+def _qa_live_summary(qa: BenchmarkQA, qa_result: dict[str, Any]) -> dict[str, Any]:
+    """Compact per-QA payload for live UI: question, generated answer, evidence.
+
+    Lets the demo echo each LoCoMo QA into the chat and surface the beads it
+    retrieved without waiting for the final report.
+    """
+    high = dict((dict((qa_result or {}).get("efforts") or {}).get("high") or {}))
+    high_result = dict(high.get("result") or {})
+    answer = str(high_result.get("answer") or high.get("prediction") or "").strip()
+    retrieved = list(high.get("retrieved") or [])
+    evidence = [
+        {
+            "bead_id": str(r.get("bead_id") or ""),
+            "dia_ids": list(r.get("dia_ids") or []),
+            "snippet": str(r.get("snippet") or r.get("text") or "")[:180],
+        }
+        for r in retrieved[:5]
+        if isinstance(r, dict) and str(r.get("bead_id") or "")
+    ]
+    return {
+        "question": str(qa.question or ""),
+        "answer": answer,
+        "answer_f1": float(high.get("answer_f1") or 0.0),
+        "category": str(qa.category or ""),
+        "evidence": evidence,
+        "evidence_bead_ids": [e["bead_id"] for e in evidence],
+        "retrieved_dia_ids": list(high.get("retrieved_dia_ids") or []),
+    }
+
+
 def _emit_progress(progress: Any | None, completed: int, total: int, qa: BenchmarkQA | None, result: dict[str, Any]) -> None:
     if progress is None:
         return
@@ -828,6 +902,16 @@ def run_lifecycle_conversation(
     except Exception as exc:
         semantic_build = {"ok": False, "error": str(exc)}
 
+    # Build the authoritative bead_id -> dia_id map AFTER replay + pre-QA flush so
+    # it reflects the post-compaction corpus that recall actually retrieves from.
+    # This is what makes evidence recall trustworthy (see locomo_faithful). The
+    # map is built once on the base root; isolated QA roots are copytree clones
+    # that preserve bead IDs, so the same map applies to them.
+    try:
+        bead_to_dias = locomo_faithful.build_bead_to_dias(root, conversation)
+    except Exception:
+        bead_to_dias = {}
+
     qa_session_id = conversation.session_id.replace(":replay", ":qa") if conversation.session_id.endswith(":replay") else f"{conversation.session_id}:qa"
     qa_results: list[dict[str, Any]] = []
     total_for_progress = int(progress_total if progress_total is not None else len(conversation.qa_cases))
@@ -847,7 +931,7 @@ def run_lifecycle_conversation(
                 "corpus_before_qa": corpus_snapshot(isolated_path),
             }
 
-        qa_result = run_qa_efforts(root=qa_root, conversation=conversation, qa=qa, recall_fn=recall_fn, k=retrieval_k, answer_mode=answer_mode, generator_model=generator_model)
+        qa_result = run_qa_efforts(root=qa_root, conversation=conversation, qa=qa, recall_fn=recall_fn, k=retrieval_k, answer_mode=answer_mode, generator_model=generator_model, bead_to_dias=bead_to_dias)
         if write_qa_beads:
             qa_result.update(write_qa_turn(root=qa_root, conversation=conversation, qa=qa, qa_result=qa_result, qa_session_id=qa_session_id_for_case, process_turn_finalized_fn=process_turn_finalized_fn))
         else:
@@ -858,7 +942,13 @@ def run_lifecycle_conversation(
         qa_result["qa_session_mode"] = qa_session_mode_name
         qa_result["isolated_qa"] = isolated_meta
         qa_results.append(qa_result)
-        _emit_progress(progress, offset_for_progress + idx, total_for_progress, qa, {"status": "ok", "phase": "lifecycle_qa", "conversation_id": conversation.conversation_id})
+        _emit_progress(
+            progress,
+            offset_for_progress + idx,
+            total_for_progress,
+            qa,
+            {"status": "ok", "phase": "lifecycle_qa", "conversation_id": conversation.conversation_id, **_qa_live_summary(qa, qa_result)},
+        )
 
     scores = aggregate_lifecycle_effort_scores(qa_results)
     corpus_after_qa = corpus_snapshot(root)
@@ -884,6 +974,7 @@ def run_lifecycle_conversation(
             "pre_qa_flush_ran": bool(pre_qa_flush.get("ran")),
             "qa_session_mode": qa_session_mode_name,
             "qa_cases": len(conversation.qa_cases),
+            "dia_bead_map_size": len(bead_to_dias),
             "retrieval_efforts_per_qa": list(RETRIEVAL_EFFORT_ORDER),
         },
         "shortcut_guards": flags.to_dict(),
@@ -1019,6 +1110,9 @@ def run_locomo_lifecycle_suite(
 
     flags = shortcut_flags or BenchmarkShortcutFlags()
     assert_lifecycle_faithful_mode(dataset_mode=dataset_mode, shortcut_flags=flags)
+    # Hard, mode-independent contamination gate (upstream parity): an official
+    # faithful run can never silently carry a shortcut flag.
+    assert_faithful_shortcuts(flags)
 
     selected_case_ids = {_case_identity(row) for row in list(qa_cases or []) if _case_identity(row)}
     conversations = [

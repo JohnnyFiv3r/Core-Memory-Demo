@@ -72,6 +72,25 @@ class TestRecallApiContract(unittest.TestCase):
         self.assertEqual(400, res.status_code)
         self.assertIn("recall effort", res.json().get("error", ""))
 
+    def test_recall_endpoint_forwards_as_of(self):
+        with patch("app.routes.demo.run_recall", return_value={"ok": True, "status": "answered"}) as recall:
+            res = self._client().post(
+                "/api/recall",
+                json={"query": "what did I say", "as_of": "2026-01-01T00:00:00Z"},
+            )
+        self.assertEqual(200, res.status_code)
+        _, kwargs = recall.call_args
+        self.assertEqual("2026-01-01T00:00:00Z", kwargs["as_of"])
+
+    def test_recall_endpoint_maps_invalid_as_of_to_400(self):
+        with patch(
+            "app.routes.demo.run_recall",
+            side_effect=ValueError("as_of must be a valid ISO 8601 timestamp, got 'nope'"),
+        ):
+            res = self._client().post("/api/recall", json={"query": "hello", "as_of": "nope"})
+        self.assertEqual(400, res.status_code)
+        self.assertIn("as_of", res.json().get("error", ""))
+
 
 class TestRecallRuntimeContract(unittest.TestCase):
     def test_recall_payload_defaults_and_raw_gating(self):
@@ -98,6 +117,36 @@ class TestRecallRuntimeContract(unittest.TestCase):
         self.assertIn("raw", raw_payload)
         self.assertEqual("bead-1", raw_payload["raw"]["results"][0]["bead_id"])
 
+    def test_recall_payload_surfaces_conflicts_and_as_of(self):
+        from app.core.runtime import _recall_result_to_payload
+        from core_memory.retrieval.contracts import ConflictItem, RecallResult
+
+        conflict = ConflictItem(
+            subject="db",
+            slot="host",
+            claim_a_id="claim-a",
+            claim_b_id="claim-b",
+            epistemic_conflict_score=0.8,
+        )
+        result = RecallResult(
+            status="answered",
+            conflicts=[conflict],
+            as_of="2026-01-01T00:00:00Z",
+            metadata={},
+        )
+        payload = _recall_result_to_payload(result, include_raw=False)
+        # conflicts is always a list in the public contract; as_of is carried through.
+        self.assertIsInstance(payload["conflicts"], list)
+        self.assertEqual("2026-01-01T00:00:00Z", payload["as_of"])
+
+    def test_recall_payload_defaults_as_of_and_conflicts_when_absent(self):
+        from app.core.runtime import _recall_result_to_payload
+        from core_memory.retrieval.contracts import RecallResult
+
+        payload = _recall_result_to_payload(RecallResult(status="empty"), include_raw=False)
+        self.assertIsInstance(payload["conflicts"], list)
+        self.assertIn("as_of", payload)
+
     def test_frontend_renders_recall_result_content_excerpt(self):
         root = Path(__file__).resolve().parents[2]
         js = (root / "frontend" / "public" / "chat-app.js").read_text()
@@ -105,6 +154,50 @@ class TestRecallRuntimeContract(unittest.TestCase):
         self.assertIn("function renderRecallEvidence", js)
         self.assertIn("item.content_excerpt", js)
         self.assertIn("recall-evidence-panel", js)
+
+    def test_frontend_recall_lab_capability_compare_present(self):
+        root = Path(__file__).resolve().parents[2]
+        js = (root / "frontend" / "public" / "chat-app.js").read_text()
+        html = (root / "frontend" / "public" / "chat.html").read_text()
+        # Side-by-side capability compare UX wired to POST /api/recall.
+        self.assertIn("function runRecallCompare", js)
+        self.assertIn("function renderRecallLabResult", js)
+        self.assertIn("'/api/recall'", js)
+        self.assertIn("bindRecallLab()", js)
+        # Surfaces the new recall capabilities (temporal as_of + conflicts).
+        self.assertIn("body.as_of", js)
+        self.assertIn("payload.conflicts", js)
+        # Pane + selectable effort buttons + dual config columns in markup.
+        self.assertIn('id="tab-recall-lab"', html)
+        self.assertIn('data-tab="recall-lab"', html)
+        self.assertIn('id="btn-recall-compare"', html)
+        self.assertIn("recall-effort-btn", html)
+        self.assertIn('id="recall-lab-result-a"', html)
+        self.assertIn('id="recall-lab-result-b"', html)
+
+    def test_frontend_uses_tab_buttons_not_dropdown(self):
+        root = Path(__file__).resolve().parents[2]
+        html = (root / "frontend" / "public" / "chat.html").read_text()
+        js = (root / "frontend" / "public" / "chat-app.js").read_text()
+        # Inspector navigation is real tab buttons, not the old <select> dropdown.
+        self.assertIn('id="tab-row"', html)
+        self.assertIn('class="tab-btn', html)
+        self.assertIn('role="tablist"', html)
+        self.assertNotIn('id="tab-selector"', html)
+        self.assertNotIn('id="tab-selector"', js)
+
+    def test_frontend_streams_locomo_qa_into_chat_and_beads(self):
+        root = Path(__file__).resolve().parents[2]
+        js = (root / "frontend" / "public" / "chat-app.js").read_text()
+        # LoCoMo QA cases echo into chat; the live run's beads load into the pane.
+        self.assertIn("function echoBenchmarkQaEvent", js)
+        self.assertIn("function refreshBenchmarkRunBeads", js)
+        self.assertIn("/api/demo/benchmark/run-state", js)
+        self.assertIn("echoedBenchmarkQaIds", js)
+        # On hosted (web/worker split, no shared FS) the live beads pane is built
+        # from the event stream rather than the worker's filesystem.
+        self.assertIn("function accumulateBenchmarkEvidence", js)
+        self.assertIn("benchmarkRunBeads", js)
 
 
 if __name__ == "__main__":

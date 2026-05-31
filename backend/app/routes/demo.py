@@ -35,6 +35,7 @@ from app.core.runtime import (
     get_last_benchmark_snapshot,
     inspect_bead_hydration_payload,
     inspect_bead_payload,
+    inspect_benchmark_run_state_payload,
     inspect_claim_slot_payload,
     inspect_state_payload,
     inspect_turns_payload,
@@ -820,6 +821,16 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         # locomo_lifecycle/lifecycle_qa with stale "starting".
         _hb['stage'] = stage
         _hb['message'] = message
+        # Per-QA live payload (present on the post-QA "ok" event): the question,
+        # the generated answer, and the beads it retrieved. Lets the frontend
+        # echo each LoCoMo QA into the chat and surface its beads live.
+        question = str((case or {}).get('question') or (result or {}).get('question') or '')
+        answer = str((result or {}).get('answer') or '')
+        evidence_bead_ids = [str(b) for b in ((result or {}).get('evidence_bead_ids') or []) if str(b)]
+        # Full evidence rows (bead_id, dia_ids, snippet) ride the event so the
+        # live Beads pane can be built from the event stream on hosted, where the
+        # web container can't read the worker's isolated filesystem.
+        evidence = [r for r in ((result or {}).get('evidence') or []) if isinstance(r, dict)]
         _benchmark_event(
             current,
             stage,
@@ -835,6 +846,11 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             replay_turn_completed=replay_done,
             replay_turn_total=replay_total,
             turn_id=str((result or {}).get('turn_id') or ''),
+            question=question or None,
+            answer=answer or None,
+            answer_f1=(float((result or {}).get('answer_f1') or 0.0) if status == 'ok' else None),
+            evidence_bead_ids=evidence_bead_ids or None,
+            evidence=evidence or None,
         )
 
     try:
@@ -940,6 +956,19 @@ def demo_entities():
     }
 
 
+@router.get('/demo/benchmark/run-state')
+def demo_benchmark_run_state():
+    """Beads/associations for the most recent benchmark run's isolated root.
+
+    The frontend reads this while a LoCoMo run is live so its beads surface in
+    the beads pane without mixing into the live demo session.
+    """
+    try:
+        return inspect_benchmark_run_state_payload()
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'active_run': False, 'error': str(exc), 'beads': [], 'associations': []}, status_code=200)
+
+
 @router.get('/demo/runtime')
 def demo_runtime():
     state = inspect_state_payload()
@@ -1041,6 +1070,7 @@ async def recall_endpoint(request: Request):
         return JSONResponse({'ok': False, 'error': 'missing_query'}, status_code=400)
     effort = str((body or {}).get('effort') or 'medium').strip().lower() or 'medium'
     speaker = str((body or {}).get('speaker') or '').strip() or None
+    as_of = str((body or {}).get('as_of') or '').strip() or None
     include_raw = bool((body or {}).get('include_raw', False))
     k_raw = (body or {}).get('k')
     k: int | None = None
@@ -1050,7 +1080,7 @@ async def recall_endpoint(request: Request):
         except Exception:
             return JSONResponse({'ok': False, 'error': 'invalid_k'}, status_code=400)
     try:
-        out = run_recall(query, effort=effort, speaker=speaker, k=k, include_raw=include_raw)
+        out = run_recall(query, effort=effort, speaker=speaker, k=k, as_of=as_of, include_raw=include_raw)
         status = 200 if bool(out.get('ok', True)) else 400
         return JSONResponse(out, status_code=status)
     except ValueError as exc:
@@ -1085,6 +1115,48 @@ async def flush(request: Request):
         return _http_exc_response(exc)
     except Exception as exc:
         return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+
+
+@router.post('/session/capture')
+async def session_capture(request: Request):
+    """End-of-session safety-net sync.
+
+    Replays a full conversation transcript through Core Memory's canonical
+    `capture_session` path (group ingest + end-of-session flush) so any durable
+    state that per-turn capture missed is recovered losslessly. Accepts inline
+    `turns`/`messages`; binds the demo memory root and live session id.
+    """
+    body = await request.json() if request.headers.get('content-type', '').startswith('application/json') else {}
+    turns = (body or {}).get('turns')
+    messages = (body or {}).get('messages')
+    if not isinstance(turns, list) and not isinstance(messages, list):
+        return JSONResponse({'ok': False, 'error': 'turns_or_messages_required'}, status_code=400)
+
+    payload: dict[str, Any] = {'root': settings.core_memory_root}
+    if isinstance(turns, list):
+        payload['turns'] = turns
+    if isinstance(messages, list):
+        payload['messages'] = messages
+    session_id = str((body or {}).get('session_id') or '').strip()
+    if session_id:
+        payload['session_id'] = session_id
+    source_system = str((body or {}).get('source_system') or '').strip()
+    if source_system:
+        payload['source_system'] = source_system
+
+    try:
+        from core_memory.integrations.mcp.tools.capture_session import capture_session_handler
+    except Exception as exc:  # pragma: no cover - depends on installed Core Memory
+        return JSONResponse({'ok': False, 'error': f'capture_session_unavailable:{exc}'}, status_code=503)
+
+    try:
+        with heavy_operation_slot(request, slot_key=f"capture:{request.client.host if request.client else 'unknown'}"):
+            out = capture_session_handler(payload)
+    except HTTPException as exc:
+        return _http_exc_response(exc)
+    except Exception as exc:
+        return JSONResponse({'ok': False, 'error': str(exc)}, status_code=500)
+    return JSONResponse(dict(out or {}), status_code=200 if bool((out or {}).get('ok')) else 400)
 
 
 @router.post('/session/reset')

@@ -37,6 +37,18 @@ services:
         value: heuristic
       - key: CORE_MEMORY_CLAIM_RESOLUTION
         value: "1"
+      # Myelination retrieval-feedback learning loop (v1.1.1): applies the
+      # precomputed bonus manifest during recall. Enabled for the hosted demo.
+      - key: CORE_MEMORY_MYELINATION_ENABLED
+        value: "1"
+      # Multi-store recall fan-out (v1.1.1) is opt-in: recall fans out to these
+      # external stores only when the corresponding var is set. Left unset here.
+      - key: SATORID_RAGIE_API_KEY
+        sync: false
+      - key: SATORID_PIPEHOUSE_URL
+        sync: false
+      - key: SATORID_STORE_WEIGHTS
+        sync: false
       - key: DEMO_CONTEXT_BUDGET
         value: "128000"
       - key: OPENAI_API_KEY
@@ -80,6 +92,9 @@ services:
       - key: CORE_MEMORY_CLAIM_EXTRACTION_MODE
         value: heuristic
       - key: CORE_MEMORY_CLAIM_RESOLUTION
+        value: "1"
+      # Keep the myelination-update async job aligned with the web service.
+      - key: CORE_MEMORY_MYELINATION_ENABLED
         value: "1"
       - key: OPENAI_API_KEY
         sync: false

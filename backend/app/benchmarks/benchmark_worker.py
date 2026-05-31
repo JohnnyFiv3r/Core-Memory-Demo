@@ -93,6 +93,23 @@ def run_once() -> int:
                     'replay_turn_total': replay_total,
                     'turn_id': str(result_d.get('turn_id') or ''),
                 }
+                # Mirror the per-QA live payload onto the persisted event so the
+                # hosted (queued-worker) LoCoMo path streams the same question +
+                # generated answer into the chat as the in-process path does.
+                question = str((case or {}).get('question') or result_d.get('question') or '')
+                answer = str(result_d.get('answer') or '')
+                evidence_bead_ids = [str(b) for b in (result_d.get('evidence_bead_ids') or []) if str(b)]
+                evidence = [r for r in (result_d.get('evidence') or []) if isinstance(r, dict)]
+                if question:
+                    event['question'] = question
+                if answer:
+                    event['answer'] = answer
+                if str(result_d.get('status') or '') == 'ok':
+                    event['answer_f1'] = float(result_d.get('answer_f1') or 0.0)
+                if evidence_bead_ids:
+                    event['evidence_bead_ids'] = evidence_bead_ids
+                if evidence:
+                    event['evidence'] = evidence
                 benchmark_store.update_job_progress(
                     job_id,
                     status='running',

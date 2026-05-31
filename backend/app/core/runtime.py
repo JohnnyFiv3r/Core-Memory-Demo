@@ -1406,6 +1406,61 @@ def inspect_state_payload(*, as_of: str | None = None) -> dict[str, Any]:
     return out
 
 
+def _newest_benchmark_run_base() -> Path | None:
+    """Return the most recently written ``<run_id>/base`` dir under the benchmark
+    root, or None if no run has produced a bead store yet."""
+    bench_root = Path(settings.core_memory_demo_benchmark_root)
+    if not bench_root.exists():
+        return None
+    candidates: list[tuple[float, Path]] = []
+    for index_path in bench_root.glob("*/base/.beads/index.json"):
+        try:
+            candidates.append((index_path.stat().st_mtime, index_path.parent.parent))
+        except OSError:
+            continue
+    if not candidates:
+        return None
+    return max(candidates, key=lambda pair: pair[0])[1]
+
+
+def inspect_benchmark_run_state_payload() -> dict[str, Any]:
+    """Beads/associations for the most recent benchmark run's base root.
+
+    Backs the live "view of the isolated run" — the beads pane reads this while a
+    LoCoMo run is active so its replayed/QA beads are visible without polluting
+    the live demo session. Shape mirrors ``inspect_state_payload`` (beads,
+    associations, stats) so the frontend can reuse the same renderers.
+    """
+    base = _newest_benchmark_run_base()
+    if base is None:
+        return {"ok": True, "active_run": False, "run_id": "", "beads": [], "associations": [], "stats": {"total_beads": 0}}
+
+    state = inspect_state(
+        root=str(base),
+        session_id=None,
+        as_of=None,
+        limit_beads=300,
+        limit_associations=300,
+        limit_flushes=20,
+        limit_merge_proposals=40,
+    )
+    mem = dict((state or {}).get("memory") or {})
+    beads = list(mem.get("beads") or [])
+    associations = list(mem.get("associations") or [])
+    return {
+        "ok": True,
+        "active_run": True,
+        "run_id": base.parent.name,
+        "source": "benchmark_run",
+        "beads": beads,
+        "associations": associations,
+        "stats": {
+            "total_beads": len(beads),
+            "total_associations": len(associations),
+        },
+    }
+
+
 def _token_estimator_model_name(model_id: str | None) -> str:
     mid = str(model_id or "").strip()
     if ":" in mid:
@@ -2206,11 +2261,15 @@ def _ensure_public_recall_shape(payload: dict[str, Any], *, include_raw: bool = 
     out.setdefault("contract", "recall_result")
     out.setdefault("schema_version", "recall_result.v1")
     out.setdefault("status", "empty")
-    for key in ("evidence", "resolved_goals", "sources", "tier_path", "steps", "warnings"):
+    for key in ("evidence", "resolved_goals", "sources", "tier_path", "steps", "warnings", "conflicts"):
         if not isinstance(out.get(key), list):
             out[key] = []
     if not isinstance(out.get("claim_slots"), dict):
         out["claim_slots"] = {}
+    # Temporal recall: surface the as_of the result was filtered against (Core
+    # Memory sets RecallResult.as_of when an as_of filter was applied). Keep the
+    # key present-and-null so the contract is stable for clients that read it.
+    out.setdefault("as_of", None)
     if not isinstance(out.get("planning"), dict):
         out["planning"] = {}
     out.setdefault("metadata", {})
@@ -2237,18 +2296,24 @@ def run_recall(
     effort: str = "medium",
     speaker: str | None = None,
     k: int | None = None,
+    as_of: str | None = None,
     include_raw: bool = False,
 ) -> dict[str, Any]:
     q = str(query or "").strip()
     if not q:
         return {"ok": False, "error": "missing_query"}
     selected_effort = validate_recall_effort(effort)
+    # Normalise empty/"none" to no-filter; pass real values through. Core Memory's
+    # recall(as_of=...) validates ISO 8601 and raises ValueError on a bad value,
+    # which the route maps to HTTP 400 rather than a 500 from deep in retrieval.
+    as_of_n = _normalize_as_of(as_of)
     with semantic_mode(_chat_semantic_mode_name()):
         result = core_recall(
             q,
             effort=selected_effort,
             speaker=speaker,
             k=k,
+            as_of=as_of_n,
             root=settings.core_memory_root,
             include_raw=include_raw,
         )

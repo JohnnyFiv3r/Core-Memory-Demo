@@ -422,6 +422,50 @@ class TestLifecycleRunner(unittest.TestCase):
             events,
         )
 
+    def test_lifecycle_conversation_recovers_recall_from_bead_dia_map(self):
+        # Regression: retrieval rows that carry only a bead_id (no surfaced
+        # dia_id) used to score evidence recall as zero. The bead_id -> dia_id
+        # map built from the index after replay must recover recall.
+        import json
+
+        def fake_process_turn_finalized(**kwargs):
+            root = Path(kwargs["root"])
+            beads_dir = root / ".beads"
+            beads_dir.mkdir(parents=True, exist_ok=True)
+            idx_path = beads_dir / "index.json"
+            idx = json.loads(idx_path.read_text()) if idx_path.exists() else {"beads": {}}
+            turn_id = kwargs["turn_id"]
+            dia = str((kwargs.get("metadata") or {}).get("locomo_dia_id") or "")
+            bead_id = f"bead-{dia.replace(':', '-')}"
+            idx["beads"][bead_id] = {
+                "id": bead_id,
+                "session_id": kwargs["session_id"],
+                # Demo convention: source_turn_ids carries [turn_id, dia_id].
+                "source_turn_ids": [turn_id, dia],
+            }
+            idx_path.write_text(json.dumps(idx), encoding="utf-8")
+            return {"ok": True}
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            # Rows expose ONLY a bead_id — the historical failure mode.
+            return {"answer": f"answer-{effort}", "warnings": [], "raw": {"results": [{"bead_id": "bead-D1-1"}]}}
+
+        with tempfile.TemporaryDirectory() as td:
+            out = run_lifecycle_conversation(
+                root=td,
+                conversation=_conversation(),  # gold_evidence=["D1:1"]
+                process_turn_finalized_fn=fake_process_turn_finalized,
+                process_flush_fn=lambda **kwargs: {"ok": True},
+                run_async_jobs_fn=lambda **kwargs: {"ok": True},
+                recall_fn=fake_recall,
+            )
+
+        self.assertGreaterEqual(out["lifecycle"]["dia_bead_map_size"], 1)
+        high = out["cases"][0]["efforts"]["high"]
+        self.assertEqual(["D1:1"], high["retrieved_dia_ids"])
+        self.assertEqual(1.0, high["evidence_recall"]["recall@5"])
+        self.assertTrue(high["evidence_recall"]["hit_any"])
+
     def test_lifecycle_conversation_isolated_qa_clones_post_flush_root_per_case(self):
         events = []
 
@@ -524,10 +568,60 @@ class TestLifecycleRunner(unittest.TestCase):
             events,
         )
         self.assertIn((0, 1, "locomo:conv-1:q0001", "retrieving", {"status": "retrieving", "phase": "lifecycle_qa", "conversation_id": "locomo:conv-1"}), progress_events)
-        self.assertIn((1, 1, "locomo:conv-1:q0001", "ok", {"status": "ok", "phase": "lifecycle_qa", "conversation_id": "locomo:conv-1"}), progress_events)
+        # The post-QA "ok" event carries the live summary (question + generated
+        # answer) so the demo can echo each QA into the chat as it runs.
+        ok_events = [e for e in progress_events if e[0] == 1 and e[3] == "ok"]
+        self.assertTrue(ok_events)
+        ok_payload = ok_events[-1][4]
+        self.assertEqual("lifecycle_qa", ok_payload["phase"])
+        self.assertEqual("selected?", ok_payload["question"])
+        self.assertEqual("answer-high", ok_payload["answer"])
+        self.assertIn("evidence_bead_ids", ok_payload)
         replay_progress = [evt for evt in progress_events if (evt[4] or {}).get("phase") == "locomo_lifecycle"]
         self.assertTrue(replay_progress)
         self.assertEqual(1, replay_progress[-1][4].get("replay_turn_completed"))
+
+
+
+class TestLifecycleAggregateVacuousExclusion(unittest.TestCase):
+    def test_vacuous_and_excluded_rows_do_not_inflate_aggregate(self):
+        from app.benchmarks.lifecycle_runner import aggregate_lifecycle_effort_scores
+
+        cases = [
+            # Annotated case: real miss -> recall@5 0.0, not vacuous.
+            {"efforts": {"high": {
+                "answer_f1": 0.0, "latency_ms": 1.0, "excluded": False,
+                "evidence_recall": {"recall@5": 0.0, "hit_any": False, "vacuous": False},
+            }}},
+            # Vacuous case (no gold evidence): recall@5 1.0 but must be excluded.
+            {"efforts": {"high": {
+                "answer_f1": 1.0, "latency_ms": 1.0, "excluded": False,
+                "evidence_recall": {"recall@5": 1.0, "hit_any": True, "vacuous": True},
+            }}},
+        ]
+        high = aggregate_lifecycle_effort_scores(cases)["by_effort"]["high"]
+        # Only the annotated row counts toward recall -> 0.0 (not 0.5).
+        self.assertEqual(0.0, high["evidence_recall@5"])
+        self.assertEqual(0.0, high["hit_any"])
+        self.assertEqual(2, high["qa_count"])
+        self.assertEqual(1, high["scored_qa_count"])
+
+    def test_excluded_category_dropped_from_answer_f1(self):
+        from app.benchmarks.lifecycle_runner import aggregate_lifecycle_effort_scores
+
+        cases = [
+            {"efforts": {"high": {
+                "answer_f1": 0.0, "latency_ms": 1.0, "excluded": False,
+                "evidence_recall": {"recall@5": 0.0, "hit_any": False, "vacuous": False},
+            }}},
+            # Excluded (e.g. cat 5) row scores a neutral 1.0 — must not be averaged in.
+            {"efforts": {"high": {
+                "answer_f1": 1.0, "latency_ms": 1.0, "excluded": True,
+                "evidence_recall": {"recall@5": 1.0, "hit_any": True, "vacuous": False},
+            }}},
+        ]
+        high = aggregate_lifecycle_effort_scores(cases)["by_effort"]["high"]
+        self.assertEqual(0.0, high["answer_f1_mean"])  # excluded row dropped, not 0.5
 
 
 if __name__ == "__main__":

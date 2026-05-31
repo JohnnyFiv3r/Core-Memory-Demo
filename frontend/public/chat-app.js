@@ -35,6 +35,13 @@ let activeSeedJobId = null;
 let benchmarkProgressEl = null;
 let activeBenchmarkPollJobId = null;
 let completedBenchmarkRunId = null;
+// QA cases already echoed into the chat for the current LoCoMo run (de-dup by qa_id).
+const echoedBenchmarkQaIds = new Set();
+// Beads retrieved during the current LoCoMo run, accumulated from the event
+// stream (bead_id -> bead-like row). On hosted, the web and worker run in
+// separate containers with no shared filesystem, so the live Beads pane is
+// built from these events rather than reading the worker's bead store.
+const benchmarkRunBeads = new Map();
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
@@ -976,10 +983,13 @@ function bindUiEventHandlers() {
   const seedSourceSelect = document.getElementById('seed-source');
   if (seedSourceSelect) seedSourceSelect.addEventListener('change', updateDatasetScopedControls);
 
-  const tabSelect = document.getElementById('tab-selector');
-  if (tabSelect) {
-    tabSelect.addEventListener('change', (event) => {
-      const next = String((event && event.target && event.target.value) || '').trim();
+  const tabRow = document.getElementById('tab-row');
+  if (tabRow && !tabRow.dataset.bound) {
+    tabRow.dataset.bound = '1';
+    tabRow.addEventListener('click', (event) => {
+      const btn = event.target && event.target.closest ? event.target.closest('.tab-btn') : null;
+      if (!btn || !tabRow.contains(btn)) return;
+      const next = String(btn.dataset.tab || '').trim();
       if (next) switchTab(next);
     });
   }
@@ -1134,6 +1144,78 @@ async function hydrateChatFromTurns(sessionId) {
   }
 }
 
+// Echo a LoCoMo QA case (question + generated answer) into the chat as it runs.
+// De-duplicated by qa_id so repeated polls don't double-post.
+function echoBenchmarkQaEvent(evt) {
+  const qaId = String((evt && evt.qa_id) || '').trim();
+  const question = String((evt && evt.question) || '').trim();
+  if (!qaId || !question || echoedBenchmarkQaIds.has(qaId)) return;
+  echoedBenchmarkQaIds.add(qaId);
+  const cat = String((evt && evt.category) || '').trim();
+  const answer = String((evt && evt.answer) || '').trim();
+  const f1 = Number((evt && evt.answer_f1) || 0);
+  addMsg('user', '🧪 LoCoMo' + (cat ? ' · cat ' + cat : '') + ' — ' + question);
+  const f1Note = Number.isFinite(f1) && f1 > 0 ? '  ·  answer F1 ' + f1.toFixed(2) : '';
+  addMsg('assistant', (answer || '(no answer generated for this case)') + f1Note);
+}
+
+// Accumulate the evidence beads carried on a QA event into the live run's bead
+// map. Returns true if anything new was added so callers can re-render.
+function accumulateBenchmarkEvidence(evt) {
+  const rows = arrayOrEmpty(evt && evt.evidence);
+  let changed = false;
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const beadId = String(row.bead_id || '').trim();
+    if (!beadId || benchmarkRunBeads.has(beadId)) continue;
+    benchmarkRunBeads.set(beadId, {
+      bead_id: beadId,
+      type: 'context',
+      title: String(row.snippet || '').slice(0, 80),
+      dia_ids: arrayOrEmpty(row.dia_ids),
+    });
+    changed = true;
+  }
+  return changed;
+}
+
+function renderBenchmarkRunBeads() {
+  const beads = Array.from(benchmarkRunBeads.values());
+  if (!beads.length) return;
+  safeRenderSection('beads', () => renderBeads(beads));
+  const statBeads = document.getElementById('stat-beads');
+  if (statBeads) statBeads.textContent = Number(beads.length);
+}
+
+// On a shared-root deployment (local/dev) the web process can read the run's
+// isolated bead store directly, which gives the full corpus rather than only
+// retrieved-evidence beads. Best-effort enrichment over the event-stream view.
+async function refreshBenchmarkRunBeads() {
+  try {
+    const res = await fetch('/api/demo/benchmark/run-state');
+    const data = await parseApiJsonResponse(res, 'benchmark-run-state');
+    if (!data || !data.active_run) {
+      renderBenchmarkRunBeads();
+      return;
+    }
+    const beads = arrayOrEmpty(data.beads);
+    const assocs = arrayOrEmpty(data.associations);
+    if (!beads.length) {
+      renderBenchmarkRunBeads();
+      return;
+    }
+    safeRenderSection('beads', () => renderBeads(beads));
+    safeRenderSection('associations', () => renderAssociations(assocs));
+    const statBeads = document.getElementById('stat-beads');
+    if (statBeads) statBeads.textContent = Number((data.stats || {}).total_beads || beads.length || 0);
+    const statAssoc = document.getElementById('stat-assoc');
+    if (statAssoc) statAssoc.textContent = Number((data.stats || {}).total_associations || assocs.length || 0);
+  } catch (_) {
+    // best effort — fall back to the event-stream bead view
+    renderBenchmarkRunBeads();
+  }
+}
+
 function addMsg(role, text, turnId, extra) {
   if (firstMessage && role !== 'init') {
     messagesEl.textContent = '';
@@ -1205,6 +1287,155 @@ function renderRecallEvidence(container, recallResult) {
   }
 
   container.appendChild(panel);
+}
+
+// ---- Recall Lab: side-by-side capability comparison ------------------------
+const recallLabEffort = { a: 'medium', b: 'high' };
+
+function bindRecallLab() {
+  for (const which of ['a', 'b']) {
+    const group = document.getElementById('recall-effort-' + which);
+    if (group && !group.dataset.bound) {
+      group.dataset.bound = '1';
+      group.addEventListener('click', (ev) => {
+        const btn = ev.target && ev.target.closest ? ev.target.closest('.recall-effort-btn') : null;
+        if (!btn || !group.contains(btn)) return;
+        recallLabEffort[which] = String(btn.dataset.effort || 'medium');
+        group.querySelectorAll('.recall-effort-btn').forEach((b) => b.classList.toggle('active', b === btn));
+      });
+    }
+  }
+  const btn = document.getElementById('btn-recall-compare');
+  if (btn && !btn.dataset.bound) {
+    btn.dataset.bound = '1';
+    btn.addEventListener('click', () => { runRecallCompare(); });
+  }
+  const query = document.getElementById('recall-lab-query');
+  if (query && !query.dataset.bound) {
+    query.dataset.bound = '1';
+    query.addEventListener('keydown', (ev) => { if (ev.key === 'Enter') runRecallCompare(); });
+  }
+}
+
+function recallLabConfig(which) {
+  const val = (id) => {
+    const el = document.getElementById(id);
+    return el ? String(el.value || '').trim() : '';
+  };
+  const body = { query: '', effort: recallLabEffort[which] || 'medium' };
+  const k = val('recall-lab-k-' + which);
+  const speaker = val('recall-lab-speaker-' + which);
+  const asOf = val('recall-lab-asof-' + which);
+  if (k) body.k = Number(k);
+  if (speaker) body.speaker = speaker;
+  if (asOf) body.as_of = asOf;
+  return body;
+}
+
+async function runRecallCompare() {
+  const queryEl = document.getElementById('recall-lab-query');
+  const query = queryEl ? String(queryEl.value || '').trim() : '';
+  if (!query) return;
+  const btn = document.getElementById('btn-recall-compare');
+  if (btn) btn.disabled = true;
+
+  const run = async (which) => {
+    const container = document.getElementById('recall-lab-result-' + which);
+    if (container) container.innerHTML = '<div class="recall-lab-empty">running…</div>';
+    const body = recallLabConfig(which);
+    body.query = query;
+    try {
+      const res = await fetch('/api/recall', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(body),
+      });
+      const data = await parseApiJsonResponse(res, 'recall');
+      renderRecallLabResult(container, data, which);
+    } catch (err) {
+      if (container) {
+        container.innerHTML = '';
+        const e = document.createElement('div');
+        e.className = 'recall-lab-empty';
+        e.textContent = 'error: ' + String((err && err.message) || err || 'recall_failed');
+        container.appendChild(e);
+      }
+    }
+  };
+
+  try {
+    await Promise.all([run('a'), run('b')]);
+  } finally {
+    if (btn) btn.disabled = false;
+  }
+}
+
+function renderRecallLabResult(container, payload, which) {
+  if (!container) return;
+  container.innerHTML = '';
+  payload = payload && typeof payload === 'object' ? payload : {};
+
+  const answerText = String(payload.answer || '').trim();
+  const answer = document.createElement('div');
+  answer.className = 'recall-lab-answer';
+  answer.textContent = answerText || '(no synthesized answer — see evidence below)';
+  container.appendChild(answer);
+
+  const badges = document.createElement('div');
+  badges.className = 'recall-lab-badges';
+  const addBadge = (text, cls) => {
+    if (!text) return;
+    const b = document.createElement('span');
+    b.className = 'recall-lab-badge' + (cls ? ' ' + cls : '');
+    b.textContent = text;
+    badges.appendChild(b);
+  };
+  addBadge('effort: ' + String(recallLabEffort[which] || 'medium'));
+  if (payload.status) addBadge('status: ' + String(payload.status));
+  const tierPath = arrayOrEmpty(payload.tier_path).map((x) => String(x || '').trim()).filter(Boolean);
+  if (tierPath.length) addBadge('tiers: ' + tierPath.join(' → '));
+  if (payload.as_of) addBadge('as_of ≤ ' + String(payload.as_of), 'asof');
+  if (badges.childNodes.length) container.appendChild(badges);
+
+  const evidence = arrayOrEmpty(payload.evidence).filter((x) => x && typeof x === 'object').slice(0, 5);
+  if (evidence.length) {
+    const panel = document.createElement('div');
+    panel.className = 'recall-evidence-panel';
+    const title = document.createElement('div');
+    title.className = 'recall-evidence-title';
+    title.textContent = 'Evidence';
+    panel.appendChild(title);
+    for (const item of evidence) {
+      const row = document.createElement('div');
+      row.className = 'recall-evidence-item';
+      const label = String(item.bead_id || item.id || item.title || 'evidence').trim();
+      const score = Number(item.score || item.confidence || 0);
+      const text = String(item.content_excerpt || item.text || item.summary || item.title || item.reason || '').trim();
+      const store = String(item.source_store || '').trim();
+      row.textContent = label + (store && store !== 'core_memory' ? ' [' + store + ']' : '') + (score ? ' · ' + score.toFixed(2) : '') + (text ? ' — ' + text.slice(0, 180) : '');
+      panel.appendChild(row);
+    }
+    container.appendChild(panel);
+  } else {
+    const empty = document.createElement('div');
+    empty.className = 'recall-lab-empty';
+    empty.textContent = 'no evidence returned';
+    container.appendChild(empty);
+  }
+
+  const conflicts = arrayOrEmpty(payload.conflicts).filter((x) => x && typeof x === 'object');
+  for (const c of conflicts) {
+    const div = document.createElement('div');
+    div.className = 'recall-lab-conflict';
+    const subj = String(c.subject || '').trim();
+    const slot = String(c.slot || '').trim();
+    const score = Number(c.epistemic_conflict_score || 0);
+    const prompt = c.review_prompt && typeof c.review_prompt === 'object' ? c.review_prompt : null;
+    const question = prompt ? String(prompt.question || prompt.prompt || '').trim() : '';
+    const head = 'conflict: ' + (subj || '?') + (slot ? ' · ' + slot : '') + (score ? ' (' + score.toFixed(2) + ')' : '');
+    div.textContent = question ? head + ' — ' + question : head;
+    container.appendChild(div);
+  }
 }
 
 async function parseApiJsonResponse(res, label) {
@@ -3714,6 +3945,14 @@ async function refreshMemory() {
         const bench = control.benchmark || {};
         const benchJob = bench.job || {};
         lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
+        // Echo any completed QA cases into the chat (covers a page reload mid-run
+        // where there is no dedicated poll loop). De-dup is handled by qa_id.
+        for (const evt of (Array.isArray(benchJob.events) ? benchJob.events : [])) {
+          if (String(evt.stage || '').toLowerCase() === 'lifecycle_qa' && String(evt.case_status || '') === 'ok') {
+            echoBenchmarkQaEvent(evt);
+            accumulateBenchmarkEvidence(evt);
+          }
+        }
         if (!activeBenchmarkPollJobId) {
           // No dedicated poll loop — use control-state as the complete source of truth.
           if (bench.summary) {
@@ -3789,6 +4028,9 @@ async function refreshMemory() {
       } catch (_) {
         // best effort only
       }
+
+      // Surface the live run's (isolated) beads in the beads pane.
+      await refreshBenchmarkRunBeads();
 
       refreshErrorStreak = 0;
       return;
@@ -4404,6 +4646,11 @@ async function runBenchmark() {
   btn.disabled = true;
   btn.textContent = 'Starting...';
   completedBenchmarkRunId = null;
+  echoedBenchmarkQaIds.clear();
+  benchmarkRunBeads.clear();
+  if (subset === 'locomo_native_lifecycle') {
+    addMsg('system', 'LoCoMo benchmark started — each QA question and answer will stream into the chat, and the run’s beads appear in the Beads pane as it works.');
+  }
   const optimisticJobId = 'pending-job-' + Date.now().toString(36);
   activeBenchmarkPollJobId = optimisticJobId;
   const optimisticAnswerMode = answerMode || 'auto';
@@ -4530,6 +4777,10 @@ async function runBenchmark() {
           updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
           renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
         }
+        if (stage === 'lifecycle_qa' && String(evt.case_status || '') === 'ok') {
+          echoBenchmarkQaEvent(evt);
+          if (accumulateBenchmarkEvidence(evt)) renderBenchmarkRunBeads();
+        }
         if (stage === 'failed') {
           addMsg('system', 'Benchmark failed: ' + String(evt.error || evt.message || 'benchmark_failed'));
         } else if (stage === 'cancelled') {
@@ -4588,9 +4839,12 @@ async function runBenchmark() {
 }
 
 function switchTab(name) {
-  const sel = document.getElementById('tab-selector');
-  if (sel && sel.value !== name) sel.value = name;
   document.querySelectorAll('.tab-content').forEach(t => t.classList.toggle('active', t.id === 'tab-' + name));
+  document.querySelectorAll('.tab-btn').forEach(b => {
+    const on = b.dataset.tab === name;
+    b.classList.toggle('active', on);
+    b.setAttribute('aria-selected', on ? 'true' : 'false');
+  });
 }
 
 function restartRefreshTimer(ms) {
@@ -4601,6 +4855,7 @@ function restartRefreshTimer(ms) {
 
 function startDemoUi() {
   bindUiEventHandlers();
+  bindRecallLab();
   loadClaimsStateFromUrl();
   loadSeedResetPrefs();
   bindSessionPopoverControls();
