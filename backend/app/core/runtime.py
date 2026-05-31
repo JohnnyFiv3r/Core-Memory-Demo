@@ -39,6 +39,7 @@ from core_memory.integrations.pydanticai.memory_tools import (
 from core_memory.integrations.pydanticai.run import run_with_memory
 
 from app.core.agent_runtime import create_agent_for_root
+from app.core.semantic_env import normalize_embedded_qdrant_summary
 from core_memory.retrieval.agent import recall as core_recall
 from core_memory.retrieval.contracts import RecallResult, validate_recall_effort
 from core_memory.retrieval.tools import memory as memory_tools
@@ -1342,6 +1343,13 @@ def inspect_state_payload(*, as_of: str | None = None) -> dict[str, Any]:
         limit_merge_proposals=40,
     )
     out = dict(base or {})
+    runtime_info = dict(out.get("runtime") or {})
+    if isinstance(runtime_info.get("semantic_backend"), dict):
+        runtime_info["semantic_backend"] = normalize_embedded_qdrant_summary(
+            dict(runtime_info.get("semantic_backend") or {}),
+            root=settings.core_memory_root,
+        )
+        out["runtime"] = runtime_info
     out["session"] = {
         "session_id": SESSION.session_id,
         "token_usage": SESSION.token_usage,
