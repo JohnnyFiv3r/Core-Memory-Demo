@@ -4071,28 +4071,21 @@ async function refreshMemory() {
     const res = await fetch(stateUrl);
     const data = await parseApiJsonResponse(res, 'state');
     const mem = data.memory || {};
-    let sess = data.session || {};
+    // /v1/memory/inspect/state already includes runtime, last_turn and session
+    // (it is the same inspect_state_payload() that /api/demo/runtime returns), so
+    // read them straight from this payload instead of a second redundant fetch.
+    const sess = data.session || {};
     const claims = data.claims || {};
     const entities = data.entities || {};
     const statsCompat = data.stats || {};
-    let runtimeLocal = {};
-    let lastTurnLocal = {};
-
-    try {
-      const rr = await fetch('/api/demo/runtime');
-      const jr = await parseApiJsonResponse(rr, 'runtime');
-      runtimeLocal = jr.runtime || {};
-      lastTurnLocal = jr.last_turn || {};
-      if (jr.session) sess = jr.session;
-    } catch (_) {
-      // keep inspect-only fallback
-    }
+    const runtimeLocal = data.runtime || {};
+    const lastTurnLocal = data.last_turn || {};
 
     renderBeads(mem.beads || data.beads || []);
     renderAssociations(mem.associations || data.associations || []);
     renderClaims(claims.slots || data.claim_state || [], claims);
     renderEntities(entities);
-    renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {});
+    renderRuntime(runtimeLocal || {}, lastTurnLocal || {});
     renderRolling(mem.rolling_window || data.rolling_window || []);
 
     document.getElementById('stat-beads').textContent = Number(statsCompat.total_beads || (mem.beads || []).length || 0);
