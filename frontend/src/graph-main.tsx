@@ -697,7 +697,7 @@ function App(): React.JSX.Element {
               nodes={graphData.nodes}
               edges={graphData.edges}
               layoutType="forceDirected3d"
-              cameraMode="pan"
+              cameraMode="rotate"
               draggable
               animated
               labelType="all"

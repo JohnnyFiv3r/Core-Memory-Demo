@@ -5,8 +5,9 @@ import type { GraphCanvasRef } from 'reagraph'
 // Slow auto-rotate that yields permanently to the user on first interaction.
 //
 // reagraph's built-in cameraMode="orbit" spins at a hardcoded 20 deg/s and never
-// stops for the user, so instead we run cameraMode="pan" and drive a gentle
-// azimuth rotation ourselves through the underlying camera-controls instance
+// stops for the user, so instead we run cameraMode="rotate" (left-drag orbits
+// the 3D graph manually, with no built-in auto-spin) and drive a gentle azimuth
+// rotation ourselves through the underlying camera-controls instance
 // (reagraphRef.getControls()). The instance emits a 'control' event on any user
 // drag/zoom/pan; on the first one we cancel the rotation loop for good.
 const DEFAULT_ROTATE_DEG_PER_SEC = 4

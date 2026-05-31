@@ -20,13 +20,15 @@ _PKG = (_ROOT / "package.json").read_text()
 
 class TestSlowAutoRotateSlice(unittest.TestCase):
     def test_slice_drives_own_rotation_and_yields_to_user(self):
-        # cameraMode is 'pan' (not the hardcoded-fast built-in 'orbit'); we drive
-        # azimuthAngle ourselves and stop on the controls 'control' event.
-        self.assertIn("cameraMode: 'pan'", _SLICE)
+        # cameraMode is 'rotate' (left-drag orbits manually, no built-in auto-spin
+        # — that's 'orbit'); we drive azimuthAngle ourselves and stop on the
+        # controls 'control' event.
+        self.assertIn("cameraMode: 'rotate'", _SLICE)
         self.assertIn("getControls", _SLICE)
         self.assertIn("azimuthAngle", _SLICE)
         self.assertIn("'control'", _SLICE)
         self.assertNotIn("cameraMode: 'orbit'", _SLICE)
+        self.assertNotIn("cameraMode: 'pan'", _SLICE)
 
     def test_slice_cleans_up_rotation_on_unmount(self):
         self.assertIn("startSlowAutoRotate", _SLICE)
@@ -37,8 +39,8 @@ class TestStandaloneGraphEnhancements(unittest.TestCase):
     def test_uses_camera_hook_and_bloom_child(self):
         self.assertIn("useSlowAutoRotate", _GRAPH_MAIN)
         self.assertIn("<GraphGlow />", _GRAPH_MAIN)
-        self.assertIn('cameraMode="pan"', _GRAPH_MAIN)
-        self.assertNotIn('cameraMode="rotate"', _GRAPH_MAIN)
+        self.assertIn('cameraMode="rotate"', _GRAPH_MAIN)
+        self.assertNotIn('cameraMode="pan"', _GRAPH_MAIN)
 
     def test_enhancements_export_hook_and_glow(self):
         self.assertIn("export function useSlowAutoRotate", _ENHANCE)

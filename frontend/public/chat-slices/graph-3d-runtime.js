@@ -128,8 +128,10 @@ export async function renderGraph3DRuntimePane(opts) {
       nodes: safe.graph.nodes,
       edges: safe.graph.edges,
       layoutType: 'forceDirected3d',
-      // pan (not orbit) so our own slow rotation is the only auto-motion.
-      cameraMode: 'pan',
+      // 'rotate' (not 'pan') so left-drag orbits the 3D graph manually, and (not
+      // 'orbit') so reagraph does not add its own fast auto-spin — we drive the
+      // slow idle rotation ourselves and yield to the user on first interaction.
+      cameraMode: 'rotate',
       draggable: true,
       animated: true,
       labelType: 'all',
