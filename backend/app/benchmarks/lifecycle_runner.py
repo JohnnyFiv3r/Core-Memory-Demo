@@ -349,11 +349,18 @@ def aggregate_lifecycle_effort_scores(cases: list[dict[str, Any]]) -> dict[str, 
         rows = [dict(((case.get("efforts") or {}).get(effort) or {})) for case in cases]
         rows = [row for row in rows if row]
         latencies = [float(row.get("latency_ms") or 0.0) for row in rows]
-        answer_scores = [float(row.get("answer_f1") or 0.0) for row in rows]
-        recall5 = [float((row.get("evidence_recall") or {}).get("recall@5") or 0.0) for row in rows]
-        hit_any = [1.0 if bool((row.get("evidence_recall") or {}).get("hit_any")) else 0.0 for row in rows]
+        # answer F1 excludes officially-excluded categories (e.g. cat 5); evidence
+        # recall excludes vacuous (no-gold-evidence) cases — matching
+        # locomo_faithful.aggregate_case_scores so a QA set with unannotated
+        # evidence can't inflate evidence_recall@5 / hit_any in the summary.
+        scored_rows = [row for row in rows if not row.get("excluded")]
+        ev_rows = [row for row in rows if not (row.get("evidence_recall") or {}).get("vacuous")]
+        answer_scores = [float(row.get("answer_f1") or 0.0) for row in scored_rows]
+        recall5 = [float((row.get("evidence_recall") or {}).get("recall@5") or 0.0) for row in ev_rows]
+        hit_any = [1.0 if bool((row.get("evidence_recall") or {}).get("hit_any")) else 0.0 for row in ev_rows]
         by_effort[effort] = {
             "qa_count": len(rows),
+            "scored_qa_count": len(ev_rows),
             "answer_f1_mean": round(sum(answer_scores) / len(answer_scores), 4) if answer_scores else 0.0,
             "evidence_recall@5": round(sum(recall5) / len(recall5), 4) if recall5 else 0.0,
             "hit_any": round(sum(hit_any) / len(hit_any), 4) if hit_any else 0.0,

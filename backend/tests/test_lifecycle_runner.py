@@ -582,6 +582,48 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual(1, replay_progress[-1][4].get("replay_turn_completed"))
 
 
+
+class TestLifecycleAggregateVacuousExclusion(unittest.TestCase):
+    def test_vacuous_and_excluded_rows_do_not_inflate_aggregate(self):
+        from app.benchmarks.lifecycle_runner import aggregate_lifecycle_effort_scores
+
+        cases = [
+            # Annotated case: real miss -> recall@5 0.0, not vacuous.
+            {"efforts": {"high": {
+                "answer_f1": 0.0, "latency_ms": 1.0, "excluded": False,
+                "evidence_recall": {"recall@5": 0.0, "hit_any": False, "vacuous": False},
+            }}},
+            # Vacuous case (no gold evidence): recall@5 1.0 but must be excluded.
+            {"efforts": {"high": {
+                "answer_f1": 1.0, "latency_ms": 1.0, "excluded": False,
+                "evidence_recall": {"recall@5": 1.0, "hit_any": True, "vacuous": True},
+            }}},
+        ]
+        high = aggregate_lifecycle_effort_scores(cases)["by_effort"]["high"]
+        # Only the annotated row counts toward recall -> 0.0 (not 0.5).
+        self.assertEqual(0.0, high["evidence_recall@5"])
+        self.assertEqual(0.0, high["hit_any"])
+        self.assertEqual(2, high["qa_count"])
+        self.assertEqual(1, high["scored_qa_count"])
+
+    def test_excluded_category_dropped_from_answer_f1(self):
+        from app.benchmarks.lifecycle_runner import aggregate_lifecycle_effort_scores
+
+        cases = [
+            {"efforts": {"high": {
+                "answer_f1": 0.0, "latency_ms": 1.0, "excluded": False,
+                "evidence_recall": {"recall@5": 0.0, "hit_any": False, "vacuous": False},
+            }}},
+            # Excluded (e.g. cat 5) row scores a neutral 1.0 — must not be averaged in.
+            {"efforts": {"high": {
+                "answer_f1": 1.0, "latency_ms": 1.0, "excluded": True,
+                "evidence_recall": {"recall@5": 1.0, "hit_any": True, "vacuous": False},
+            }}},
+        ]
+        high = aggregate_lifecycle_effort_scores(cases)["by_effort"]["high"]
+        self.assertEqual(0.0, high["answer_f1_mean"])  # excluded row dropped, not 0.5
+
+
 if __name__ == "__main__":
     unittest.main()
 
