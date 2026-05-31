@@ -156,6 +156,20 @@ function arrayOr(value, fallback) {
   return Array.isArray(value) ? value : fallback;
 }
 
+// Return a debounced wrapper: rapid calls collapse to a single trailing call
+// after `waitMs` of quiet. Used for graph filter inputs that would otherwise
+// re-render the whole graph on every keystroke / slider tick.
+function debounce(fn, waitMs) {
+  let timer = null;
+  return function debounced(...args) {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      fn.apply(this, args);
+    }, Math.max(0, Number(waitMs) || 0));
+  };
+}
+
 function firstPayloadError(data) {
   const errors = arrayOrEmpty((data || {}).errors);
   if (!errors.length) return '';
@@ -2535,6 +2549,21 @@ function renderGraphSummary(el, opts) {
   );
 }
 
+// Debounced graph re-render for filter inputs (search box, confidence slider)
+// that fire per keystroke/tick. The trailing call always uses the latest
+// beads/assocs captured here, so collapsing intermediate calls is safe.
+let _pendingGraphArgs = null;
+const _runPendingGraphRender = debounce(() => {
+  if (!_pendingGraphArgs) return;
+  const { beads, assocs } = _pendingGraphArgs;
+  _pendingGraphArgs = null;
+  renderGraph(beads, assocs);
+}, 180);
+function debouncedRenderGraph(beads, assocs) {
+  _pendingGraphArgs = { beads, assocs };
+  _runPendingGraphRender();
+}
+
 function renderGraph(beads, assocs) {
   const el = document.getElementById('tab-graph');
   const mounted3d = el && el.querySelectorAll ? el.querySelectorAll('.graph-3d-wrap') : [];
@@ -2581,12 +2610,12 @@ function renderGraph(beads, assocs) {
       const v = Number(raw || 0);
       graphFilters.minConfidence = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
       saveGraphPrefs();
-      renderGraph(beads, assocs);
+      debouncedRenderGraph(beads, assocs);
     },
     onSetSearch: (search) => {
       graphFilters.search = String(search || '').trim();
       saveGraphPrefs();
-      renderGraph(beads, assocs);
+      debouncedRenderGraph(beads, assocs);
     },
   });
 
@@ -4042,28 +4071,21 @@ async function refreshMemory() {
     const res = await fetch(stateUrl);
     const data = await parseApiJsonResponse(res, 'state');
     const mem = data.memory || {};
-    let sess = data.session || {};
+    // /v1/memory/inspect/state already includes runtime, last_turn and session
+    // (it is the same inspect_state_payload() that /api/demo/runtime returns), so
+    // read them straight from this payload instead of a second redundant fetch.
+    const sess = data.session || {};
     const claims = data.claims || {};
     const entities = data.entities || {};
     const statsCompat = data.stats || {};
-    let runtimeLocal = {};
-    let lastTurnLocal = {};
-
-    try {
-      const rr = await fetch('/api/demo/runtime');
-      const jr = await parseApiJsonResponse(rr, 'runtime');
-      runtimeLocal = jr.runtime || {};
-      lastTurnLocal = jr.last_turn || {};
-      if (jr.session) sess = jr.session;
-    } catch (_) {
-      // keep inspect-only fallback
-    }
+    const runtimeLocal = data.runtime || {};
+    const lastTurnLocal = data.last_turn || {};
 
     renderBeads(mem.beads || data.beads || []);
     renderAssociations(mem.associations || data.associations || []);
     renderClaims(claims.slots || data.claim_state || [], claims);
     renderEntities(entities);
-    renderRuntime(data.runtime || runtimeLocal || {}, lastTurnLocal || {});
+    renderRuntime(runtimeLocal || {}, lastTurnLocal || {});
     renderRolling(mem.rolling_window || data.rolling_window || []);
 
     document.getElementById('stat-beads').textContent = Number(statsCompat.total_beads || (mem.beads || []).length || 0);
@@ -4727,15 +4749,23 @@ async function runBenchmark() {
     syncBenchmarkButton(lastBenchmarkSummary);
     let cursor = 0;
     let done = false;
+    // Exponential backoff for transient network errors during polling: 2s, then
+    // doubling to a 30s cap, reset to 2s after any successful poll. Avoids a
+    // hot 2s retry loop hammering the backend through an extended outage.
+    let pollBackoffMs = 2000;
+    const POLL_BACKOFF_MIN_MS = 2000;
+    const POLL_BACKOFF_MAX_MS = 30000;
     while (!done) {
       let jr, job;
       try {
         jr = await fetch('/api/demo/benchmark/job/' + encodeURIComponent(jobId) + '?cursor=' + encodeURIComponent(String(cursor)));
         job = await parseApiJsonResponse(jr, 'benchmark-job');
+        pollBackoffMs = POLL_BACKOFF_MIN_MS;
       } catch (pollErr) {
         const pollErrMsg = String((pollErr && pollErr.message) || pollErr || '');
         if (/network_changed|network_io_suspended|failed to fetch|networkerror/i.test(pollErrMsg)) {
-          await new Promise(r => setTimeout(r, 2000));
+          await new Promise(r => setTimeout(r, pollBackoffMs));
+          pollBackoffMs = Math.min(POLL_BACKOFF_MAX_MS, pollBackoffMs * 2);
           continue;
         }
         throw pollErr;
