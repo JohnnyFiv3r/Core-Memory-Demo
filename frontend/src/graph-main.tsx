@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { createRoot } from 'react-dom/client'
-import { GraphCanvas } from 'reagraph'
+import { GraphCanvas, type GraphCanvasRef } from 'reagraph'
+import { GraphGlow, useSlowAutoRotate } from './graph-enhancements'
 import './graph.css'
 
 type BeadRow = {
@@ -330,6 +331,32 @@ async function apiFetchJson<T>(path: string, init?: RequestInit): Promise<T> {
   return (body || {}) as T
 }
 
+// Polished dark theme. Brighter active/selected fills give the bloom pass
+// something to catch, while inactive nodes/edges dim back for depth.
+const GRAPH_THEME = {
+  canvas: { background: '#04060c' },
+  arrow: { fill: '#6076a6', activeFill: '#8effa6' },
+  node: {
+    fill: '#8fb3c4',
+    activeFill: '#8effa6',
+    opacity: 1,
+    selectedOpacity: 1,
+    inactiveOpacity: 0.18,
+    label: { color: '#eef2fb', stroke: '#04060c', activeColor: '#ffffff' },
+    subLabel: { color: '#9aa3ba', stroke: 'transparent', activeColor: '#e1e4ed' },
+  },
+  edge: {
+    fill: '#46557a',
+    activeFill: '#8effa6',
+    opacity: 0.55,
+    selectedOpacity: 1,
+    inactiveOpacity: 0.12,
+    label: { color: '#c3cbe2', stroke: '#04060c', activeColor: '#ffffff' },
+  },
+  lasso: { border: '1px solid #6ae276', background: 'rgba(106,226,118,0.18)' },
+  ring: { fill: '#243049', activeFill: '#8effa6' },
+}
+
 function typeColor(type: string | undefined): string {
   const t = String(type || '').toLowerCase()
   if (t === 'decision') return '#6ae276'
@@ -342,7 +369,7 @@ function typeColor(type: string | undefined): string {
 }
 
 function App(): React.JSX.Element {
-  const graphRef = useRef<any>(null)
+  const graphRef = useRef<GraphCanvasRef | null>(null)
   const [beads, setBeads] = useState<BeadRow[]>([])
   const [associations, setAssociations] = useState<AssocRow[]>([])
   const [relation, setRelation] = useState<string>('all')
@@ -560,6 +587,9 @@ function App(): React.JSX.Element {
     return { nodes, edges }
   }, [beads, edgesRaw, minConf, relation, search])
 
+  // Gentle idle rotation that stops the moment the user grabs the camera.
+  useSlowAutoRotate(graphRef, { nodeCount: graphData.nodes.length })
+
   const onNodeClick = useCallback(async (node: { id?: string; data?: { bead_id?: string } }) => {
     const id = String(node?.id || node?.data?.bead_id || '').trim()
     if (!id) return
@@ -661,7 +691,7 @@ function App(): React.JSX.Element {
         <div className="graph-panel">
           <div className="graph-host">
             <GraphCanvas
-              ref={(r: unknown) => {
+              ref={(r) => {
                 graphRef.current = r
               }}
               nodes={graphData.nodes}
@@ -669,35 +699,16 @@ function App(): React.JSX.Element {
               layoutType="forceDirected3d"
               cameraMode="rotate"
               draggable
-              animated={false}
+              animated
               labelType="all"
               edgeLabelPosition="inline"
-              theme={{
-                canvas: { background: '#05070c' },
-                arrow: { fill: '#5b6a8a', activeFill: '#6ae276' },
-                node: {
-                  fill: '#7ca0ab',
-                  activeFill: '#6ae276',
-                  opacity: 0.95,
-                  selectedOpacity: 1,
-                  inactiveOpacity: 0.2,
-                  label: { color: '#e1e4ed', stroke: '#05070c', activeColor: '#ffffff' },
-                  subLabel: { color: '#8b8fa3', stroke: 'transparent', activeColor: '#e1e4ed' },
-                },
-                edge: {
-                  fill: '#5b6a8a',
-                  activeFill: '#6ae276',
-                  opacity: 0.7,
-                  selectedOpacity: 1,
-                  inactiveOpacity: 0.2,
-                  label: { color: '#b8c0d8', stroke: '#05070c', activeColor: '#ffffff' },
-                },
-                lasso: { border: '1px solid #6ae276', background: 'rgba(106,226,118,0.18)' },
-                ring: { fill: '#1f2838', activeFill: '#6ae276' },
-              }}
+              edgeArrowPosition="end"
+              theme={GRAPH_THEME}
               onNodeClick={onNodeClick}
               onEdgeClick={onEdgeClick}
-            />
+            >
+              <GraphGlow />
+            </GraphCanvas>
           </div>
         </div>
 
