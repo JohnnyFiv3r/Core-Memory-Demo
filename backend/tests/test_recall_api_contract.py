@@ -194,6 +194,10 @@ class TestRecallRuntimeContract(unittest.TestCase):
         self.assertIn("function refreshBenchmarkRunBeads", js)
         self.assertIn("/api/demo/benchmark/run-state", js)
         self.assertIn("echoedBenchmarkQaIds", js)
+        # On hosted (web/worker split, no shared FS) the live beads pane is built
+        # from the event stream rather than the worker's filesystem.
+        self.assertIn("function accumulateBenchmarkEvidence", js)
+        self.assertIn("benchmarkRunBeads", js)
 
 
 if __name__ == "__main__":

@@ -93,5 +93,47 @@ class TestBenchmarkRunStateRoute(unittest.TestCase):
         self.assertFalse(body["active_run"])
 
 
+
+class TestWorkerMirrorsLiveQaPayload(unittest.TestCase):
+    def test_worker_event_carries_question_answer_and_evidence(self):
+        # The hosted LoCoMo path runs in the queued worker, whose persisted event
+        # must mirror the per-QA live payload (question/answer/evidence) so the
+        # web UI can stream chat + build the live beads pane from the event stream.
+        import app.benchmarks.benchmark_worker as worker
+
+        captured = {}
+
+        def fake_update(job_id, **kwargs):
+            if kwargs.get("event", {}).get("stage") == "lifecycle_qa":
+                captured.update(kwargs["event"])
+            return True
+
+        def fake_claim():
+            return {"job_id": "j1", "request": {"kind": "benchmark"}, "kwargs": {}}
+
+        def fake_run_benchmark(**kw):
+            kw["progress"](
+                1, 1,
+                {"qa_id": "q1", "sample_id": "s1", "question": "what db?"},
+                {
+                    "phase": "lifecycle_qa", "status": "ok", "answer": "PostgreSQL",
+                    "answer_f1": 0.8, "evidence_bead_ids": ["b1"],
+                    "evidence": [{"bead_id": "b1", "dia_ids": ["D1:3"], "snippet": "chose postgres"}],
+                },
+            )
+            return {"ok": True}
+
+        with patch.object(worker.benchmark_store, "claim_next_job", side_effect=fake_claim), \
+             patch.object(worker.benchmark_store, "update_job_progress", side_effect=fake_update), \
+             patch.object(worker.benchmark_store, "finish_job", return_value=True), \
+             patch.object(worker, "run_benchmark", side_effect=fake_run_benchmark):
+            worker.run_once()
+
+        self.assertEqual("what db?", captured.get("question"))
+        self.assertEqual("PostgreSQL", captured.get("answer"))
+        self.assertEqual(["b1"], captured.get("evidence_bead_ids"))
+        self.assertEqual("b1", captured["evidence"][0]["bead_id"])
+
+
 if __name__ == "__main__":
     unittest.main()

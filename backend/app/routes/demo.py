@@ -827,6 +827,10 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         question = str((case or {}).get('question') or (result or {}).get('question') or '')
         answer = str((result or {}).get('answer') or '')
         evidence_bead_ids = [str(b) for b in ((result or {}).get('evidence_bead_ids') or []) if str(b)]
+        # Full evidence rows (bead_id, dia_ids, snippet) ride the event so the
+        # live Beads pane can be built from the event stream on hosted, where the
+        # web container can't read the worker's isolated filesystem.
+        evidence = [r for r in ((result or {}).get('evidence') or []) if isinstance(r, dict)]
         _benchmark_event(
             current,
             stage,
@@ -846,6 +850,7 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             answer=answer or None,
             answer_f1=(float((result or {}).get('answer_f1') or 0.0) if status == 'ok' else None),
             evidence_bead_ids=evidence_bead_ids or None,
+            evidence=evidence or None,
         )
 
     try:

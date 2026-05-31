@@ -37,6 +37,11 @@ let activeBenchmarkPollJobId = null;
 let completedBenchmarkRunId = null;
 // QA cases already echoed into the chat for the current LoCoMo run (de-dup by qa_id).
 const echoedBenchmarkQaIds = new Set();
+// Beads retrieved during the current LoCoMo run, accumulated from the event
+// stream (bead_id -> bead-like row). On hosted, the web and worker run in
+// separate containers with no shared filesystem, so the live Beads pane is
+// built from these events rather than reading the worker's bead store.
+const benchmarkRunBeads = new Map();
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
@@ -1154,15 +1159,51 @@ function echoBenchmarkQaEvent(evt) {
   addMsg('assistant', (answer || '(no answer generated for this case)') + f1Note);
 }
 
-// While a LoCoMo run is live, show that run's (isolated) beads in the beads pane
-// so the replay/QA work is visible without polluting the live demo session.
+// Accumulate the evidence beads carried on a QA event into the live run's bead
+// map. Returns true if anything new was added so callers can re-render.
+function accumulateBenchmarkEvidence(evt) {
+  const rows = arrayOrEmpty(evt && evt.evidence);
+  let changed = false;
+  for (const row of rows) {
+    if (!row || typeof row !== 'object') continue;
+    const beadId = String(row.bead_id || '').trim();
+    if (!beadId || benchmarkRunBeads.has(beadId)) continue;
+    benchmarkRunBeads.set(beadId, {
+      bead_id: beadId,
+      type: 'context',
+      title: String(row.snippet || '').slice(0, 80),
+      dia_ids: arrayOrEmpty(row.dia_ids),
+    });
+    changed = true;
+  }
+  return changed;
+}
+
+function renderBenchmarkRunBeads() {
+  const beads = Array.from(benchmarkRunBeads.values());
+  if (!beads.length) return;
+  safeRenderSection('beads', () => renderBeads(beads));
+  const statBeads = document.getElementById('stat-beads');
+  if (statBeads) statBeads.textContent = Number(beads.length);
+}
+
+// On a shared-root deployment (local/dev) the web process can read the run's
+// isolated bead store directly, which gives the full corpus rather than only
+// retrieved-evidence beads. Best-effort enrichment over the event-stream view.
 async function refreshBenchmarkRunBeads() {
   try {
     const res = await fetch('/api/demo/benchmark/run-state');
     const data = await parseApiJsonResponse(res, 'benchmark-run-state');
-    if (!data || !data.active_run) return;
+    if (!data || !data.active_run) {
+      renderBenchmarkRunBeads();
+      return;
+    }
     const beads = arrayOrEmpty(data.beads);
     const assocs = arrayOrEmpty(data.associations);
+    if (!beads.length) {
+      renderBenchmarkRunBeads();
+      return;
+    }
     safeRenderSection('beads', () => renderBeads(beads));
     safeRenderSection('associations', () => renderAssociations(assocs));
     const statBeads = document.getElementById('stat-beads');
@@ -1170,7 +1211,8 @@ async function refreshBenchmarkRunBeads() {
     const statAssoc = document.getElementById('stat-assoc');
     if (statAssoc) statAssoc.textContent = Number((data.stats || {}).total_associations || assocs.length || 0);
   } catch (_) {
-    // best effort — the live beads view is non-critical
+    // best effort — fall back to the event-stream bead view
+    renderBenchmarkRunBeads();
   }
 }
 
@@ -3908,6 +3950,7 @@ async function refreshMemory() {
         for (const evt of (Array.isArray(benchJob.events) ? benchJob.events : [])) {
           if (String(evt.stage || '').toLowerCase() === 'lifecycle_qa' && String(evt.case_status || '') === 'ok') {
             echoBenchmarkQaEvent(evt);
+            accumulateBenchmarkEvidence(evt);
           }
         }
         if (!activeBenchmarkPollJobId) {
@@ -4604,6 +4647,7 @@ async function runBenchmark() {
   btn.textContent = 'Starting...';
   completedBenchmarkRunId = null;
   echoedBenchmarkQaIds.clear();
+  benchmarkRunBeads.clear();
   if (subset === 'locomo_native_lifecycle') {
     addMsg('system', 'LoCoMo benchmark started — each QA question and answer will stream into the chat, and the run’s beads appear in the Beads pane as it works.');
   }
@@ -4735,6 +4779,7 @@ async function runBenchmark() {
         }
         if (stage === 'lifecycle_qa' && String(evt.case_status || '') === 'ok') {
           echoBenchmarkQaEvent(evt);
+          if (accumulateBenchmarkEvidence(evt)) renderBenchmarkRunBeads();
         }
         if (stage === 'failed') {
           addMsg('system', 'Benchmark failed: ' + String(evt.error || evt.message || 'benchmark_failed'));

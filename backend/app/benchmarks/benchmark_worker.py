@@ -99,6 +99,7 @@ def run_once() -> int:
                 question = str((case or {}).get('question') or result_d.get('question') or '')
                 answer = str(result_d.get('answer') or '')
                 evidence_bead_ids = [str(b) for b in (result_d.get('evidence_bead_ids') or []) if str(b)]
+                evidence = [r for r in (result_d.get('evidence') or []) if isinstance(r, dict)]
                 if question:
                     event['question'] = question
                 if answer:
@@ -107,6 +108,8 @@ def run_once() -> int:
                     event['answer_f1'] = float(result_d.get('answer_f1') or 0.0)
                 if evidence_bead_ids:
                     event['evidence_bead_ids'] = evidence_bead_ids
+                if evidence:
+                    event['evidence'] = evidence
                 benchmark_store.update_job_progress(
                     job_id,
                     status='running',
