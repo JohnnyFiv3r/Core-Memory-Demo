@@ -156,6 +156,20 @@ function arrayOr(value, fallback) {
   return Array.isArray(value) ? value : fallback;
 }
 
+// Return a debounced wrapper: rapid calls collapse to a single trailing call
+// after `waitMs` of quiet. Used for graph filter inputs that would otherwise
+// re-render the whole graph on every keystroke / slider tick.
+function debounce(fn, waitMs) {
+  let timer = null;
+  return function debounced(...args) {
+    if (timer) clearTimeout(timer);
+    timer = setTimeout(() => {
+      timer = null;
+      fn.apply(this, args);
+    }, Math.max(0, Number(waitMs) || 0));
+  };
+}
+
 function firstPayloadError(data) {
   const errors = arrayOrEmpty((data || {}).errors);
   if (!errors.length) return '';
@@ -2535,6 +2549,21 @@ function renderGraphSummary(el, opts) {
   );
 }
 
+// Debounced graph re-render for filter inputs (search box, confidence slider)
+// that fire per keystroke/tick. The trailing call always uses the latest
+// beads/assocs captured here, so collapsing intermediate calls is safe.
+let _pendingGraphArgs = null;
+const _runPendingGraphRender = debounce(() => {
+  if (!_pendingGraphArgs) return;
+  const { beads, assocs } = _pendingGraphArgs;
+  _pendingGraphArgs = null;
+  renderGraph(beads, assocs);
+}, 180);
+function debouncedRenderGraph(beads, assocs) {
+  _pendingGraphArgs = { beads, assocs };
+  _runPendingGraphRender();
+}
+
 function renderGraph(beads, assocs) {
   const el = document.getElementById('tab-graph');
   const mounted3d = el && el.querySelectorAll ? el.querySelectorAll('.graph-3d-wrap') : [];
@@ -2581,12 +2610,12 @@ function renderGraph(beads, assocs) {
       const v = Number(raw || 0);
       graphFilters.minConfidence = Number.isFinite(v) ? Math.max(0, Math.min(1, v)) : 0;
       saveGraphPrefs();
-      renderGraph(beads, assocs);
+      debouncedRenderGraph(beads, assocs);
     },
     onSetSearch: (search) => {
       graphFilters.search = String(search || '').trim();
       saveGraphPrefs();
-      renderGraph(beads, assocs);
+      debouncedRenderGraph(beads, assocs);
     },
   });
 
