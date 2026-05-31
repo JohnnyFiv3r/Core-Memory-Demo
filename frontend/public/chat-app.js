@@ -2002,27 +2002,30 @@ function renderGraph3DCanvas(el, edges, beadMap, onNodeClick, onEdgeClick) {
   const canvasHost = host.canvasHost;
 
   const graph = reagraphDataFromEdges(edges, beadMap);
+  // Polished dark theme: brighter active/selected fills, dimmer inactive state
+  // for depth, higher-contrast labels. Mirrors the standalone graph view.
   const theme = {
-    canvas: { background: '#060a16' },
+    canvas: { background: '#04060c' },
+    arrow: { fill: '#6076a6', activeFill: '#8effa6' },
     node: {
-      fill: '#7ca0ab',
-      activeFill: '#6ae276',
-      opacity: 0.95,
+      fill: '#8fb3c4',
+      activeFill: '#8effa6',
+      opacity: 1,
       selectedOpacity: 1,
-      inactiveOpacity: 0.2,
-      label: { color: '#e1e4ed', stroke: '#060a16', activeColor: '#ffffff' },
-      subLabel: { color: '#8b8fa3', stroke: 'transparent', activeColor: '#e1e4ed' },
+      inactiveOpacity: 0.18,
+      label: { color: '#eef2fb', stroke: '#04060c', activeColor: '#ffffff' },
+      subLabel: { color: '#9aa3ba', stroke: 'transparent', activeColor: '#e1e4ed' },
     },
     edge: {
-      fill: '#5b6a8a',
-      activeFill: '#8ea2ff',
-      opacity: 0.7,
+      fill: '#46557a',
+      activeFill: '#8effa6',
+      opacity: 0.55,
       selectedOpacity: 1,
-      inactiveOpacity: 0.2,
-      label: { color: '#b8c0d8', stroke: '#060a16', activeColor: '#ffffff' },
+      inactiveOpacity: 0.12,
+      label: { color: '#c3cbe2', stroke: '#04060c', activeColor: '#ffffff' },
     },
-    lasso: { border: '1px solid #6ae276', background: 'rgba(106,226,118,0.15)' },
-    ring: { fill: '#1f2838', activeFill: '#6ae276' },
+    lasso: { border: '1px solid #6ae276', background: 'rgba(106,226,118,0.18)' },
+    ring: { fill: '#243049', activeFill: '#8effa6' },
   };
 
   renderGraph3DRuntime({
@@ -2036,7 +2039,7 @@ function renderGraph3DCanvas(el, edges, beadMap, onNodeClick, onEdgeClick) {
   })
     .then(() => {
       if (host && typeof host.setNote === 'function') {
-        host.setNote('Reagraph 3D: drag to orbit, right-drag to pan, wheel to zoom, drag nodes to reposition.');
+        host.setNote('3D causal graph — auto-rotating. Drag to take control: orbit, right-drag to pan, wheel to zoom, drag nodes to reposition.');
       }
     })
     .catch(() => {
