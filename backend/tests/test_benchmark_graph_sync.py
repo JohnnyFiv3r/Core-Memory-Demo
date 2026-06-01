@@ -81,6 +81,58 @@ class TestSyncGraphBackend(unittest.TestCase):
         self.assertFalse(out["synced"])
         self.assertIn("kuzu exploded", out["error"])
 
+    def test_benchmark_backend_paths_overrides_live_env_and_restores(self):
+        from app.benchmarks import lifecycle_runner as lr
+
+        # Simulate the hosted config: env points at the LIVE store.
+        os.environ["CORE_MEMORY_KUZU_PATH"] = "/var/data/core-memory/.beads/kuzu"
+        os.environ["CORE_MEMORY_QDRANT_PATH"] = "/var/data/core-memory/.beads/qdrant"
+        with tempfile.TemporaryDirectory() as td:
+            with lr.benchmark_backend_paths(td):
+                # Inside the scope both vars point at the benchmark root, not live.
+                self.assertEqual(str(Path(td) / ".beads" / "kuzu"), os.environ["CORE_MEMORY_KUZU_PATH"])
+                self.assertEqual(str(Path(td) / ".beads" / "qdrant"), os.environ["CORE_MEMORY_QDRANT_PATH"])
+            # Restored afterward.
+            self.assertEqual("/var/data/core-memory/.beads/kuzu", os.environ["CORE_MEMORY_KUZU_PATH"])
+            self.assertEqual("/var/data/core-memory/.beads/qdrant", os.environ["CORE_MEMORY_QDRANT_PATH"])
+        os.environ.pop("CORE_MEMORY_KUZU_PATH", None)
+        os.environ.pop("CORE_MEMORY_QDRANT_PATH", None)
+
+    def test_backend_paths_restores_unset_vars(self):
+        from app.benchmarks import lifecycle_runner as lr
+
+        os.environ.pop("CORE_MEMORY_KUZU_PATH", None)
+        with tempfile.TemporaryDirectory() as td:
+            with lr.benchmark_backend_paths(td):
+                self.assertIn("CORE_MEMORY_KUZU_PATH", os.environ)
+            # Was unset before -> must be unset after, not left dangling.
+            self.assertNotIn("CORE_MEMORY_KUZU_PATH", os.environ)
+
+    def test_sync_clears_graph_dir_before_load(self):
+        from app.benchmarks import lifecycle_runner as lr
+
+        synced_calls = []
+
+        class FakeGraph:
+            name = "kuzu"
+
+            def sync_from_storage(self, beads, associations):
+                synced_calls.append(len(associations))
+                return {"ok": True}
+
+        with tempfile.TemporaryDirectory() as td:
+            _write_index(Path(td), [{"source_bead": "b1", "target_bead": "b2", "relationship": "supports"}])
+            # Pre-existing graph dir with content -> must be wiped before sync.
+            graph_dir = Path(td) / ".beads" / "kuzu"
+            graph_dir.mkdir(parents=True, exist_ok=True)
+            (graph_dir / "stale.db").write_text("old", encoding="utf-8")
+            with patch("core_memory.persistence.graph.factory.create_graph_backend", return_value=FakeGraph()), \
+                 patch("core_memory.persistence.graph.protocol.NullGraphBackend", new=type("X", (), {})):
+                out = lr.sync_graph_backend(td)
+            self.assertTrue(out["synced"])
+            # The stale graph dir contents were removed before the rebuild.
+            self.assertFalse((graph_dir / "stale.db").exists())
+
     def test_pre_qa_flush_calls_graph_sync(self):
         from app.benchmarks import lifecycle_runner as lr
         from app.benchmarks.contracts import BenchmarkConversation

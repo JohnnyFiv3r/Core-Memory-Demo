@@ -1,10 +1,12 @@
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import shutil
 import time
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from app.benchmarks.contracts import (
     BenchmarkConversation,
@@ -107,6 +109,35 @@ def _build_semantic_index(root: str | Path) -> dict[str, Any]:
     return dict(build_semantic_index(Path(root)) or {})
 
 
+# Per-root paths for the embedded vector/graph backends, derived from the
+# benchmark run's own root. Core Memory's factories give CORE_MEMORY_QDRANT_PATH
+# / CORE_MEMORY_KUZU_PATH priority over the root argument, and on hosted those
+# env vars point at the LIVE store (/var/data/core-memory/.beads/...). Without
+# overriding them, a benchmark run would read/write the production semantic +
+# graph DBs instead of its own isolated root — polluting live data and
+# traversing live/stale edges. This context manager scopes both env vars to the
+# benchmark root for the duration of a conversation (covering both the graph
+# sync and the QA-time recall traversal), then restores them.
+@contextlib.contextmanager
+def benchmark_backend_paths(root: str | Path) -> Iterator[None]:
+    beads = Path(root) / ".beads"
+    overrides = {
+        "CORE_MEMORY_QDRANT_PATH": str(beads / "qdrant"),
+        "CORE_MEMORY_KUZU_PATH": str(beads / "kuzu"),
+    }
+    saved = {k: os.environ.get(k) for k in overrides}
+    try:
+        for k, v in overrides.items():
+            os.environ[k] = v
+        yield
+    finally:
+        for k, old in saved.items():
+            if old is None:
+                os.environ.pop(k, None)
+            else:
+                os.environ[k] = old
+
+
 def sync_graph_backend(root: str | Path) -> dict[str, Any]:
     """Sync the replayed corpus's associations into the configured graph backend.
 
@@ -117,15 +148,36 @@ def sync_graph_backend(root: str | Path) -> dict[str, Any]:
     even though the index holds hundreds of edges. For the Python/Null backend
     (GRAPH_BACKEND=none) this is a no-op, since that path reads index.json
     directly. Best-effort: a sync failure must never abort the benchmark.
+
+    Callers must run this inside ``benchmark_backend_paths(root)`` so the graph
+    backend is built at the benchmark root, not the env's live path.
+
+    The benchmark graph dir is wiped before the sync so re-syncing the full
+    index after each conversation's pre-QA flush cannot append duplicate edges
+    (Kuzu's sync_from_storage is additive). Each sync rebuilds the graph to
+    exactly the current index — no cross-conversation accumulation.
     """
     try:
         from core_memory.persistence.graph.factory import create_graph_backend
         from core_memory.persistence.graph.protocol import NullGraphBackend
         from core_memory.persistence.backend import create_backend
 
-        gb = create_graph_backend(Path(root))
-        if isinstance(gb, NullGraphBackend):
+        # Probe the backend kind first; only wipe for a real (non-Null) graph DB.
+        probe = create_graph_backend(Path(root))
+        if isinstance(probe, NullGraphBackend):
             return {"ok": True, "synced": False, "reason": "null_backend_reads_index_directly"}
+        try:
+            if hasattr(probe, "close"):
+                probe.close()
+        except Exception:
+            pass
+        # Rebuild from scratch: clear the benchmark graph dir so the sync is a
+        # clean load of the current index, never an append onto prior conversations.
+        graph_dir = Path(root) / ".beads" / "kuzu"
+        if graph_dir.exists():
+            shutil.rmtree(graph_dir, ignore_errors=True)
+
+        gb = create_graph_backend(Path(root))
         storage = create_backend(Path(root) / ".beads")
         index = storage.load_index()
         beads = list((index.get("beads") or {}).values())
@@ -952,7 +1004,18 @@ def _emit_progress(progress: Any | None, completed: int, total: int, qa: Benchma
         pass
 
 
-def run_lifecycle_conversation(
+def run_lifecycle_conversation(*, root: str | Path, **kwargs: Any) -> dict[str, Any]:
+    """Run the faithful benchmark lifecycle for one normalized conversation.
+
+    Thin wrapper that scopes the embedded vector/graph backend paths to this
+    benchmark root for the whole conversation — replay, graph sync, and QA-time
+    recall traversal all hit the isolated store rather than the env's live paths.
+    """
+    with benchmark_backend_paths(root):
+        return _run_lifecycle_conversation_impl(root=root, **kwargs)
+
+
+def _run_lifecycle_conversation_impl(
     *,
     root: str | Path,
     conversation: BenchmarkConversation,
@@ -971,8 +1034,6 @@ def run_lifecycle_conversation(
     progress_total: int | None = None,
     progress_completed_offset: int = 0,
 ) -> dict[str, Any]:
-    """Run the faithful benchmark lifecycle for one normalized conversation."""
-
     flags = shortcut_flags or BenchmarkShortcutFlags()
     assert_lifecycle_faithful_mode(dataset_mode=dataset_mode, shortcut_flags=flags)
     qa_session_mode_name = str(qa_session_mode or "shared").strip().lower() or "shared"
