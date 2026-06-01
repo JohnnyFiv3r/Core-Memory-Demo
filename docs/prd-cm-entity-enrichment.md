@@ -37,22 +37,46 @@ weak/empty edges; and because every bead carries the same run-level tags, the
 
 ### Root cause
 
-**Core-Memory ships no real entity extraction, and only heuristic (regex) claim
-extraction.** Entity/topic extraction is **delegated to the caller's
-`crawler_updates`**. Evidence in the current pinned source:
+**Reframed (per maintainer guidance):** every field in the bead schema should be
+**LLM-judged each turn** — treat the bead as a *form* the agent fills to the best
+of its ability from the turn + shared metadata + inference. Core-Memory has the
+bones of this (`policy/bead_judge.py::judge_bead_fields`, an LLM "author every
+semantic field" pass) but it is **incomplete, fragmented, and bypassed** — the
+three failure modes called out by the maintainer:
 
-- `core_memory/claim/extraction.py` — claim extraction is a fixed set of regex
-  extractors (`_extract_timezone`, `_extract_location`, `_extract_preference`,
-  …). On casual conversation it captures almost nothing → `claims: 0`.
-- There is **no** `extract_entities` / NER / noun-phrase pass anywhere in
-  `core_memory/` outside the caller-supplied crawler path.
-- `core_memory/association/crawler_contract.py` consumes whatever
-  `entities`/`associations` the crawler emits, plus a `shared_tag_overlap`
-  fallback when no stronger relationship is inferred.
-- `core_memory/runtime/passes/enrichment.py::run_turn_enrichment` stages are:
-  association pass, claim extraction (heuristic), preview associations, crawler
-  merge, decision pass, claim updates, memory outcome, goal lifecycle, quality
-  metric — **none of which extract entities from raw text.**
+**① Lacking instructions — the form is half-blank.** The `bead_judge` prompt
+enumerates only ~17 of the bead schema's ~55 fields
+(`type, title, summary, detail, because, supporting_facts, evidence_refs,
+entities, topics, state_change, validity, retrieval_eligible, retrieval_title,
+retrieval_facts, effective_from, effective_to, observed_at`). It **never asks the
+LLM to fill** the inference fields the schema exists to hold:
+`cause_candidates`, `effect_candidates`, `mechanism`, `impact_level`, the six key
+families (`incident_keys`/`decision_keys`/`goal_keys`/`action_keys`/
+`outcome_keys`/`time_keys`), `what_almost_happened`, `what_was_rejected`,
+`what_felt_risky`, `assumption`, `uncertainty`, `links`, richer `claims`.
+
+**② Fragmented — a bead is assembled by 3+ disjoint mechanisms.** `bead_judge`
+(LLM or regex fallback) for some fields; `claim/extraction.py` (a separate fixed
+set of regex extractors — `_extract_timezone`/`_extract_location`/… → `claims: 0`
+on casual chat) for claims; `association/crawler_contract.py` (a
+`shared_tag_overlap` heuristic) for entities/associations. There is no single
+coherent form-fill; there is **no** NER/noun-phrase pass anywhere in
+`core_memory/` outside the caller-supplied crawler.
+
+**③ Not happening in practice — the judge is bypassed.** When a caller passes
+`metadata.crawler_updates` (the demo's `locomo_turn_crawler` always does),
+`runtime/engine.py` (≈ line 317) uses that payload for the bead's create-fields
+and **does not** use `judge_bead_fields`. So in the benchmark, beads are authored
+by the demo's capitalization-regex crawler, not the LLM. Even on the non-crawler
+path, the judge only runs in `auto`/`llm` mode with a **chat** provider
+configured (`resolve_chat_config` → `CORE_MEMORY_CHAT_PROVIDER`/
+`CORE_MEMORY_CHAT_MODEL`); the demo configures an *embeddings* provider but no
+chat provider, so the judge would fall back to heuristics regardless.
+
+Net: the inspected `D2:2` bead (title==summary==detail, entities just
+`["Caroline","locomo:conv-26"]`, `associated_with`/`shared_tag_overlap` edges,
+`retrieval_eligible:false`) is the output of regex extraction, **not** an LLM
+form-fill — even though `judge_bead_fields` exists to do exactly that.
 
 The demo's `locomo_turn_crawler._text_entities` (a capitalized-token regex) is
 therefore *representative* of what a Core-Memory adopter gets from the built-in
@@ -70,85 +94,117 @@ conversational extraction caps the achievable recall/F1 well below competitive
 
 ## 2. Goal & success criteria
 
-Give Core-Memory a real conversational extraction capability so that, feeding
-**only raw turns**, the LoCoMo benchmark reaches competitive recall.
+Make `judge_bead_fields` author the **entire bead schema as one coherent LLM
+pass every turn** ("fill the form"), and make the canonical write path actually
+use it — so that, feeding **only raw turns**, beads are richly populated and the
+LoCoMo benchmark reaches competitive recall.
 
 Success:
-- **S1** — recall@5 on conv-26 (and the full LoCoMo set) materially improves
-  over the 0.44 baseline with no demo-side extraction (demo feeds raw turns).
-- **S2** — extracted entities for the `D2:2` example include the salient
-  noun-phrases (`charity race`, `mental health`, `awareness`), not just
-  capitalized tokens; junk tokens (`Making`, `That`) excluded.
-- **S3** — associations between beads reflect **real shared entities**, not
-  run-level tags; `shared_tag_overlap` is no longer the dominant edge type.
-- **S4** — beads carrying real extracted signal are `retrieval_eligible: true`
-  (they pass `can_be_retrieval_eligible` because they now have quality signals).
-- **S5** — opt-in / gated so adopters without a provider key keep today's
-  zero-dependency behaviour; no hard new runtime dependency by default.
+- **S1** — recall@5 on conv-26 (and full LoCoMo) materially improves over the
+  0.44 baseline with no demo-side extraction (demo feeds raw turns).
+- **S2** — the judge prompt covers the **full schema** (the ~38 currently-omitted
+  fields incl. `cause_candidates`/`effect_candidates`/`mechanism`/`impact_level`,
+  the `*_keys` families, the counterfactual/reflection fields, `uncertainty`,
+  `links`, richer `claims`), and for `D2:2` fills salient entities
+  (`charity race`, `mental health`, `awareness`) — not capitalized tokens; junk
+  (`Making`, `That`) excluded.
+- **S3** — associations reflect **real shared entities**, not run-level tags;
+  `shared_tag_overlap` is no longer the dominant edge type.
+- **S4** — judged beads are `retrieval_eligible: true` (they now carry the
+  quality signals `can_be_retrieval_eligible` requires).
+- **S5** — the LLM judge **actually runs on the canonical write path**, including
+  when a caller supplies `crawler_updates` (today that bypasses the judge); and a
+  chat provider is resolvable in the benchmark/demo so it isn't silently
+  heuristic.
+- **S6** — gated/fail-open so adopters without a chat provider keep today's
+  zero-dependency heuristic behaviour; no hard new runtime dependency by default.
 
 Non-goals: changing the retrieval/traversal stack (already done); LoCoMo-specific
-shaping (must be general conversational ingest).
+shaping (must be general conversational ingest); replacing the heuristic fallback
+(it stays as the no-provider default).
 
 ---
 
 ## 3. Options
 
-### Option A — Optional LLM-backed enrichment pass (recommended for the number)
-Add an entity/claim extractor to `run_turn_enrichment`, gated by the adopter's
-embedding/LLM provider key, that calls the configured model to extract entities,
-topics, and richer claims from each turn, then feeds them through the existing
-`crawler_updates` → `merge_crawler_updates` contract (so associations,
-`retrieval_eligible`, and embedding text all improve without touching downstream
-code).
+The work is three coordinated parts (complete the form, unify the fillers, wire
+it in). The options below differ in how far to take it.
 
-- **Pros:** highest quality; benchmark genuinely reflects CM; reuses the
-  existing enrichment/crawler contract as the insertion point.
-- **Cons:** per-turn LLM cost + latency; needs batching/caching; new provider
-  call path in the hot ingest loop; must stay gated + fail-open.
-- **Insertion point:** new stage in `run_turn_enrichment` (before crawler merge);
-  emits the same shape `locomo_turn_crawler` emits today.
+### Option A — Full-schema LLM bead-field judge, wired into the canonical path (recommended)
+1. **Complete the form:** expand the `judge_bead_fields` prompt + output schema
+   to cover the full bead schema (add the ~38 omitted fields), with explicit
+   per-field instructions and grounding/`inferred` rules (the prompt already does
+   this well for `because` — extend that rigor to every field).
+2. **Unify the fillers:** route claim/entity/association authoring through the
+   single judge output instead of the separate regex extractors, so a turn's
+   bead is one coherent form-fill (heuristic remains the fallback only).
+3. **Wire it in:** ensure the canonical write path uses the judge even when a
+   caller passes `crawler_updates` (today `engine.py` ≈ L317 bypasses it), e.g.
+   judge first, let caller updates *augment* rather than *replace*; and make a
+   chat provider resolvable so it isn't silently heuristic.
 
-### Option B — Better built-in heuristic (no LLM dependency)
-Replace the capitalization regex with a noun-phrase/keyphrase extractor (e.g.
-lightweight POS/noun-chunking, or a dependency-light keyphrase algorithm) as the
-default entity extractor inside CM.
+- **Pros:** realizes the "fill the form" model; benchmark genuinely reflects CM;
+  every field carries judged signal → better embeddings, edges, eligibility.
+- **Cons:** per-turn LLM cost + latency (175 calls/conversation — batch/cache);
+  prompt-size growth; determinism needs temp 0 + model pinning; must stay
+  gated + fail-open.
 
-- **Pros:** no API cost/latency; helps every adopter by default; no provider dep.
-- **Cons:** ceiling below LLM; still misses paraphrase/coref; another dependency
-  (spaCy model) unless a pure-python approach is used.
+### Option B — Complete the form but keep heuristic default (no new hard dep)
+Same prompt/schema completion as A, but the LLM judge stays opt-in behind a chat
+provider; when absent, an improved heuristic (noun-phrase/keyphrase instead of
+the capitalization regex) fills as much of the form as it can.
 
-### Option C — Formalize the crawler-extraction contract (adopter-supplied)
-Keep extraction caller-supplied (CM's current design), but document/standardize
-the contract and ship a reference LLM extractor adopters can opt into.
+- **Pros:** no API cost by default; still lifts the no-provider baseline.
+- **Cons:** heuristic ceiling well below LLM; won't reach competitive recall
+  without the LLM path enabled (so this is really "A's fallback," not a standalone
+  answer to the benchmark goal).
 
-- **Pros:** matches CM's existing delegation design; smallest CM core change.
-- **Cons:** the benchmark would then measure the *demo's* extractor, which
-  contradicts the "prove Core-Memory itself" decision. Rejected on that basis,
-  documented for completeness.
+### Option C — Keep caller-supplied extraction (rejected)
+Leave authoring to the caller's `crawler_updates` (CM's current de-facto
+behaviour) and just document the contract. Rejected: the benchmark would measure
+the *demo's* extractor, contradicting the "prove Core-Memory itself" decision, and
+it leaves the schema-as-form vision unrealized.
 
 ### Recommendation
-**A**, with **B as the zero-dependency default** when no provider is configured
-(so S5 holds): LLM extraction when a key is present, improved heuristic when not.
-C is rejected against the stated benchmark intent.
+**A**, with **B's improved heuristic as the no-provider fallback** (S6). The
+defining change vs. today is not "add entity extraction" — it is **make the
+existing LLM judge author the whole schema and stop bypassing it.**
 
 ---
 
-## 4. Contract the extractor must satisfy (for A or B)
+## 4. Contract the judge output must satisfy
 
-Emit, per turn, a `crawler_updates`-shaped payload (already consumed by
-`merge_crawler_updates`):
-- `beads_create[].entities` — salient entities/noun-phrases (not just caps),
-  deduped, stopword-filtered, ~≤12.
-- `beads_create[].topics` — semantic topics (not run-level `sample:`/`session:`).
-- `beads_create[].supporting_facts` — so beads pass `can_be_retrieval_eligible`
-  (currently the reason seed beads get `retrieval_eligible: false`).
+The judge is a **full-schema form-fill**: every turn it emits one coherent
+`crawler_updates`-shaped payload (already consumed by `merge_crawler_updates`)
+in which **every bead field it can responsibly infer is populated**, each marked
+grounded-vs-`inferred` per the existing `because` discipline. Concretely it must
+fill, not leave blank:
+
+- **Distinct narrative fields** — `title` / `summary` / `detail` that carry
+  *different* signal (gist vs. one-line vs. full), ending the current
+  title==summary==detail triplication so beads spread in vector space.
+- `entities` — salient entities/noun-phrases (not just caps), deduped,
+  stopword-filtered, ~≤12 (e.g. `charity race`, `mental health`, `awareness`).
+- `topics` — semantic topics (not run-level `sample:`/`session:` tags).
+- `supporting_facts` + the other quality signals (`because`, `state_change`,
+  `evidence_refs`) so beads pass `can_be_retrieval_eligible` (the reason seed
+  beads currently get `retrieval_eligible: false`).
+- **The inference fields the schema exists to hold and the prompt omits today:**
+  `cause_candidates`, `effect_candidates`, `mechanism`, `impact_level`, the six
+  `*_keys` families (`incident`/`decision`/`goal`/`action`/`outcome`/`time`),
+  `what_almost_happened`, `what_was_rejected`, `what_felt_risky`, `assumption`,
+  `uncertainty`, `links`.
 - `associations[]` — entity/topic-overlap edges with a relationship better than
   `associated_with` where inferable; **do not** derive edges from run-level tags.
-- Optionally richer `claims[]` for the claim layer (addresses `claims: 0`).
+- Richer `claims[]` for the claim layer (addresses `claims: 0` on casual chat).
 
-Embedding text (`schema/bead_projection.build_retrieval_text`) should compose
-**distinct** signal (utterance + entities + gist) rather than the current
-title==summary==detail triplication, so beads spread in vector space.
+Fields the LLM genuinely cannot ground are left empty (not hallucinated) — but
+"empty because half the form was never on the prompt" (today's failure mode ①)
+must end. The bar is *the agent attempts every field every turn.*
+
+Embedding text (`schema/bead_projection.build_retrieval_text`) then composes
+**distinct** signal (utterance + entities + gist) from the now-populated fields,
+rather than re-projecting one triplicated utterance.
 
 ---
 
