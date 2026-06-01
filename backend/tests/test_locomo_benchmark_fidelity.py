@@ -155,7 +155,7 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
         self.assertEqual(run_out, out['last_run'])
         self.assertEqual(1, run_mock.call_count)
 
-    def test_seed_replay_marks_drain_failure_as_failed(self):
+    def test_seed_replay_treats_semantic_drain_failure_as_warning(self):
         if runtime_mod is None:
             self.skipTest('runtime unavailable')
         rows = [self._row(dia_id='D1:1')]
@@ -169,8 +169,9 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
              patch.object(runtime_mod, 'async_jobs_status', return_value={'queues': {}}):
             out = runtime_mod.replay_locomo_corpus(sample_mode='single', sample_id='conv-1')
 
-        self.assertFalse(out['ok'])
-        self.assertTrue(out['drain_failed'])
+        self.assertTrue(out['ok'])
+        self.assertFalse(out['drain_failed'])
+        self.assertTrue(out['drain_warning'])
         self.assertEqual('semantic_drain_failed', out['post_drain']['error'])
         self.assertEqual(1, out['seeded_turns'])
 

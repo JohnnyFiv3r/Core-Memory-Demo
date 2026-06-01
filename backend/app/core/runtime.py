@@ -748,8 +748,9 @@ def ingest_locomo_samples_through_core_memory(
 
     final_queue = async_jobs_status(root=target_root)
     drain_cancelled = bool(post_drain) and bool(post_drain.get("cancelled"))
+    drain_semantic_failed = bool(post_drain) and str(post_drain.get("error") or "") == "semantic_drain_failed"
     cancelled = bool(cancelled or drain_cancelled)
-    drain_failed = bool(post_drain) and not bool(post_drain.get("ok", True)) and not drain_cancelled
+    drain_failed = bool(post_drain) and not bool(post_drain.get("ok", True)) and not drain_cancelled and not drain_semantic_failed
     return {
         "ok": ingested_count > 0 and not cancelled and not errors and not drain_failed and not any(not bool((f or {}).get("ok")) for f in flushes),
         "cancelled": cancelled,
@@ -771,6 +772,7 @@ def ingest_locomo_samples_through_core_memory(
         "errors": errors[:20],
         "post_drain": post_drain,
         "drain_failed": drain_failed,
+        "drain_warning": bool(drain_semantic_failed),
         "queue_idle": bool(_queue_idle(final_queue)),
         "rows": rows,
     }
@@ -938,8 +940,9 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
 
     final_queue = async_jobs_status(root=settings.core_memory_root)
     drain_cancelled = bool(post_drain) and bool(post_drain.get("cancelled"))
+    drain_semantic_failed = bool(post_drain) and str(post_drain.get("error") or "") == "semantic_drain_failed"
     cancelled = bool(cancelled or drain_cancelled)
-    drain_failed = bool(post_drain) and not bool(post_drain.get("ok", True)) and not drain_cancelled
+    drain_failed = bool(post_drain) and not bool(post_drain.get("ok", True)) and not drain_cancelled and not drain_semantic_failed
     turn_range = {"first": 1 if seeded > 0 else 0, "last": int(seeded)}
     return {
         "ok": seeded > 0 and not cancelled and not errors and not drain_failed,
@@ -966,6 +969,7 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
         "queue": final_queue,
         "post_drain": post_drain,
         "drain_failed": drain_failed,
+        "drain_warning": bool(drain_semantic_failed),
         "auto_flush": bool(auto_flush),
         "flush_count": len(flush_events),
         "flushes": flush_events[-20:],
