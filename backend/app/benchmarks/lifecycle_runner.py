@@ -1116,13 +1116,21 @@ def _run_lifecycle_conversation_impl(
                 "corpus_before_qa": corpus_snapshot(isolated_path),
             }
 
-        qa_result = run_qa_efforts(root=qa_root, conversation=conversation, qa=qa, recall_fn=recall_fn, k=retrieval_k, answer_mode=answer_mode, generator_model=generator_model, bead_to_dias=bead_to_dias)
-        if write_qa_beads:
-            qa_result.update(write_qa_turn(root=qa_root, conversation=conversation, qa=qa, qa_result=qa_result, qa_session_id=qa_session_id_for_case, process_turn_finalized_fn=process_turn_finalized_fn))
-        else:
-            qa_result["qa_bead_written"] = False
-        if isolated_meta.get("enabled"):
-            isolated_meta["corpus_after_qa"] = corpus_snapshot(qa_root)
+        # The conversation-wide backend-path scope is pinned to the base root.
+        # In isolated mode the QA runs against a per-QA copy (qa_root), so re-scope
+        # the embedded vector/graph paths to that copy for this case's recall +
+        # bead write — otherwise hosted qdrant/kuzu access would hit the shared
+        # base store and defeat isolation. _isolated_qa_root copytrees the
+        # already-synced base graph, so no re-sync is needed. Shared mode keeps
+        # the base scope (qa_root is root), so the override is a harmless no-op.
+        with benchmark_backend_paths(qa_root):
+            qa_result = run_qa_efforts(root=qa_root, conversation=conversation, qa=qa, recall_fn=recall_fn, k=retrieval_k, answer_mode=answer_mode, generator_model=generator_model, bead_to_dias=bead_to_dias)
+            if write_qa_beads:
+                qa_result.update(write_qa_turn(root=qa_root, conversation=conversation, qa=qa, qa_result=qa_result, qa_session_id=qa_session_id_for_case, process_turn_finalized_fn=process_turn_finalized_fn))
+            else:
+                qa_result["qa_bead_written"] = False
+            if isolated_meta.get("enabled"):
+                isolated_meta["corpus_after_qa"] = corpus_snapshot(qa_root)
         qa_result["qa_session_id"] = qa_session_id_for_case
         qa_result["qa_session_mode"] = qa_session_mode_name
         qa_result["isolated_qa"] = isolated_meta
