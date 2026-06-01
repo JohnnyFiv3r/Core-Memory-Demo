@@ -35,9 +35,9 @@ def queue_semantic_projection_upgrade_once(root: str | Path) -> dict[str, Any]:
     """Queue the PR #169 projection rebuild once for a persistent demo root.
 
     The newest Core-Memory package automatically uses the richer projection for
-    new writes/rebuilds, but persisted demo indexes need a dirty mark so the
-    background semantic worker refreshes existing rows without waiting for a
-    user query to notice the fingerprint mismatch.
+    new writes/rebuilds, but persisted demo indexes need a full reconcile so the
+    background semantic worker refreshes existing Qdrant/FastEmbed rows through
+    the full rebuild path instead of the default semantic delta path.
     """
     root_p = Path(root)
     marker_path = root_p / ".beads" / "semantic" / "projection-upgrades.json"
@@ -47,13 +47,9 @@ def queue_semantic_projection_upgrade_once(root: str | Path) -> dict[str, Any]:
         return {"ok": True, "queued": False, "already_applied": True, "upgrade": _UNIFIED_BEAD_PROJECTION_UPGRADE}
 
     try:
-        from core_memory.retrieval.lifecycle import mark_semantic_dirty
+        from core_memory.retrieval.lifecycle import enqueue_semantic_rebuild
 
-        dirty = mark_semantic_dirty(
-            root_p,
-            reason=_UNIFIED_BEAD_PROJECTION_UPGRADE,
-            enqueue=True,
-        )
+        queue = enqueue_semantic_rebuild(root_p, mode="reconcile")
     except Exception as exc:  # pragma: no cover - startup should not hard-fail
         logger.warning("semantic_projection_upgrade_queue_failed: %s", exc)
         return {"ok": False, "queued": False, "error": str(exc), "upgrade": _UNIFIED_BEAD_PROJECTION_UPGRADE}
@@ -63,7 +59,7 @@ def queue_semantic_projection_upgrade_once(root: str | Path) -> dict[str, Any]:
     marker["last_queued_upgrade"] = _UNIFIED_BEAD_PROJECTION_UPGRADE
     _write_json(marker_path, marker)
 
-    queue = dict((dirty or {}).get("queue") or {})
+    queue = dict(queue or {})
     return {
         "ok": True,
         "queued": bool(queue.get("queued", True)),

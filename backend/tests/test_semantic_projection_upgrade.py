@@ -24,13 +24,12 @@ class TestSemanticProjectionUpgrade(unittest.TestCase):
             self.assertIn(_UNIFIED_BEAD_PROJECTION_UPGRADE, marker.get("applied") or [])
 
             manifest_path = root / ".beads" / "semantic" / "manifest.json"
-            manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
-            self.assertTrue(manifest.get("dirty"))
-            self.assertEqual(_UNIFIED_BEAD_PROJECTION_UPGRADE, manifest.get("last_dirty_reason"))
+            self.assertFalse(manifest_path.exists())
 
             queue_path = root / ".beads" / "semantic" / "rebuild-queue.json"
             queue = json.loads(queue_path.read_text(encoding="utf-8"))
             self.assertTrue(queue.get("queued"))
+            self.assertEqual("reconcile", queue.get("mode"))
             self.assertEqual(1, int(queue.get("epoch") or 0))
 
             second = queue_semantic_projection_upgrade_once(root)
