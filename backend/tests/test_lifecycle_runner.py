@@ -333,6 +333,36 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual("Caroline: I went to a LGBTQ support group yesterday.", retrieved_context[0]["text"])
         self.assertEqual(1.0, out["efforts"]["high"]["answer_f1"])
 
+    def test_qa_efforts_prefers_full_bead_detail_over_truncated_title_for_answer_generation(self):
+        conv = _conversation()
+        qa = BenchmarkQA(
+            qa_id="qa-1",
+            question="Where did Caroline move from?",
+            expected_answer="Sweden",
+            gold_evidence=["D4:3"],
+            category="1",
+            bucket_labels=(),
+            metadata={"category": 1},
+        )
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            return {"raw": {"results": [{"bead_id": "bead-1", "score": 0.9, "metadata": {"dia_ids": ["D4:3"]}}]}}
+
+        with tempfile.TemporaryDirectory() as td:
+            index_dir = Path(td) / ".beads"
+            index_dir.mkdir(parents=True)
+            (index_dir / "index.json").write_text(
+                '{"beads":{"bead-1":{"id":"bead-1","title":"Caroline [other]: Thanks, Melanie! This necklace is super special to me - a gift from my grandma in my home country, Swe","detail":"Session date: 1 June 2023\\n\\nCaroline: This necklace is a gift from my grandma in my home country, Sweden.","source_turn_ids":["D4:3"],"type":"context"}}}',
+                encoding="utf-8",
+            )
+            with patch("app.benchmarks.lifecycle_runner.generate_locomo_answer", return_value={"answer": "Sweden", "used_dia_ids": ["D4:3"], "confidence": "high", "unsupported": False}) as answerer:
+                run_qa_efforts(root=td, conversation=conv, qa=qa, recall_fn=fake_recall, answer_mode="llm", generator_model="test:model")
+
+        retrieved_context = answerer.call_args.kwargs["retrieved_context"]
+        self.assertIn("home country, Sweden", retrieved_context[0]["bead_text"])
+        self.assertIn("home country, Sweden", retrieved_context[0]["text"])
+        self.assertNotEqual(retrieved_context[0]["bead"]["title"], retrieved_context[0]["text"])
+
     def test_qa_efforts_preserves_metadata_snippet_for_answer_generation(self):
         conv = _conversation()
         qa = BenchmarkQA(

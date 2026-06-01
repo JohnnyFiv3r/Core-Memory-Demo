@@ -164,8 +164,10 @@ async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_i
     context_block = _format_retrieved_context(retrieved_context)
     context_prompt = (
         "Answer the question based on the retrieved conversation context below. "
+        "Many benchmark questions require a short, faithful inference across the retrieved rows; make that inference when the evidence supports it. "
         "Use each evidence row's session_date_time to resolve relative dates like yesterday, last week, today, or next month into the absolute date/month/year when possible. "
-        "If the retrieved context does not contain enough information to answer, "
+        "Do not abstain merely because the answer is not phrased exactly like the question. "
+        "If the retrieved context genuinely does not contain enough information to answer, "
         "respond exactly with 'No information available'.\n\n"
         f"Question: {question}\n\n"
         f"Retrieved evidence:\n{context_block}\n\n"
@@ -186,7 +188,7 @@ async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_i
             "You are a conversational memory benchmark answerer. "
             "Only answer from the supplied retrieved evidence block. "
             "Do not use tools, memory, prior answers, or unstated knowledge. "
-            "If the evidence is insufficient, abstain with 'No information available'."
+            "When the evidence supports a concise inference, answer it; reserve 'No information available' for genuinely missing evidence."
         ),
     )
     result = await agent.run(context_prompt)

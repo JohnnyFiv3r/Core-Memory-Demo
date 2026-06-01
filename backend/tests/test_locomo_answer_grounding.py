@@ -73,6 +73,8 @@ class TestLocomoAnswerGrounding(unittest.TestCase):
         prompt = str(agent.run.call_args.args[0])
         self.assertIn("Retrieved evidence:", prompt)
         self.assertIn("Only answer from the supplied retrieved evidence block", str(Agent.call_args.kwargs.get("system_prompt") or ""))
+        self.assertIn("supports a concise inference", str(Agent.call_args.kwargs.get("system_prompt") or ""))
+        self.assertIn("Do not abstain merely", prompt)
 
 
 if __name__ == "__main__":

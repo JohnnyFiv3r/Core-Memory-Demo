@@ -205,10 +205,20 @@ def _normalize_retrieved_row(row: dict[str, Any], *, rank: int, bead_lookup: dic
         if date_value:
             turn_dates.append(date_value)
     session_date_time = next((x for x in turn_dates if x), "")
+    detail_text = str(bead.get("detail") or "").strip()
+    retrieval_facts_text = "\n".join(str(x).strip() for x in (bead.get("retrieval_facts") or []) if str(x).strip())
+    supporting_facts_text = "\n".join(str(x).strip() for x in (bead.get("supporting_facts") or []) if str(x).strip())
+    summary_text = "\n".join(str(x).strip() for x in (bead.get("summary") or []) if str(x).strip())
+    title_text = str(bead.get("title") or "").strip()
+    # The benchmark answerer needs the complete transcript fact, not the
+    # UI-oriented title/summary truncation. Prefer full detail/retrieval facts
+    # and only fall back to title/summary when no fuller bead body exists.
     bead_text = str(
-        bead.get("title")
-        or "\n".join(str(x).strip() for x in (bead.get("summary") or []) if str(x).strip())
-        or bead.get("detail")
+        detail_text
+        or retrieval_facts_text
+        or supporting_facts_text
+        or summary_text
+        or title_text
         or ""
     ).strip()
     snippet = str(
