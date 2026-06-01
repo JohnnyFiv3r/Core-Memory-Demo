@@ -120,11 +120,12 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
     async def test_locomo_lifecycle_queue_forces_clean_isolated_llm(self):
         if demo_routes is None:
             self.skipTest('pydantic_settings unavailable')
-        req = _Req({'suite': 'locomo_native_lifecycle', 'root_mode': 'snapshot', 'qa_session_mode': 'shared', 'answer_mode': 'none'})
+        req = _Req({'suite': 'locomo_native_lifecycle', 'root_mode': 'snapshot', 'qa_session_mode': 'shared', 'answer_mode': 'none', 'vector_backend': 'local-faiss'})
         old_mode = demo_routes.settings.benchmark_run_mode
         demo_routes.settings.benchmark_run_mode = 'queue'
         try:
-            with patch.object(demo_routes, '_prune_benchmark_jobs'), \
+            with patch.dict(demo_routes.os.environ, {'CORE_MEMORY_VECTOR_BACKEND': 'qdrant', 'CORE_MEMORY_GRAPH_BACKEND': 'kuzu'}), \
+                 patch.object(demo_routes, '_prune_benchmark_jobs'), \
                  patch.object(demo_routes.benchmark_store, 'read_active_job', return_value=None), \
                  patch.object(demo_routes.benchmark_store, 'enqueue_job', return_value=True) as enqueue:
                 out = await demo_routes.benchmark_run(req)
@@ -135,7 +136,39 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('clean', kwargs['root_mode'])
         self.assertEqual('isolated', kwargs['qa_session_mode'])
         self.assertEqual('llm', kwargs['answer_mode'])
+        stored_request = enqueue.call_args.kwargs['request']
+        self.assertEqual('qdrant', stored_request['vector_backend'])
+        self.assertEqual('kuzu', stored_request['graph_backend'])
         demo_routes.BENCHMARK_JOBS.pop(out['job_id'], None)
+
+    def test_benchmark_request_for_store_uses_runtime_backends(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        with patch.dict(demo_routes.os.environ, {'CORE_MEMORY_VECTOR_BACKEND': 'qdrant', 'CORE_MEMORY_GRAPH_BACKEND': 'kuzu'}):
+            out = demo_routes._benchmark_request_for_store({'suite': 'locomo_native_lifecycle', 'vector_backend': 'local-faiss'})
+        self.assertEqual('qdrant', out['vector_backend'])
+        self.assertEqual('kuzu', out['graph_backend'])
+
+    def test_benchmark_last_returns_stored_active_without_snapshot(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        stored = {
+            'job_id': 'active-db-job',
+            'status': 'running',
+            'request': {'suite': 'locomo_native_lifecycle', 'vector_backend': 'qdrant', 'graph_backend': 'kuzu'},
+            'kwargs': {'suite': 'locomo_native_lifecycle', 'semantic_mode_name': 'required', 'root_mode': 'clean'},
+            'progress': {'stage': 'locomo_lifecycle', 'stage_message': 'Replayed 111/175 turns'},
+            'events': [],
+            'started_at': '2026-06-01T22:41:46+00:00',
+            'updated_at': '2026-06-01T22:44:34+00:00',
+        }
+        with patch.object(demo_routes, '_prune_benchmark_jobs'), \
+             patch.object(demo_routes.benchmark_store, 'read_active_job', return_value=stored), \
+             patch.object(demo_routes, 'get_last_benchmark_snapshot', side_effect=AssertionError('snapshot should not be read while active')):
+            out = demo_routes.benchmark_last()
+        self.assertTrue(out['ok'])
+        self.assertEqual('running', out['summary']['status'])
+        self.assertEqual('qdrant', out['report']['config']['vector_backend'])
 
     def test_job_status_prefers_stored_completion_over_web_placeholder(self):
         if demo_routes is None:

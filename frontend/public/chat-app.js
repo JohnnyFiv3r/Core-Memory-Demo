@@ -1549,6 +1549,11 @@ async function parseApiJsonResponse(res, label) {
   return data || {};
 }
 
+function isTransientTransportError(err) {
+  const msg = String((err && err.message) || err || '');
+  return /network_changed|network_io_suspended|failed to fetch|networkerror|returned non-json \(http 5\d\d\)|http 5\d\d/i.test(msg);
+}
+
 async function sendMessageLegacyApi(text, progressMsg) {
   if (progressMsg) progressMsg.textContent = 'Chat pipeline: sending';
   const res = await fetch('/api/chat', {
@@ -4260,7 +4265,7 @@ async function refreshMemory() {
     restartRefreshTimer(refreshBackoffMs);
   } catch (err) {
     const errMsg = String((err && err.message) || err || '');
-    const isTransientNetwork = /network_changed|network_io_suspended|failed to fetch|networkerror/i.test(errMsg);
+    const isTransientNetwork = isTransientTransportError(errMsg);
     if (!isTransientNetwork) {
       refreshErrorStreak += 1;
       refreshBackoffMs = Math.min(30000, Math.max(2500, refreshBackoffMs * 2));
@@ -4793,7 +4798,6 @@ async function runBenchmark() {
     const benchmarkPayload = {
       suite: subset,
       semantic_mode: semanticMode,
-      vector_backend: 'local-faiss',
       myelination,
       root_mode: rootMode,
       embeddings_provider: embeddingsProvider,
@@ -4862,7 +4866,7 @@ async function runBenchmark() {
         pollBackoffMs = POLL_BACKOFF_MIN_MS;
       } catch (pollErr) {
         const pollErrMsg = String((pollErr && pollErr.message) || pollErr || '');
-        if (/network_changed|network_io_suspended|failed to fetch|networkerror/i.test(pollErrMsg)) {
+        if (isTransientTransportError(pollErrMsg)) {
           await new Promise(r => setTimeout(r, pollBackoffMs));
           pollBackoffMs = Math.min(POLL_BACKOFF_MAX_MS, pollBackoffMs * 2);
           continue;
@@ -4953,7 +4957,7 @@ async function runBenchmark() {
     }
   } catch (err) {
     const msg = String((err && err.message) || err || 'benchmark_failed');
-    if (/failed to fetch/i.test(msg)) {
+    if (isTransientTransportError(msg)) {
       const liveRun = await benchmarkHasLiveRun();
       if (liveRun) {
         addMsg('system', 'Benchmark started, but live polling briefly lost connection. Recovering from backend state...');

@@ -4,6 +4,7 @@ import asyncio
 import concurrent.futures
 import functools
 import json
+import os
 import threading
 import time
 import uuid
@@ -80,6 +81,31 @@ _BENCHMARK_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
 )
 _BENCHMARK_INFLIGHT_WORKERS = 0
 _BENCHMARK_INFLIGHT_LOCK = threading.Lock()
+
+
+def _benchmark_request_for_store(body: dict[str, Any] | None) -> dict[str, Any]:
+    """Return benchmark request metadata with backend fields from runtime env.
+
+    The browser payload is diagnostic/audit metadata in queue mode; the worker
+    executes from sanitized kwargs plus process env. Keep persisted metadata in
+    sync with the deployed backend so `/api/demo/benchmark/last` doesn't report
+    a stale hard-coded UI default such as local-faiss while the worker actually
+    uses Qdrant/Kuzu.
+    """
+
+    out = dict(body or {})
+    vector_backend = str(os.environ.get('CORE_MEMORY_VECTOR_BACKEND') or '').strip().lower()
+    graph_backend = str(os.environ.get('CORE_MEMORY_GRAPH_BACKEND') or '').strip().lower()
+    if vector_backend:
+        out['vector_backend'] = vector_backend
+    else:
+        out.pop('vector_backend', None)
+    if graph_backend:
+        out['graph_backend'] = graph_backend
+    else:
+        out.pop('graph_backend', None)
+    return out
+
 SEED_JOB_TTL_SECONDS = 30 * 60
 SEED_JOB_POLL_MS = 3000
 SEED_JOB_MAX_EVENTS = 64
@@ -1739,7 +1765,7 @@ async def benchmark_run(request: Request):
     if run_mode in {'queue', 'queued', 'cron'}:
         queue_diag = benchmark_store.diagnostics()
         try:
-            queued = benchmark_store.enqueue_job(job_id=job_id, request=dict(body or {}), kwargs=kwargs)
+            queued = benchmark_store.enqueue_job(job_id=job_id, request=_benchmark_request_for_store(body), kwargs=kwargs)
         except Exception as exc:
             queued = False
             row['queue_error_detail'] = str(exc)
@@ -1880,22 +1906,35 @@ async def benchmark_job_cancel(job_id: str):
 @router.get('/demo/benchmark/last')
 def benchmark_last():
     _prune_benchmark_jobs()
+    active_job = next((row for row in BENCHMARK_JOBS.values() if isinstance(row, dict) and not bool(row.get('done'))), None)
+    if isinstance(active_job, dict):
+        summary, report = _active_benchmark_state(active_job, {})
+        return {
+            'ok': True,
+            'summary': summary,
+            'report': report,
+            'history': [],
+            'latest_compare': None,
+        }
+
+    stored_active = benchmark_store.read_active_job()
+    if isinstance(stored_active, dict):
+        summary, report, _job = _stored_active_benchmark_state(stored_active)
+        return {
+            'ok': True,
+            'summary': summary,
+            'report': report,
+            'history': [],
+            'latest_compare': None,
+        }
+
     snapshot = get_last_benchmark_snapshot(history_limit=3)
     history = list(snapshot.get('history') or [])
     latest_compare = None
-    active_job = next((row for row in BENCHMARK_JOBS.values() if isinstance(row, dict) and not bool(row.get('done'))), None)
-    stored_active = None if isinstance(active_job, dict) else benchmark_store.read_active_job()
 
     summary = dict(snapshot.get('summary') or {})
     report = dict(snapshot.get('report') or {})
     ok = bool(snapshot.get('ok'))
-
-    if isinstance(active_job, dict):
-        summary, report = _active_benchmark_state(active_job, snapshot)
-        ok = True
-    elif isinstance(stored_active, dict):
-        summary, report, _job = _stored_active_benchmark_state(stored_active)
-        ok = True
 
     if len(history) >= 2:
         left = str((history[1].get('summary') or {}).get('run_id') or history[1].get('run_id') or '')
@@ -1906,8 +1945,6 @@ def benchmark_last():
                 latest_compare = cmp.get('compare') if cmp.get('ok') else None
             except Exception:
                 latest_compare = None
-    if isinstance(active_job, dict) or isinstance(stored_active, dict):
-        history = history[:2]
     history = _slim_benchmark_history(history)
     report = _strip_benchmark_case_payloads(report) if isinstance(report, dict) else report
     return {
