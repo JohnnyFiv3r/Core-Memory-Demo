@@ -174,6 +174,49 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
         self.assertEqual('semantic_drain_failed', out['post_drain']['error'])
         self.assertEqual(1, out['seeded_turns'])
 
+    def test_seed_replay_preserves_cancellation_from_drain(self):
+        if runtime_mod is None:
+            self.skipTest('runtime unavailable')
+        rows = [self._row(dia_id='D1:1')]
+        meta = {'sample_mode': 'single', 'sample_ids': ['conv-1'], 'session_range': {}, 'sessions_replayed': 1, 'turns_available': 1}
+
+        with patch.object(runtime_mod, '_iter_locomo_replay_rows', return_value=(rows, meta)), \
+             patch.object(runtime_mod, '_replay_locomo_row', return_value={'ok': True, 'session_id': 'locomo:conv-1:session:1'}), \
+             patch.object(runtime_mod, 'record_turn_tokens'), \
+             patch.object(runtime_mod, 'detect_model', return_value='test-model'), \
+             patch.object(runtime_mod, '_drain_async_until_idle', return_value={'ok': False, 'cancelled': True, 'error': 'drain_cancelled', 'passes': 1}), \
+             patch.object(runtime_mod, 'async_jobs_status', return_value={'queues': {}}):
+            out = runtime_mod.replay_locomo_corpus(sample_mode='single', sample_id='conv-1')
+
+        self.assertFalse(out['ok'])
+        self.assertTrue(out['cancelled'])
+        self.assertFalse(out['drain_failed'])
+        self.assertEqual('drain_cancelled', out['post_drain']['error'])
+        self.assertEqual(1, out['seeded_turns'])
+
+    def test_ingest_replay_preserves_cancellation_from_drain(self):
+        if runtime_mod is None:
+            self.skipTest('runtime unavailable')
+        sample = {
+            'sample_id': 'conv-1',
+            'sessions': [
+                {'session_index': 1, 'date_time': '1 Jan 2024', 'turns': [self._row(session_index=1, dia_id='D1:1')]},
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as td, \
+             patch.object(runtime_mod, '_replay_locomo_row', return_value={'ok': True, 'session_id': 'locomo:conv-1:session:1'}), \
+             patch.object(runtime_mod, 'process_flush', return_value={'ok': True, 'session_id': 'locomo:conv-1:session:1'}), \
+             patch.object(runtime_mod, '_drain_async_until_idle', return_value={'ok': False, 'cancelled': True, 'error': 'drain_cancelled', 'passes': 1}), \
+             patch.object(runtime_mod, 'async_jobs_status', return_value={'queues': {}}):
+            out = runtime_mod.ingest_locomo_samples_through_core_memory(samples=[sample], base_root=td)
+
+        self.assertFalse(out['ok'])
+        self.assertTrue(out['cancelled'])
+        self.assertFalse(out['drain_failed'])
+        self.assertEqual('drain_cancelled', out['post_drain']['error'])
+        self.assertEqual(1, out['ingested_turns'])
+
     def test_ingest_replay_flushes_each_locomo_session_before_post_flush_drain(self):
         if runtime_mod is None:
             self.skipTest('runtime unavailable')

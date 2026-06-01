@@ -747,7 +747,9 @@ def ingest_locomo_samples_through_core_memory(
         )
 
     final_queue = async_jobs_status(root=target_root)
-    drain_failed = bool(post_drain) and not bool(post_drain.get("ok", True))
+    drain_cancelled = bool(post_drain) and bool(post_drain.get("cancelled"))
+    cancelled = bool(cancelled or drain_cancelled)
+    drain_failed = bool(post_drain) and not bool(post_drain.get("ok", True)) and not drain_cancelled
     return {
         "ok": ingested_count > 0 and not cancelled and not errors and not drain_failed and not any(not bool((f or {}).get("ok")) for f in flushes),
         "cancelled": cancelled,
@@ -935,7 +937,9 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
         )
 
     final_queue = async_jobs_status(root=settings.core_memory_root)
-    drain_failed = bool(post_drain) and not bool(post_drain.get("ok", True))
+    drain_cancelled = bool(post_drain) and bool(post_drain.get("cancelled"))
+    cancelled = bool(cancelled or drain_cancelled)
+    drain_failed = bool(post_drain) and not bool(post_drain.get("ok", True)) and not drain_cancelled
     turn_range = {"first": 1 if seeded > 0 else 0, "last": int(seeded)}
     return {
         "ok": seeded > 0 and not cancelled and not errors and not drain_failed,
