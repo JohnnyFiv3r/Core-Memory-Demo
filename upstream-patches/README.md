@@ -26,6 +26,14 @@ provider key like `OPENAI_API_KEY`):
   `fastembed`, embed the query the same way and Qdrant **search-by-vector**;
   otherwise keep the native FastEmbed hybrid query. Reuses the existing
   `QdrantBackend.search`/`upsert` plumbing — no backend API change.
+- **Collection isolation** (`_vector_collection_name`): external mode appends an
+  `_ext_<model>` suffix. Qdrant collections have fixed vector params, so
+  FastEmbed (~384-dim) and OpenAI (3072-dim) get **distinct collections** —
+  enabling the flag (or later changing the model) targets a fresh,
+  correctly-dimensioned collection instead of failing to upsert 3072-dim vectors
+  into the existing ~384-dim FastEmbed collection. No manual drop required;
+  switching back is non-destructive. (Addresses the dimension-mismatch a
+  re-seed-alone would hit on an existing FastEmbed store.)
 
 Default-off preserves the zero-API-key FastEmbed behaviour.
 
