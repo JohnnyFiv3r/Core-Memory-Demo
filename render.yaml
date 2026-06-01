@@ -49,6 +49,20 @@ services:
       # precomputed bonus manifest during recall. Enabled for the hosted demo.
       - key: CORE_MEMORY_MYELINATION_ENABLED
         value: "1"
+      # Causal-traversal recall tuning (PR #170). Defaults match Core-Memory;
+      # surfaced here so seed breadth / merge budget can be tuned without a
+      # Core-Memory redeploy. Wider seed than the old hardcoded top-5 so
+      # gold-adjacent beads ranked just outside the top results still seed
+      # traversal; chain beads get slots beyond k so traversal evidence reaches
+      # the scored top-k.
+      - key: CORE_MEMORY_TRACE_SEED_ANCHORS
+        value: "12"
+      - key: CORE_MEMORY_TRACE_CHAIN_MERGE_BONUS
+        value: "8"
+      - key: CORE_MEMORY_TRACE_MAX_DEPTH
+        value: "3"
+      - key: CORE_MEMORY_TRACE_MAX_CHAINS
+        value: "12"
       # Multi-store recall fan-out (v1.1.1) is opt-in: recall fans out to these
       # external stores only when the corresponding var is set. Left unset here.
       - key: SATORID_RAGIE_API_KEY
@@ -108,6 +122,16 @@ services:
       # Keep the myelination-update async job aligned with the web service.
       - key: CORE_MEMORY_MYELINATION_ENABLED
         value: "1"
+      # Causal-traversal recall tuning (PR #170) — keep the worker aligned with
+      # the web service so benchmark recall behaves identically.
+      - key: CORE_MEMORY_TRACE_SEED_ANCHORS
+        value: "12"
+      - key: CORE_MEMORY_TRACE_CHAIN_MERGE_BONUS
+        value: "8"
+      - key: CORE_MEMORY_TRACE_MAX_DEPTH
+        value: "3"
+      - key: CORE_MEMORY_TRACE_MAX_CHAINS
+        value: "12"
       - key: OPENAI_API_KEY
         sync: false
       - key: ANTHROPIC_API_KEY

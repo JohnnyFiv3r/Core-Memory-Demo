@@ -9,8 +9,10 @@ pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Benchmark queue persistence for hosted queued/cron benchmark mode.
 psycopg[binary]==3.3.2
 # Pinned to explicit Core-Memory commit for deploy stability.
-# Includes the semantic projection reconcile rebuild fix used by PR #145.
-core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@fcf29b8a01957cff3604c44a2a7864d43b09164e
+# PR #170: widen recall traversal seeds + chain merge budget + soft structural
+# hints (fixes the recall@5 ceiling where graph traversal ran but never surfaced
+# gold-adjacent beads); includes the Python-traversal seed>8 follow-up fix.
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@4e089b7c721c6c15c1d451836270147ba7c72148
 # Keep Qdrant explicit so deployment logs fail loudly if the semantic backend
 # dependency is skipped instead of silently falling back to lexical mode.
 qdrant-client[fastembed]>=1.9
