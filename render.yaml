@@ -35,6 +35,19 @@ services:
         value: qdrant
       - key: CORE_MEMORY_QDRANT_PATH
         value: /var/data/core-memory/.beads/qdrant
+      # Embed with OpenAI instead of Qdrant's built-in FastEmbed (PR #173).
+      # FastEmbed's small ~384-dim model produced ~0.3 cosine scores that capped
+      # recall; text-embedding-3-large gives high-quality semantic anchors.
+      # MUST be set on BOTH the web service AND the benchmark worker, since the
+      # benchmark re-embeds its corpus in the worker process — otherwise the
+      # benchmark silently falls back to FastEmbed. External vectors land in a
+      # separate `_ext_<model>` collection, so no FastEmbed dimension clash.
+      - key: CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS
+        value: "1"
+      - key: CORE_MEMORY_EMBEDDINGS_PROVIDER
+        value: openai
+      - key: CORE_MEMORY_EMBEDDINGS_MODEL
+        value: text-embedding-3-large
       - key: CORE_MEMORY_GRAPH_BACKEND
         value: kuzu
       - key: CORE_MEMORY_KUZU_PATH
@@ -107,6 +120,19 @@ services:
         value: qdrant
       - key: CORE_MEMORY_QDRANT_PATH
         value: /var/data/core-memory/.beads/qdrant
+      # Embed with OpenAI instead of Qdrant's built-in FastEmbed (PR #173).
+      # FastEmbed's small ~384-dim model produced ~0.3 cosine scores that capped
+      # recall; text-embedding-3-large gives high-quality semantic anchors.
+      # MUST be set on BOTH the web service AND the benchmark worker, since the
+      # benchmark re-embeds its corpus in the worker process — otherwise the
+      # benchmark silently falls back to FastEmbed. External vectors land in a
+      # separate `_ext_<model>` collection, so no FastEmbed dimension clash.
+      - key: CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS
+        value: "1"
+      - key: CORE_MEMORY_EMBEDDINGS_PROVIDER
+        value: openai
+      - key: CORE_MEMORY_EMBEDDINGS_MODEL
+        value: text-embedding-3-large
       - key: CORE_MEMORY_GRAPH_BACKEND
         value: kuzu
       - key: CORE_MEMORY_KUZU_PATH
