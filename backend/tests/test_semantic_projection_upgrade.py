@@ -13,8 +13,8 @@ class TestSemanticProjectionUpgrade(unittest.TestCase):
     def test_requirements_pin_core_memory_reconcile_fix_and_explicit_qdrant(self):
         requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
 
-        # PR #170 recall-traversal pin (supersedes the fcf29b8 reconcile pin).
-        self.assertIn("4e089b7c721c6c15c1d451836270147ba7c72148", requirements)
+        # PR #173 Qdrant external-embeddings pin (supersedes the #170 traversal pin).
+        self.assertIn("c0c85606ddb3799b171f6fea9a67d35c2bfea66e", requirements)
         self.assertIn("core-memory[qdrant,kuzu,mcp]", requirements)
         self.assertIn("qdrant-client[fastembed]>=1.9", requirements)
         self.assertIn("psycopg[binary]==3.3.2", requirements)
