@@ -42,6 +42,11 @@ const echoedBenchmarkQaIds = new Set();
 // separate containers with no shared filesystem, so the live Beads pane is
 // built from these events rather than reading the worker's bead store.
 const benchmarkRunBeads = new Map();
+// Full causal graph for the current LoCoMo run, from the graph_snapshot event
+// (bead_id -> bead row) and an association row list. Drives the live graph +
+// associations panes; same event-stream rationale as benchmarkRunBeads.
+const benchmarkRunGraphBeads = new Map();
+let benchmarkRunGraphAssociations = [];
 const AUTO_FLUSH_THRESHOLD_PCT = 80;
 const PREF_SEED_RESET_KEY = 'cm_seed_reset_before_run';
 const PREF_SEED_WIPE_KEY = 'cm_seed_wipe_memory';
@@ -1201,10 +1206,77 @@ function renderBenchmarkRunBeads() {
   if (statBeads) statBeads.textContent = Number(beads.length);
 }
 
+// Reset everything the live LoCoMo view streams so a new run starts clean:
+// the chat transcript, the graph/beads/associations panes, and all of the
+// per-run accumulators (QA de-dup set, evidence beads, graph beads + edges).
+function clearLiveBenchmarkView() {
+  echoedBenchmarkQaIds.clear();
+  benchmarkRunBeads.clear();
+  benchmarkRunGraphBeads.clear();
+  benchmarkRunGraphAssociations = [];
+  if (messagesEl) {
+    messagesEl.textContent = '';
+    firstMessage = true;
+  }
+  safeRenderSection('beads', () => renderBeads([]));
+  safeRenderSection('associations', () => renderAssociations([]));
+  safeRenderSection('graph', () => renderGraph([], []));
+  const statBeads = document.getElementById('stat-beads');
+  if (statBeads) statBeads.textContent = '0';
+  const statAssoc = document.getElementById('stat-assoc');
+  if (statAssoc) statAssoc.textContent = '0';
+}
+
+// Absorb a graph_snapshot event (full beads + associations built during replay)
+// into the run's graph accumulators. Returns true if anything changed.
+function accumulateBenchmarkGraph(evt) {
+  let changed = false;
+  for (const b of arrayOrEmpty(evt && evt.graph_beads)) {
+    if (!b || typeof b !== 'object') continue;
+    const id = String(b.id || b.bead_id || '').trim();
+    if (!id) continue;
+    benchmarkRunGraphBeads.set(id, {
+      id,
+      title: String(b.title || id),
+      type: String(b.type || 'context'),
+      source_turn_ids: arrayOrEmpty(b.source_turn_ids),
+    });
+    changed = true;
+  }
+  const assocs = arrayOrEmpty(evt && evt.graph_associations).filter((a) => a && typeof a === 'object');
+  if (assocs.length) {
+    benchmarkRunGraphAssociations = assocs;
+    changed = true;
+  }
+  return changed;
+}
+
+// Render the run's accumulated graph into the beads, associations and graph
+// panes. The graph snapshot supersedes the retrieved-evidence bead view because
+// it carries the full corpus.
+function renderBenchmarkRunGraph() {
+  const beads = Array.from(benchmarkRunGraphBeads.values());
+  const assocs = benchmarkRunGraphAssociations;
+  if (!beads.length && !assocs.length) return;
+  if (beads.length) safeRenderSection('beads', () => renderBeads(beads));
+  safeRenderSection('associations', () => renderAssociations(assocs));
+  safeRenderSection('graph', () => renderGraph(beads, assocs));
+  const statBeads = document.getElementById('stat-beads');
+  if (statBeads && beads.length) statBeads.textContent = Number(beads.length);
+  const statAssoc = document.getElementById('stat-assoc');
+  if (statAssoc) statAssoc.textContent = Number(assocs.length);
+}
+
 // On a shared-root deployment (local/dev) the web process can read the run's
 // isolated bead store directly, which gives the full corpus rather than only
 // retrieved-evidence beads. Best-effort enrichment over the event-stream view.
 async function refreshBenchmarkRunBeads() {
+  // The streamed graph snapshot carries the full corpus + edges, so prefer it
+  // over the (evidence-only / filesystem) view once we have it.
+  if (benchmarkRunGraphBeads.size || benchmarkRunGraphAssociations.length) {
+    renderBenchmarkRunGraph();
+    return;
+  }
   try {
     const res = await fetch('/api/demo/benchmark/run-state');
     const data = await parseApiJsonResponse(res, 'benchmark-run-state');
@@ -3979,12 +4051,18 @@ async function refreshMemory() {
         lastBenchmarkHistory = arrayOr(bench.history, lastBenchmarkHistory);
         // Echo any completed QA cases into the chat (covers a page reload mid-run
         // where there is no dedicated poll loop). De-dup is handled by qa_id.
+        let sawGraphSnapshot = false;
         for (const evt of (Array.isArray(benchJob.events) ? benchJob.events : [])) {
-          if (String(evt.stage || '').toLowerCase() === 'lifecycle_qa' && String(evt.case_status || '') === 'ok') {
+          const evtStage = String(evt.stage || '').toLowerCase();
+          if (evtStage === 'graph_snapshot') {
+            if (accumulateBenchmarkGraph(evt)) sawGraphSnapshot = true;
+          }
+          if (evtStage === 'lifecycle_qa' && String(evt.case_status || '') === 'ok') {
             echoBenchmarkQaEvent(evt);
             accumulateBenchmarkEvidence(evt);
           }
         }
+        if (sawGraphSnapshot) renderBenchmarkRunGraph();
         if (!activeBenchmarkPollJobId) {
           // No dedicated poll loop — use control-state as the complete source of truth.
           if (bench.summary) {
@@ -4671,10 +4749,11 @@ async function runBenchmark() {
   btn.disabled = true;
   btn.textContent = 'Starting...';
   completedBenchmarkRunId = null;
-  echoedBenchmarkQaIds.clear();
-  benchmarkRunBeads.clear();
+  // A new run starts from a clean slate: wipe the previous run's streamed chat
+  // and graph so stale Q&A / beads / edges never bleed into the new run.
+  clearLiveBenchmarkView();
   if (subset === 'locomo_native_lifecycle') {
-    addMsg('system', 'LoCoMo benchmark started — each QA question and answer will stream into the chat, and the run’s beads appear in the Beads pane as it works.');
+    addMsg('system', 'LoCoMo benchmark started — each QA question and answer streams into the chat, and the run’s beads + causal graph render live as it works.');
   }
   const optimisticJobId = 'pending-job-' + Date.now().toString(36);
   activeBenchmarkPollJobId = optimisticJobId;
@@ -4809,6 +4888,9 @@ async function runBenchmark() {
           };
           updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
           renderBenchmark(lastBenchmarkSummary, lastBenchmarkReport, {history: lastBenchmarkHistory});
+        }
+        if (stage === 'graph_snapshot') {
+          if (accumulateBenchmarkGraph(evt)) renderBenchmarkRunGraph();
         }
         if (stage === 'lifecycle_qa' && String(evt.case_status || '') === 'ok') {
           echoBenchmarkQaEvent(evt);

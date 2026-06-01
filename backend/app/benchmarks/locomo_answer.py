@@ -12,18 +12,23 @@ except Exception:  # pragma: no cover
 
 
 def _support_strength(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
+    # Decide only whether there is *anything* worth asking the LLM about. The
+    # gate is intentionally permissive: any retrieved row carrying text is enough
+    # to attempt an answer, and the LLM still abstains on its own when the
+    # evidence is genuinely insufficient. The previous gate required the single
+    # top row to carry dia_ids, so a top hit that did not map to a conversation
+    # dia_id (e.g. a foreign/QA bead) forced "No information available" even when
+    # the rows below it clearly answered the question — a fail-closed bug that
+    # tanked answer F1 on cases where gold evidence was actually retrieved.
     if not retrieved_context:
         return {"supported": False, "reason": "no_retrieval"}
-    top = retrieved_context[0] or {}
-    top_text = str(top.get("text") or top.get("snippet") or "").strip()
-    raw_score = top.get("locomo_score", top.get("score"))
-    top_score = float(raw_score) if raw_score is not None else None
-    used_dia_ids = [str(x).strip() for x in (top.get("dia_ids") or []) if str(x).strip()]
-    if not top_text:
-        return {"supported": False, "reason": "empty_top_text"}
-    if not used_dia_ids:
-        return {"supported": False, "reason": "missing_dia_ids"}
-    return {"supported": True, "reason": "top_hit_grounded"}
+    has_text = any(
+        str((row or {}).get("text") or (row or {}).get("snippet") or "").strip()
+        for row in retrieved_context
+    )
+    if not has_text:
+        return {"supported": False, "reason": "empty_context"}
+    return {"supported": True, "reason": "context_has_text"}
 
 
 def _extractive_answer(retrieved_context: list[dict[str, Any]], *, question: str = "") -> dict[str, Any]:
@@ -165,6 +170,11 @@ async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_i
     context_prompt = (
         "Answer the question based on the retrieved conversation context below. "
         "Use each evidence row's session_date_time to resolve relative dates like yesterday, last week, today, or next month into the absolute date/month/year when possible. "
+        "Answer with the SHORTEST possible span that directly answers the question "
+        "— just the fact itself (a date, name, place, number, or short list), with no "
+        "preamble, restatement of the question, or full sentence. For example answer "
+        "'7 May 2023', not 'She went on 7 May 2023'. If the question asks for several "
+        "items, give them as a comma-separated list. "
         "If the retrieved context does not contain enough information to answer, "
         "respond exactly with 'No information available'.\n\n"
         f"Question: {question}\n\n"
@@ -186,7 +196,9 @@ async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_i
             "You are a conversational memory benchmark answerer. "
             "Only answer from the supplied retrieved evidence block. "
             "Do not use tools, memory, prior answers, or unstated knowledge. "
-            "If the evidence is insufficient, abstain with 'No information available'."
+            "Answer with the shortest exact span (a date, name, place, number, or "
+            "comma-separated list) — never a full sentence or a restatement of the "
+            "question. If the evidence is insufficient, abstain with 'No information available'."
         ),
     )
     result = await agent.run(context_prompt)

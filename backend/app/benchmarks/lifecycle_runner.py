@@ -416,6 +416,68 @@ def corpus_snapshot(root: str | Path) -> dict[str, int]:
     }
 
 
+def graph_snapshot_payload(root: str | Path, *, max_beads: int = 400, max_associations: int = 1200) -> dict[str, Any]:
+    """Compact beads + associations for the live graph, read from the bead index.
+
+    Streamed through the benchmark event channel after replay so the demo can
+    render the run's causal graph live, even on hosted where the web process
+    cannot read the worker's isolated filesystem. Node/edge shapes mirror what
+    /v1/memory/inspect/state emits so the frontend reuses the same renderers.
+    """
+    path = Path(root) / ".beads" / "index.json"
+    if not path.exists():
+        return {"beads": [], "associations": [], "stats": {"total_beads": 0, "total_associations": 0}}
+    try:
+        import json
+
+        payload = json.loads(path.read_text(encoding="utf-8"))
+    except Exception:
+        return {"beads": [], "associations": [], "stats": {"total_beads": 0, "total_associations": 0}}
+    if not isinstance(payload, dict):
+        return {"beads": [], "associations": [], "stats": {"total_beads": 0, "total_associations": 0}}
+
+    beads_index = dict(payload.get("beads") or {})
+    beads: list[dict[str, Any]] = []
+    for bid, bead in beads_index.items():
+        if not isinstance(bead, dict):
+            continue
+        beads.append({
+            "id": str(bead.get("id") or bid),
+            "title": str(bead.get("title") or bead.get("retrieval_title") or "")[:120],
+            "type": str(bead.get("type") or "context"),
+            "source_turn_ids": [str(x) for x in (bead.get("source_turn_ids") or [])],
+        })
+        if len(beads) >= max_beads:
+            break
+
+    associations: list[dict[str, Any]] = []
+    for assoc in list(payload.get("associations") or []):
+        if not isinstance(assoc, dict):
+            continue
+        src = str(assoc.get("source_bead") or assoc.get("source_bead_id") or "").strip()
+        tgt = str(assoc.get("target_bead") or assoc.get("target_bead_id") or "").strip()
+        if not src or not tgt:
+            continue
+        associations.append({
+            "source_bead": src,
+            "target_bead": tgt,
+            "relationship": str(assoc.get("relationship") or assoc.get("type") or "associated_with"),
+            "confidence": float(assoc.get("confidence") or 0.0),
+            "explanation": str(assoc.get("reason_text") or assoc.get("explanation") or "")[:200],
+        })
+        if len(associations) >= max_associations:
+            break
+
+    return {
+        "beads": beads,
+        "associations": associations,
+        "stats": {
+            "total_beads": len(beads_index),
+            "total_associations": len(list(payload.get("associations") or [])),
+        },
+    }
+
+
 def lifecycle_corpus_warnings(snapshot: dict[str, Any], *, phase: str) -> list[str]:
     """Warn about missing runtime products without synthesizing them."""
 
@@ -916,6 +978,31 @@ def run_lifecycle_conversation(
     qa_results: list[dict[str, Any]] = []
     total_for_progress = int(progress_total if progress_total is not None else len(conversation.qa_cases))
     offset_for_progress = int(progress_completed_offset or 0)
+
+    # Stream the freshly built causal graph (beads + associations) once, before
+    # the QA loop, so the demo can render it live. Replay produces all the edges
+    # up front, and this rides the event channel — the only cross-process path on
+    # hosted, where the web container cannot read the worker's isolated root.
+    if progress is not None:
+        try:
+            snap = graph_snapshot_payload(root)
+            _emit_progress(
+                progress,
+                offset_for_progress,
+                total_for_progress,
+                None,
+                {
+                    "status": "graph_ready",
+                    "phase": "graph_snapshot",
+                    "conversation_id": conversation.conversation_id,
+                    "graph_beads": snap["beads"],
+                    "graph_associations": snap["associations"],
+                    "graph_stats": snap["stats"],
+                },
+            )
+        except Exception:
+            pass
+
     for idx, qa in enumerate(conversation.qa_cases, start=1):
         _emit_progress(progress, offset_for_progress + idx - 1, total_for_progress, qa, {"status": "retrieving", "phase": "lifecycle_qa", "conversation_id": conversation.conversation_id})
         qa_root: str | Path = root
