@@ -107,6 +107,38 @@ def _build_semantic_index(root: str | Path) -> dict[str, Any]:
     return dict(build_semantic_index(Path(root)) or {})
 
 
+def sync_graph_backend(root: str | Path) -> dict[str, Any]:
+    """Sync the replayed corpus's associations into the configured graph backend.
+
+    Replay writes associations to .beads/index.json, but causal traversal at
+    recall time queries the configured graph backend (Kuzu/Neo4j) — which is
+    never populated by normal turn processing. Without this, trace_request runs
+    on an empty graph DB and returns zero chains on the hosted (kuzu) config,
+    even though the index holds hundreds of edges. For the Python/Null backend
+    (GRAPH_BACKEND=none) this is a no-op, since that path reads index.json
+    directly. Best-effort: a sync failure must never abort the benchmark.
+    """
+    try:
+        from core_memory.persistence.graph.factory import create_graph_backend
+        from core_memory.persistence.graph.protocol import NullGraphBackend
+        from core_memory.persistence.backend import create_backend
+
+        gb = create_graph_backend(Path(root))
+        if isinstance(gb, NullGraphBackend):
+            return {"ok": True, "synced": False, "reason": "null_backend_reads_index_directly"}
+        storage = create_backend(Path(root) / ".beads")
+        index = storage.load_index()
+        beads = list((index.get("beads") or {}).values())
+        associations = list(index.get("associations") or [])
+        out = dict(gb.sync_from_storage(beads, associations) or {})
+        out.setdefault("ok", True)
+        out["backend"] = getattr(gb, "name", "")
+        out["synced"] = True
+        return out
+    except Exception as exc:  # noqa: BLE001 - graph sync is best-effort
+        return {"ok": False, "synced": False, "error": str(exc)}
+
+
 def _default_recall() -> RecallFunc:
     try:
         from core_memory.retrieval.agent import recall
@@ -685,6 +717,10 @@ def run_pre_qa_flush(
             )
             or {}
         )
+    # Sync the finalized associations into the graph backend so causal traversal
+    # at recall time can actually walk them (Kuzu/Neo4j query their own DB, which
+    # turn processing never populates). No-op for the Python/Null backend.
+    graph_sync = sync_graph_backend(root)
     snapshot = corpus_snapshot(root)
     warnings = lifecycle_corpus_warnings(snapshot, phase="after_pre_qa_flush")
     return {
@@ -697,6 +733,7 @@ def run_pre_qa_flush(
         "latency_ms": round((time.perf_counter() - t0) * 1000.0, 3),
         "result": flush_result,
         "async_drain": async_result,
+        "graph_sync": graph_sync,
         "warnings": warnings,
         "corpus_after_pre_qa_flush": snapshot,
     }
