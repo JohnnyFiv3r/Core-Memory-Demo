@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 
 from app.core.config import settings
 from app.core.semantic_env import configure_shared_semantic_backend_env
+from app.core.semantic_upgrade import queue_semantic_projection_upgrade_once
 
 configure_shared_semantic_backend_env()
 
@@ -71,6 +72,7 @@ async def lifespan(app: FastAPI):
     await _mcp_lifespan_cm.__aenter__()
     try:
         ensure_roots_writable()
+        queue_semantic_projection_upgrade_once(settings.core_memory_root)
         if bool(settings.async_jobs_tick_enabled):
             _async_jobs_stop.clear()
             t = threading.Thread(target=_async_jobs_tick_loop, name='core-memory-async-jobs-tick', daemon=True)
