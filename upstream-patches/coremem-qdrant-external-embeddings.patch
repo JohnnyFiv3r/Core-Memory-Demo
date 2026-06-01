@@ -1,0 +1,309 @@
+From fe10fc122b2eed4044fab152e300d38ef028a591 Mon Sep 17 00:00:00 2001
+From: Claude <noreply@anthropic.com>
+Date: Mon, 1 Jun 2026 19:46:14 +0000
+Subject: [PATCH] feat(retrieval): optional OpenAI/external embeddings for
+ Qdrant
+MIME-Version: 1.0
+Content-Type: text/plain; charset=UTF-8
+Content-Transfer-Encoding: 8bit
+
+By default Qdrant uses its built-in FastEmbed (small ~384-dim bge model), which
+discriminates poorly on conversational text — top-1 cosine ~0.3 where a good
+match is 0.6-0.85+, capping retrieval recall regardless of downstream graph
+expansion. There was no way to use a stronger model: the write path hardwired
+client.add()/FastEmbed and the read path queried by query_text.
+
+Add CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS=1 (default off; needs a provider key):
+- Write (semantic_index): embed the corpus with the configured external provider
+  (OpenAI/Gemini) via _embed_vectors, create the collection with
+  VectorParams(size=dim), upsert pre-computed vectors; manifest records the real
+  provider/model/dimension.
+- Read (hybrid._qdrant_hybrid_rows): when manifest provider != fastembed, embed
+  the query the same way and Qdrant search-by-vector; else native FastEmbed.
+- Collection isolation: _vector_collection_name appends an _ext_<model> suffix in
+  external mode. Qdrant collections have fixed vector params, so FastEmbed
+  (~384-dim) and OpenAI (3072-dim) get DISTINCT collections — enabling the flag
+  (or changing the model) targets a fresh, correctly-dimensioned collection
+  instead of failing to upsert into the existing FastEmbed one. No manual drop,
+  non-destructive switch-back.
+
+Default-off preserves zero-API-key FastEmbed. 4 tests cover the flag, both query
+routes, and collection separation.
+---
+ core_memory/retrieval/hybrid.py          |  38 ++++++--
+ core_memory/retrieval/semantic_index.py  |  54 ++++++++++-
+ tests/test_qdrant_external_embeddings.py | 110 +++++++++++++++++++++++
+ 3 files changed, 195 insertions(+), 7 deletions(-)
+ create mode 100644 tests/test_qdrant_external_embeddings.py
+
+diff --git a/core_memory/retrieval/hybrid.py b/core_memory/retrieval/hybrid.py
+index d298946..98d91f4 100644
+--- a/core_memory/retrieval/hybrid.py
++++ b/core_memory/retrieval/hybrid.py
+@@ -26,14 +26,32 @@ def _normalize(scores: list[float]) -> tuple[list[float], str]:
+ 
+ 
+ def _qdrant_hybrid_rows(root: Path, retrieval_query: str, k: int) -> list[dict[str, Any]]:
+-    """One Qdrant hybrid (sparse+dense) query replacing FAISS + lexical.py."""
+-    from core_memory.retrieval.semantic_index import _create_external_backend, _paths, _vector_collection_name
++    """One Qdrant query replacing FAISS + lexical.py.
++
++    Two modes, keyed off the index manifest's provider:
++      - "fastembed": Qdrant manages embeddings; use the native sparse+dense
++        hybrid query (query_text).
++      - external (e.g. "openai"): the collection holds provider-embedded vectors,
++        so embed the query the same way and search by vector. FastEmbed's small
++        default model discriminates poorly on conversational text; this path lets
++        the demo use high-quality OpenAI/Gemini embeddings.
++    """
++    from core_memory.retrieval.semantic_index import (
++        _create_external_backend,
++        _paths,
++        _embed_vectors,
++        _vector_rows,
++    )
+     try:
+         manifest_file, *_ = _paths(root)
+         dimension = 1536
++        provider = "fastembed"
++        model = ""
+         try:
+             manifest = json.loads(manifest_file.read_text(encoding="utf-8"))
+             dimension = int(manifest.get("dimension") or 1536)
++            provider = str(manifest.get("provider") or "fastembed").strip().lower() or "fastembed"
++            model = str(manifest.get("model") or "").strip()
+         except Exception:
+             pass
+         backend = _create_external_backend(
+@@ -41,15 +59,25 @@ def _qdrant_hybrid_rows(root: Path, retrieval_query: str, k: int) -> list[dict[s
+             backend=VECTOR_BACKEND_QDRANT,
+             dimension=dimension,
+         )
+-        rows = backend.hybrid_search(
++        if provider and provider != "fastembed":
++            # External-embedding mode: embed the query with the same provider/model
++            # the corpus was embedded with, then vector-search.
++            from core_memory.retrieval.semantic_index import _default_embedding_model
++            vecs = _embed_vectors(texts=[retrieval_query], provider=provider, model=(model or _default_embedding_model(provider)), hash_dim=dimension)
++            query_vec = list(_vector_rows(vecs))[0]
++            return backend.search(
++                query_embedding=list(query_vec),
++                k=k,
++                filters={"retrieval_eligible": True},
++            )
++        return backend.hybrid_search(
+             query=retrieval_query,
+             k=k,
+             filters={"retrieval_eligible": True},
+         )
+-        return rows
+     except Exception as exc:
+         import logging
+-        logging.getLogger(__name__).debug("qdrant hybrid_search failed, falling back: %s", exc)
++        logging.getLogger(__name__).debug("qdrant query failed, falling back: %s", exc)
+         return []
+ 
+ 
+diff --git a/core_memory/retrieval/semantic_index.py b/core_memory/retrieval/semantic_index.py
+index 261a690..2f10728 100644
+--- a/core_memory/retrieval/semantic_index.py
++++ b/core_memory/retrieval/semantic_index.py
+@@ -63,12 +63,40 @@ def _configured_vector_backend() -> str:
+     return result
+ 
+ 
++def _qdrant_external_embeddings_enabled() -> bool:
++    """When True, embed Qdrant vectors with the configured external provider
++    (e.g. OpenAI text-embedding-3-large) instead of Qdrant's built-in FastEmbed.
++
++    FastEmbed's default model is small (~384-dim bge) and discriminates poorly on
++    conversational text, capping retrieval recall regardless of downstream graph
++    expansion. Opt in via CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS=1 with a provider
++    key (OPENAI_API_KEY / GEMINI_API_KEY) configured. Default off preserves the
++    zero-API-key FastEmbed behaviour.
++    """
++    val = str(os.environ.get("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS") or "").strip().lower()
++    return val in {"1", "true", "yes", "on"}
++
++
+ def _vector_collection_name(root: Path) -> str:
+     import hashlib as _hashlib
+ 
+     prefix = str(os.environ.get("CORE_MEMORY_VECTOR_COLLECTION") or "core_memory_beads").strip() or "core_memory_beads"
+     suffix = _hashlib.sha1(str(root).encode("utf-8")).hexdigest()[:10]
+-    return f"{prefix}_{suffix}"
++    name = f"{prefix}_{suffix}"
++    # Qdrant collections have fixed vector params (dimension/distance). FastEmbed
++    # (~384-dim) and external providers (e.g. OpenAI text-embedding-3-large,
++    # 3072-dim) are incompatible, so give the external-embedding mode its own
++    # collection. This makes switching CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS on
++    # (or changing the embedding model) target a fresh, correctly-dimensioned
++    # collection instead of upserting into the existing FastEmbed one — no
++    # dimension-mismatch failures, no manual collection drop, and switching back
++    # is non-destructive. The model is folded in so a later model change (and its
++    # new dimension) also lands in a distinct collection.
++    if _qdrant_external_embeddings_enabled():
++        model = str(os.environ.get("CORE_MEMORY_EMBEDDINGS_MODEL") or "ext").strip() or "ext"
++        model_tag = _hashlib.sha1(model.encode("utf-8")).hexdigest()[:8]
++        name = f"{name}_ext_{model_tag}"
++    return name
+ 
+ 
+ def _create_external_backend(*, root: Path, backend: str, dimension: int):
+@@ -968,7 +996,7 @@ def build_semantic_index(root: Path) -> dict:
+         last_build_error = ""
+         if vector_backend in _EXTERNAL_VECTOR_BACKENDS:
+             try:
+-                if vector_backend == VECTOR_BACKEND_QDRANT:
++                if vector_backend == VECTOR_BACKEND_QDRANT and not _qdrant_external_embeddings_enabled():
+                     # Qdrant+FastEmbed generates embeddings natively — bypass _embed_vectors.
+                     # Pass dimension=0 so QdrantBackend skips VectorParams collection creation;
+                     # upsert_texts() uses client.add() which creates a fastembed-configured collection.
+@@ -990,6 +1018,28 @@ def build_semantic_index(root: Path) -> dict:
+                     # dim is managed by FastEmbed; use sentinel to skip external-dim validation
+                     dim = 1
+                     provider = "fastembed"  # Mark manifest so lookup uses native Qdrant query path
++                elif vector_backend == VECTOR_BACKEND_QDRANT:
++                    # Qdrant with EXTERNAL embeddings: embed with the provider (e.g.
++                    # OpenAI text-embedding-3-large) and upsert pre-computed vectors,
++                    # creating the collection with VectorParams(size=dim). The manifest
++                    # records the real provider so the query path embeds the query the
++                    # same way and searches by vector (not FastEmbed query_text).
++                    vecs = _embed_vectors(texts=texts, provider=provider, model=model, hash_dim=256)
++                    dim = _vector_dim(vecs, fallback=256 if texts else 0)
++                    vb = _create_external_backend(root=root, backend=vector_backend, dimension=dim)
++                    for row, c, emb in zip(rows, corpus, _vector_rows(vecs)):
++                        vb.upsert(
++                            bead_id=str(row.get("bead_id") or ""),
++                            embedding=emb,
++                            metadata={
++                                "status": c.get("status"),
++                                "session_id": c.get("session_id"),
++                                "source_surface": c.get("source_surface"),
++                                "created_at": c.get("created_at"),
++                                "retrieval_eligible": True,
++                                "topics": list(c.get("tags") or []),
++                            },
++                        )
+                 else:
+                     vecs = _embed_vectors(texts=texts, provider=provider, model=model, hash_dim=256)
+                     dim = _vector_dim(vecs, fallback=256 if texts else 0)
+diff --git a/tests/test_qdrant_external_embeddings.py b/tests/test_qdrant_external_embeddings.py
+new file mode 100644
+index 0000000..9e8f258
+--- /dev/null
++++ b/tests/test_qdrant_external_embeddings.py
+@@ -0,0 +1,110 @@
++"""Qdrant external-embedding mode.
++
++By default Qdrant uses its built-in FastEmbed (small ~384-dim model), which
++discriminates poorly on conversational text and caps retrieval recall. With
++CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS=1 the corpus is embedded with the
++configured external provider (e.g. OpenAI text-embedding-3-large) and the query
++path searches by vector instead of FastEmbed query_text.
++"""
++from __future__ import annotations
++
++import json
++from pathlib import Path
++from unittest.mock import patch
++
++from core_memory.retrieval import semantic_index as si
++from core_memory.retrieval import hybrid
++
++
++def test_flag_default_off_and_env_on(monkeypatch):
++    monkeypatch.delenv("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS", raising=False)
++    assert si._qdrant_external_embeddings_enabled() is False
++    for val in ("1", "true", "on", "YES"):
++        monkeypatch.setenv("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS", val)
++        assert si._qdrant_external_embeddings_enabled() is True
++    monkeypatch.setenv("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS", "0")
++    assert si._qdrant_external_embeddings_enabled() is False
++
++
++def test_external_mode_uses_separate_collection(tmp_path: Path, monkeypatch):
++    # FastEmbed and external-embedding modes must resolve to DIFFERENT Qdrant
++    # collections so 3072-dim OpenAI vectors never collide with an existing
++    # ~384-dim FastEmbed collection (fixed vector params).
++    monkeypatch.delenv("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS", raising=False)
++    monkeypatch.delenv("CORE_MEMORY_EMBEDDINGS_MODEL", raising=False)
++    fastembed_name = si._vector_collection_name(tmp_path)
++
++    monkeypatch.setenv("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS", "1")
++    monkeypatch.setenv("CORE_MEMORY_EMBEDDINGS_MODEL", "text-embedding-3-large")
++    ext_name = si._vector_collection_name(tmp_path)
++
++    assert ext_name != fastembed_name
++    assert ext_name.startswith(fastembed_name)  # shares the root-scoped base
++    assert "_ext_" in ext_name
++
++    # A different model lands in yet another collection (its own dimension).
++    monkeypatch.setenv("CORE_MEMORY_EMBEDDINGS_MODEL", "text-embedding-3-small")
++    other_model_name = si._vector_collection_name(tmp_path)
++    assert other_model_name != ext_name
++
++
++def test_query_path_fastembed_manifest_uses_hybrid_search(tmp_path: Path):
++    # Manifest provider=fastembed -> native hybrid_search (query_text).
++    beads = tmp_path / ".beads" / "semantic"
++    beads.mkdir(parents=True)
++    calls = {"hybrid": 0, "search": 0}
++
++    class FakeBackend:
++        def hybrid_search(self, query, k, filters):
++            calls["hybrid"] += 1
++            return [{"bead_id": "b1", "score": 0.9, "metadata": {}}]
++
++        def search(self, query_embedding, k, filters):
++            calls["search"] += 1
++            return []
++
++    with patch("core_memory.retrieval.semantic_index._paths", return_value=(beads / "manifest.json",)), \
++         patch("core_memory.retrieval.semantic_index._create_external_backend", return_value=FakeBackend()):
++        (beads / "manifest.json").write_text(json.dumps({"provider": "fastembed", "dimension": 384}), encoding="utf-8")
++        rows = hybrid._qdrant_hybrid_rows(tmp_path, "when did melanie paint", k=8)
++
++    assert calls == {"hybrid": 1, "search": 0}
++    assert rows and rows[0]["bead_id"] == "b1"
++
++
++def test_query_path_external_manifest_embeds_query_and_vector_searches(tmp_path: Path):
++    # Manifest provider=openai -> embed query + search by vector.
++    beads = tmp_path / ".beads" / "semantic"
++    beads.mkdir(parents=True)
++    calls = {"hybrid": 0, "search": 0}
++    captured = {}
++
++    class FakeBackend:
++        def hybrid_search(self, query, k, filters):
++            calls["hybrid"] += 1
++            return []
++
++        def search(self, query_embedding, k, filters):
++            calls["search"] += 1
++            captured["vec"] = query_embedding
++            captured["filters"] = filters
++            return [{"bead_id": "b2", "score": 0.81, "metadata": {}}]
++
++    with patch("core_memory.retrieval.semantic_index._paths", return_value=(beads / "manifest.json",)), \
++         patch("core_memory.retrieval.semantic_index._create_external_backend", return_value=FakeBackend()), \
++         patch("core_memory.retrieval.semantic_index._embed_vectors", return_value=[[0.1, 0.2, 0.3]]), \
++         patch("core_memory.retrieval.semantic_index._vector_rows", return_value=[[0.1, 0.2, 0.3]]):
++        (beads / "manifest.json").write_text(
++            json.dumps({"provider": "openai", "model": "text-embedding-3-large", "dimension": 3072}), encoding="utf-8"
++        )
++        rows = hybrid._qdrant_hybrid_rows(tmp_path, "when did melanie paint", k=8)
++
++    assert calls == {"hybrid": 0, "search": 1}
++    assert captured["vec"] == [0.1, 0.2, 0.3]
++    assert captured["filters"] == {"retrieval_eligible": True}
++    assert rows and rows[0]["bead_id"] == "b2"
++
++
++if __name__ == "__main__":
++    import pytest
++    raise SystemExit(pytest.main([__file__, "-v"]))
+-- 
+2.43.0
+
