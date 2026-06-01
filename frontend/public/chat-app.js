@@ -4740,7 +4740,9 @@ async function runBenchmark() {
   const rootModeRaw = document.getElementById('bench-root-mode')?.value || 'snapshot';
   const rootMode = subset === 'locomo_native_lifecycle' ? 'clean' : rootModeRaw;
   const qaSessionMode = 'isolated';
-  const embeddingsProvider = document.getElementById('bench-embeddings-provider')?.value || 'hash';
+  // '' = auto: let the server resolve the provider from its env (e.g. OpenAI on
+  // the hosted worker). Only an explicit 'openai'/'hash' overrides it.
+  const embeddingsProvider = document.getElementById('bench-embeddings-provider')?.value || '';
   const preloadEnabled = !!document.getElementById('bench-preload-enabled')?.checked;
   const preloadRaw = Number(document.getElementById('bench-preload-max')?.value || 200);
   const preloadMax = Number.isFinite(preloadRaw) ? Math.max(0, Math.floor(preloadRaw)) : 200;

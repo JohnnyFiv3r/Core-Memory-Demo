@@ -23,10 +23,27 @@ class TestRuntimeSemanticMode(unittest.TestCase):
         self.assertIsNone(os.environ.get("CORE_MEMORY_SEMANTIC_BUILD_ON_READ"))
         self.assertIsNone(os.environ.get("CORE_MEMORY_EMBEDDINGS_PROVIDER"))
 
-    def test_benchmark_embeddings_provider_defaults_to_hash_without_explicit_override(self):
+    def test_benchmark_embeddings_provider_inherits_process_env(self):
+        # Previously this returned 'hash' even when the process configured openai,
+        # so the hosted benchmark silently built the index with random-projection
+        # hash embeddings (~0.3 cosine anchors). It must now inherit the configured
+        # provider so the worker's CORE_MEMORY_EMBEDDINGS_PROVIDER=openai is used.
         os.environ["CORE_MEMORY_EMBEDDINGS_PROVIDER"] = "openai"
         os.environ.pop("CORE_MEMORY_DEMO_BENCHMARK_EMBEDDINGS_PROVIDER", None)
+        self.assertEqual("openai", _resolve_benchmark_embeddings_provider(None))
+        os.environ.pop("CORE_MEMORY_EMBEDDINGS_PROVIDER", None)
+
+    def test_benchmark_embeddings_provider_defaults_to_hash_when_nothing_set(self):
+        os.environ.pop("CORE_MEMORY_EMBEDDINGS_PROVIDER", None)
+        os.environ.pop("CORE_MEMORY_DEMO_BENCHMARK_EMBEDDINGS_PROVIDER", None)
         self.assertEqual("hash", _resolve_benchmark_embeddings_provider(None))
+
+    def test_benchmark_specific_override_beats_process_env(self):
+        os.environ["CORE_MEMORY_EMBEDDINGS_PROVIDER"] = "openai"
+        os.environ["CORE_MEMORY_DEMO_BENCHMARK_EMBEDDINGS_PROVIDER"] = "hash"
+        # The benchmark-specific override wins over the process-wide provider.
+        self.assertEqual("hash", _resolve_benchmark_embeddings_provider(None))
+        os.environ.pop("CORE_MEMORY_DEMO_BENCHMARK_EMBEDDINGS_PROVIDER", None)
         os.environ.pop("CORE_MEMORY_EMBEDDINGS_PROVIDER", None)
 
     def test_benchmark_embeddings_provider_accepts_explicit_or_benchmark_default_override(self):
