@@ -743,11 +743,13 @@ def ingest_locomo_samples_through_core_memory(
             max_compaction=max(int(max_compaction_per_pass), 4),
             max_side_effects=max(int(max_side_effects_per_pass), 16),
             root=target_root,
+            cancel_event=cancel_event,
         )
 
     final_queue = async_jobs_status(root=target_root)
+    drain_failed = bool(post_drain) and not bool(post_drain.get("ok", True))
     return {
-        "ok": ingested_count > 0 and not cancelled and not errors and not any(not bool((f or {}).get("ok")) for f in flushes),
+        "ok": ingested_count > 0 and not cancelled and not errors and not drain_failed and not any(not bool((f or {}).get("ok")) for f in flushes),
         "cancelled": cancelled,
         "mode": "core_memory_through_process_turn_finalized",
         "ingest_path": "core_memory_pipeline",
@@ -766,6 +768,7 @@ def ingest_locomo_samples_through_core_memory(
         "failed_turns": len(errors),
         "errors": errors[:20],
         "post_drain": post_drain,
+        "drain_failed": drain_failed,
         "queue_idle": bool(_queue_idle(final_queue)),
         "rows": rows,
     }
@@ -928,12 +931,14 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
             poll_ms=1000,
             max_compaction=max(max_compaction_per_pass, 4),
             max_side_effects=max(max_side_effects_per_pass, 16),
+            cancel_event=cancel_event,
         )
 
     final_queue = async_jobs_status(root=settings.core_memory_root)
+    drain_failed = bool(post_drain) and not bool(post_drain.get("ok", True))
     turn_range = {"first": 1 if seeded > 0 else 0, "last": int(seeded)}
     return {
-        "ok": seeded > 0 and not cancelled and not errors,
+        "ok": seeded > 0 and not cancelled and not errors and not drain_failed,
         "cancelled": cancelled,
         "seeded": int(seeded),
         "seeded_turns": int(seeded),
@@ -956,6 +961,7 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
         "queue_idle": bool(_queue_idle(final_queue)),
         "queue": final_queue,
         "post_drain": post_drain,
+        "drain_failed": drain_failed,
         "auto_flush": bool(auto_flush),
         "flush_count": len(flush_events),
         "flushes": flush_events[-20:],
@@ -2612,6 +2618,7 @@ def _drain_async_until_idle(
     max_compaction: int,
     max_side_effects: int,
     root: str | None = None,
+    cancel_event: Any | None = None,
 ) -> dict[str, Any]:
     started = time.monotonic()
     timeout_s = max(1.0, float(timeout_ms) / 1000.0)
@@ -2620,7 +2627,20 @@ def _drain_async_until_idle(
 
     passes = 0
     last_status: dict[str, Any] = {}
+    last_run: dict[str, Any] = {}
     while (time.monotonic() - started) <= timeout_s:
+        if cancel_event is not None and cancel_event.is_set():
+            return {
+                "ok": False,
+                "idle": False,
+                "cancelled": True,
+                "passes": passes,
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+                "status": last_status,
+                "last_run": last_run,
+                "error": "drain_cancelled",
+            }
+
         last_status = async_jobs_status(root=target_root)
         if _queue_idle(last_status):
             return {
@@ -2637,10 +2657,29 @@ def _drain_async_until_idle(
             max_compaction=max(1, int(max_compaction)),
             max_side_effects=max(1, int(max_side_effects)),
         )
+        last_run = dict(out or {})
         passes += 1
         comp_processed = int(((out.get("compaction_run") or {}).get("processed") or 0))
         se_processed = int(((out.get("side_effect_run") or {}).get("processed") or 0))
-        sem_ran = bool(((out.get("semantic_run") or {}).get("ran") or False))
+        semantic_run = dict((out.get("semantic_run") or {}))
+        sem_ran = bool(semantic_run.get("ran") or False)
+
+        # Do not let seed/replay jobs sit in a 10-minute drain loop when the
+        # only remaining queue item is a semantic rebuild that already failed in
+        # this process.  Surface the real failure immediately so the UI can show
+        # the operator what is blocked (for example Qdrant/FastEmbed runtime
+        # errors) instead of hanging on "draining".
+        if sem_ran and not bool(semantic_run.get("ok", True)) and (comp_processed + se_processed) <= 0:
+            last_status = async_jobs_status(root=target_root)
+            return {
+                "ok": False,
+                "idle": False,
+                "passes": passes,
+                "elapsed_ms": int((time.monotonic() - started) * 1000),
+                "status": last_status,
+                "last_run": last_run,
+                "error": "semantic_drain_failed",
+            }
 
         if (comp_processed + se_processed) <= 0 and not sem_ran:
             time.sleep(poll_s)
@@ -2651,6 +2690,7 @@ def _drain_async_until_idle(
         "passes": passes,
         "elapsed_ms": int((time.monotonic() - started) * 1000),
         "status": last_status,
+        "last_run": last_run,
         "error": "idle_timeout",
     }
 
