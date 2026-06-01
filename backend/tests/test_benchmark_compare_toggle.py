@@ -149,6 +149,39 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('qdrant', out['vector_backend'])
         self.assertEqual('kuzu', out['graph_backend'])
 
+    def test_benchmark_last_returns_stored_active_without_snapshot(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        stored = {
+            'job_id': 'active-db-job',
+            'status': 'running',
+            'request': {'suite': 'locomo_native_lifecycle', 'vector_backend': 'qdrant', 'graph_backend': 'kuzu'},
+            'kwargs': {'suite': 'locomo_native_lifecycle', 'semantic_mode_name': 'required', 'root_mode': 'clean'},
+            'progress': {'stage': 'locomo_lifecycle', 'stage_message': 'Replayed 111/175 turns'},
+            'events': [],
+            'started_at': '2026-06-01T22:41:46+00:00',
+            'updated_at': '2026-06-01T22:44:34+00:00',
+        }
+        with patch.object(demo_routes, '_prune_benchmark_jobs'), \
+             patch.object(demo_routes.benchmark_store, 'read_active_job', return_value=stored), \
+             patch.object(demo_routes, 'get_last_benchmark_snapshot', side_effect=AssertionError('snapshot should not be read while active')):
+            out = demo_routes.benchmark_last()
+        self.assertTrue(out['ok'])
+        self.assertEqual('running', out['summary']['status'])
+        self.assertEqual('qdrant', out['report']['config']['vector_backend'])
+
+    def test_benchmark_run_state_skips_filesystem_when_queue_active(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        stored = {'job_id': 'active-db-job', 'status': 'running'}
+        with patch.object(demo_routes.benchmark_store, 'read_active_job', return_value=stored), \
+             patch.object(demo_routes, 'inspect_benchmark_run_state_payload', side_effect=AssertionError('run-state should not inspect filesystem while queue active')):
+            out = demo_routes.demo_benchmark_run_state()
+        self.assertTrue(out['ok'])
+        self.assertFalse(out['active_run'])
+        self.assertEqual('durable_queue_active', out['source'])
+        self.assertEqual('active-db-job', out['active_job_id'])
+
     def test_job_status_prefers_stored_completion_over_web_placeholder(self):
         if demo_routes is None:
             self.skipTest('pydantic_settings unavailable')

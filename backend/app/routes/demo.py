@@ -1003,6 +1003,19 @@ def demo_benchmark_run_state():
     The frontend reads this while a LoCoMo run is live so its beads surface in
     the beads pane without mixing into the live demo session.
     """
+    # Hosted queue mode executes the benchmark in a separate cron worker with a
+    # non-shared /tmp root. While a durable queue job is active, inspecting the
+    # web service's latest local benchmark root is both stale and CPU-heavy
+    # (glob + full inspect_state over bead/index/association files). Return a
+    # cheap empty payload and let the frontend use the streamed job events.
+    try:
+        active_job = next((row for row in BENCHMARK_JOBS.values() if isinstance(row, dict) and not bool(row.get('done'))), None)
+        stored_active = None if isinstance(active_job, dict) else benchmark_store.read_active_job()
+        if isinstance(active_job, dict) or isinstance(stored_active, dict):
+            job_id = str(((active_job or stored_active or {}) or {}).get('job_id') or '')
+            return {'ok': True, 'active_run': False, 'active_job_id': job_id, 'source': 'durable_queue_active', 'beads': [], 'associations': [], 'stats': {'total_beads': 0, 'total_associations': 0}}
+    except Exception:
+        pass
     try:
         return inspect_benchmark_run_state_payload()
     except Exception as exc:
@@ -1906,22 +1919,35 @@ async def benchmark_job_cancel(job_id: str):
 @router.get('/demo/benchmark/last')
 def benchmark_last():
     _prune_benchmark_jobs()
+    active_job = next((row for row in BENCHMARK_JOBS.values() if isinstance(row, dict) and not bool(row.get('done'))), None)
+    if isinstance(active_job, dict):
+        summary, report = _active_benchmark_state(active_job, {})
+        return {
+            'ok': True,
+            'summary': summary,
+            'report': report,
+            'history': [],
+            'latest_compare': None,
+        }
+
+    stored_active = benchmark_store.read_active_job()
+    if isinstance(stored_active, dict):
+        summary, report, _job = _stored_active_benchmark_state(stored_active)
+        return {
+            'ok': True,
+            'summary': summary,
+            'report': report,
+            'history': [],
+            'latest_compare': None,
+        }
+
     snapshot = get_last_benchmark_snapshot(history_limit=3)
     history = list(snapshot.get('history') or [])
     latest_compare = None
-    active_job = next((row for row in BENCHMARK_JOBS.values() if isinstance(row, dict) and not bool(row.get('done'))), None)
-    stored_active = None if isinstance(active_job, dict) else benchmark_store.read_active_job()
 
     summary = dict(snapshot.get('summary') or {})
     report = dict(snapshot.get('report') or {})
     ok = bool(snapshot.get('ok'))
-
-    if isinstance(active_job, dict):
-        summary, report = _active_benchmark_state(active_job, snapshot)
-        ok = True
-    elif isinstance(stored_active, dict):
-        summary, report, _job = _stored_active_benchmark_state(stored_active)
-        ok = True
 
     if len(history) >= 2:
         left = str((history[1].get('summary') or {}).get('run_id') or history[1].get('run_id') or '')
@@ -1932,8 +1958,6 @@ def benchmark_last():
                 latest_compare = cmp.get('compare') if cmp.get('ok') else None
             except Exception:
                 latest_compare = None
-    if isinstance(active_job, dict) or isinstance(stored_active, dict):
-        history = history[:2]
     history = _slim_benchmark_history(history)
     report = _strip_benchmark_case_payloads(report) if isinstance(report, dict) else report
     return {
