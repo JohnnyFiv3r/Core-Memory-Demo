@@ -4793,7 +4793,6 @@ async function runBenchmark() {
     const benchmarkPayload = {
       suite: subset,
       semantic_mode: semanticMode,
-      vector_backend: 'local-faiss',
       myelination,
       root_mode: rootMode,
       embeddings_provider: embeddingsProvider,
