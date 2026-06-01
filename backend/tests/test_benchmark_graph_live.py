@@ -114,9 +114,23 @@ class TestFrontendBenchmarkGraphWiring(unittest.TestCase):
     def test_new_run_clears_chat_and_graph(self):
         self.assertIn("function clearLiveBenchmarkView", _JS)
         self.assertIn("clearLiveBenchmarkView()", _JS)
-        # the clear wipes chat, panes, and every per-run accumulator
+        # the destructive clear wipes chat, panes, and every per-run accumulator
         for token in ("benchmarkRunGraphBeads.clear()", "messagesEl.textContent = ''", "renderGraph([], [])"):
             self.assertIn(token, _JS)
+
+    def test_chat_clear_gated_behind_successful_locomo_start(self):
+        # The destructive chat/pane wipe must only run for the streamed LoCoMo
+        # suite AFTER the job start succeeds, so a rejected start or a non-LoCoMo
+        # suite never erases the user's conversation. Up front we only do the
+        # non-destructive accumulator reset.
+        self.assertIn("function resetBenchmarkAccumulators", _JS)
+        self.assertIn("resetBenchmarkAccumulators()", _JS)
+        self.assertIn("isStreamedLocomo", _JS)
+        # clearLiveBenchmarkView is invoked inside the isStreamedLocomo success
+        # branch, which sits after activeBenchmarkPollJobId = jobId.
+        post_success = _JS.split("activeBenchmarkPollJobId = jobId;", 1)[1]
+        self.assertIn("if (isStreamedLocomo) {", post_success)
+        self.assertIn("clearLiveBenchmarkView();", post_success)
 
 
 class TestGpt55Default(unittest.TestCase):
