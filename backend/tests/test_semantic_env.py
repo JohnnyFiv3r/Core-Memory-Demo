@@ -1,6 +1,7 @@
 import os
 import sys
 import tempfile
+import types
 import unittest
 from pathlib import Path
 from unittest.mock import patch
@@ -86,21 +87,65 @@ class TestSemanticEnv(unittest.TestCase):
         with self.subTest("path mode"):
             with tempfile.TemporaryDirectory() as tmp:
                 with patch.dict(os.environ, {"CORE_MEMORY_VECTOR_BACKEND": "qdrant"}, clear=True):
-                    summary = normalize_embedded_qdrant_summary(
-                        {
-                            "backend": "qdrant",
-                            "rows_count": 3,
-                            "connectivity_checked": True,
-                            "connectivity_ok": False,
-                            "connectivity_error": "qdrant_unreachable:<urlopen error [Errno 111] Connection refused>",
-                            "usable_backend": False,
-                        },
-                        root=Path(tmp) / "core-memory",
-                    )
+                    with patch.dict(sys.modules, {"qdrant_client": types.ModuleType("qdrant_client")}):
+                        summary = normalize_embedded_qdrant_summary(
+                            {
+                                "backend": "qdrant",
+                                "rows_count": 3,
+                                "connectivity_checked": True,
+                                "connectivity_ok": False,
+                                "connectivity_error": "qdrant_unreachable:<urlopen error [Errno 111] Connection refused>",
+                                "usable_backend": False,
+                            },
+                            root=Path(tmp) / "core-memory",
+                        )
                 self.assertTrue(summary["connectivity_ok"])
                 self.assertEqual("", summary["connectivity_error"])
                 self.assertTrue(summary["usable_backend"])
                 self.assertEqual("embedded_qdrant_path", summary["deployment_profile"])
+
+    def test_embedded_qdrant_summary_treats_empty_store_as_ready_when_importable(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"CORE_MEMORY_VECTOR_BACKEND": "qdrant"}, clear=True):
+                with patch.dict(sys.modules, {"qdrant_client": types.ModuleType("qdrant_client")}):
+                    summary = normalize_embedded_qdrant_summary(
+                        {
+                            "backend": "lexical",
+                            "rows_count": 0,
+                            "usable_backend": False,
+                            "next_step": "Install semantic extras and run: core-memory graph semantic-build",
+                            "concurrency_warning": "No semantic backend is currently active; query-based anchors may fail closed in required mode.",
+                        },
+                        root=Path(tmp) / "core-memory",
+                    )
+
+            self.assertEqual("qdrant", summary["backend"])
+            self.assertTrue(summary["connectivity_ok"])
+            self.assertTrue(summary["usable_backend"])
+            self.assertEqual("", summary["concurrency_warning"])
+            self.assertIn("no semantic rows", summary["next_step"])
+
+    def test_embedded_qdrant_summary_reports_missing_qdrant_dependency(self):
+        real_import = __import__
+
+        def fake_import(name, *args, **kwargs):
+            if name == "qdrant_client":
+                raise ImportError("No module named qdrant_client")
+            return real_import(name, *args, **kwargs)
+
+        with tempfile.TemporaryDirectory() as tmp:
+            with patch.dict(os.environ, {"CORE_MEMORY_VECTOR_BACKEND": "qdrant"}, clear=True):
+                with patch("builtins.__import__", side_effect=fake_import):
+                    summary = normalize_embedded_qdrant_summary(
+                        {"backend": "lexical", "rows_count": 0, "usable_backend": False},
+                        root=Path(tmp) / "core-memory",
+                    )
+
+        self.assertEqual("lexical", summary["backend"])
+        self.assertFalse(summary["connectivity_ok"])
+        self.assertFalse(summary["usable_backend"])
+        self.assertIn("qdrant_import_error", summary["connectivity_error"])
+        self.assertEqual("Install qdrant-client[fastembed] and redeploy.", summary["next_step"])
 
 
 if __name__ == "__main__":
