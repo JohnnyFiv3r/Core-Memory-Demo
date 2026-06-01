@@ -1206,14 +1206,22 @@ function renderBenchmarkRunBeads() {
   if (statBeads) statBeads.textContent = Number(beads.length);
 }
 
-// Reset everything the live LoCoMo view streams so a new run starts clean:
-// the chat transcript, the graph/beads/associations panes, and all of the
-// per-run accumulators (QA de-dup set, evidence beads, graph beads + edges).
-function clearLiveBenchmarkView() {
+// Reset the per-run accumulators (QA de-dup set, evidence beads, graph beads +
+// edges). Non-destructive: does NOT touch the chat transcript or the panes, so
+// it is safe to call before a run is confirmed to have started.
+function resetBenchmarkAccumulators() {
   echoedBenchmarkQaIds.clear();
   benchmarkRunBeads.clear();
   benchmarkRunGraphBeads.clear();
   benchmarkRunGraphAssociations = [];
+}
+
+// Destructive reset of the live LoCoMo view: wipes the chat transcript and the
+// graph/beads/associations panes in addition to the accumulators. Only call
+// this once a streamed LoCoMo run has actually started — otherwise a rejected
+// start or a non-streamed suite would erase the user's existing conversation.
+function clearLiveBenchmarkView() {
+  resetBenchmarkAccumulators();
   if (messagesEl) {
     messagesEl.textContent = '';
     firstMessage = true;
@@ -4749,12 +4757,11 @@ async function runBenchmark() {
   btn.disabled = true;
   btn.textContent = 'Starting...';
   completedBenchmarkRunId = null;
-  // A new run starts from a clean slate: wipe the previous run's streamed chat
-  // and graph so stale Q&A / beads / edges never bleed into the new run.
-  clearLiveBenchmarkView();
-  if (subset === 'locomo_native_lifecycle') {
-    addMsg('system', 'LoCoMo benchmark started — each QA question and answer streams into the chat, and the run’s beads + causal graph render live as it works.');
-  }
+  // Reset only the per-run accumulators up front (non-destructive). The chat
+  // transcript + panes are wiped later, AFTER a streamed LoCoMo run actually
+  // starts, so a rejected start or a non-streamed suite never erases the chat.
+  resetBenchmarkAccumulators();
+  const isStreamedLocomo = subset === 'locomo_native_lifecycle';
   const optimisticJobId = 'pending-job-' + Date.now().toString(36);
   activeBenchmarkPollJobId = optimisticJobId;
   const optimisticAnswerMode = answerMode || 'auto';
@@ -4813,6 +4820,14 @@ async function runBenchmark() {
     }
     const jobId = String(data.job_id || '').trim();
     activeBenchmarkPollJobId = jobId;
+    // Job start succeeded. For the streamed LoCoMo suite, now wipe the chat +
+    // panes so its live Q&A / graph render on a clean slate. Other suites and
+    // failed starts (handled in catch) leave the existing conversation intact.
+    if (isStreamedLocomo) {
+      clearLiveBenchmarkView();
+      addMsg('system', 'LoCoMo benchmark started — each QA question and answer streams into the chat, and the run’s beads + causal graph render live as it works.');
+      benchmarkProgressEl = addMsg('system', 'Benchmark running...');
+    }
     lastBenchmarkSummary = {
       ...(lastBenchmarkSummary || {}),
       run_id: '',
