@@ -128,6 +128,95 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
         self.assertEqual(1, out['failed_turns'])
         self.assertEqual('boom', out['errors'][0]['error'])
 
+    def test_drain_async_fails_fast_on_semantic_failure(self):
+        if runtime_mod is None:
+            self.skipTest('runtime unavailable')
+        status_queued = {'ok': True, 'pending_total': 1, 'processable_now': 1, 'queues': {'semantic_rebuild': {'queued': True, 'pending': 1}}}
+        status_after = {'ok': True, 'pending_total': 1, 'processable_now': 1, 'queues': {'semantic_rebuild': {'queued': True, 'pending': 1}}}
+        run_out = {
+            'ok': False,
+            'semantic_run': {'ran': True, 'ok': False, 'result': {'error': {'code': 'qdrant_failed'}}},
+            'compaction_run': {'processed': 0, 'ok': True},
+            'side_effect_run': {'processed': 0, 'ok': True},
+        }
+
+        with patch.object(runtime_mod, 'async_jobs_status', side_effect=[status_queued, status_after]), \
+             patch.object(runtime_mod, 'run_async_jobs', return_value=run_out) as run_mock:
+            out = runtime_mod._drain_async_until_idle(
+                timeout_ms=600_000,
+                poll_ms=1000,
+                max_compaction=4,
+                max_side_effects=16,
+            )
+
+        self.assertFalse(out['ok'])
+        self.assertEqual('semantic_drain_failed', out['error'])
+        self.assertEqual(1, out['passes'])
+        self.assertEqual(run_out, out['last_run'])
+        self.assertEqual(1, run_mock.call_count)
+
+    def test_seed_replay_marks_drain_failure_as_failed(self):
+        if runtime_mod is None:
+            self.skipTest('runtime unavailable')
+        rows = [self._row(dia_id='D1:1')]
+        meta = {'sample_mode': 'single', 'sample_ids': ['conv-1'], 'session_range': {}, 'sessions_replayed': 1, 'turns_available': 1}
+
+        with patch.object(runtime_mod, '_iter_locomo_replay_rows', return_value=(rows, meta)), \
+             patch.object(runtime_mod, '_replay_locomo_row', return_value={'ok': True, 'session_id': 'locomo:conv-1:session:1'}), \
+             patch.object(runtime_mod, 'record_turn_tokens'), \
+             patch.object(runtime_mod, 'detect_model', return_value='test-model'), \
+             patch.object(runtime_mod, '_drain_async_until_idle', return_value={'ok': False, 'error': 'semantic_drain_failed', 'passes': 1}), \
+             patch.object(runtime_mod, 'async_jobs_status', return_value={'queues': {}}):
+            out = runtime_mod.replay_locomo_corpus(sample_mode='single', sample_id='conv-1')
+
+        self.assertFalse(out['ok'])
+        self.assertTrue(out['drain_failed'])
+        self.assertEqual('semantic_drain_failed', out['post_drain']['error'])
+        self.assertEqual(1, out['seeded_turns'])
+
+    def test_seed_replay_preserves_cancellation_from_drain(self):
+        if runtime_mod is None:
+            self.skipTest('runtime unavailable')
+        rows = [self._row(dia_id='D1:1')]
+        meta = {'sample_mode': 'single', 'sample_ids': ['conv-1'], 'session_range': {}, 'sessions_replayed': 1, 'turns_available': 1}
+
+        with patch.object(runtime_mod, '_iter_locomo_replay_rows', return_value=(rows, meta)), \
+             patch.object(runtime_mod, '_replay_locomo_row', return_value={'ok': True, 'session_id': 'locomo:conv-1:session:1'}), \
+             patch.object(runtime_mod, 'record_turn_tokens'), \
+             patch.object(runtime_mod, 'detect_model', return_value='test-model'), \
+             patch.object(runtime_mod, '_drain_async_until_idle', return_value={'ok': False, 'cancelled': True, 'error': 'drain_cancelled', 'passes': 1}), \
+             patch.object(runtime_mod, 'async_jobs_status', return_value={'queues': {}}):
+            out = runtime_mod.replay_locomo_corpus(sample_mode='single', sample_id='conv-1')
+
+        self.assertFalse(out['ok'])
+        self.assertTrue(out['cancelled'])
+        self.assertFalse(out['drain_failed'])
+        self.assertEqual('drain_cancelled', out['post_drain']['error'])
+        self.assertEqual(1, out['seeded_turns'])
+
+    def test_ingest_replay_preserves_cancellation_from_drain(self):
+        if runtime_mod is None:
+            self.skipTest('runtime unavailable')
+        sample = {
+            'sample_id': 'conv-1',
+            'sessions': [
+                {'session_index': 1, 'date_time': '1 Jan 2024', 'turns': [self._row(session_index=1, dia_id='D1:1')]},
+            ],
+        }
+
+        with tempfile.TemporaryDirectory() as td, \
+             patch.object(runtime_mod, '_replay_locomo_row', return_value={'ok': True, 'session_id': 'locomo:conv-1:session:1'}), \
+             patch.object(runtime_mod, 'process_flush', return_value={'ok': True, 'session_id': 'locomo:conv-1:session:1'}), \
+             patch.object(runtime_mod, '_drain_async_until_idle', return_value={'ok': False, 'cancelled': True, 'error': 'drain_cancelled', 'passes': 1}), \
+             patch.object(runtime_mod, 'async_jobs_status', return_value={'queues': {}}):
+            out = runtime_mod.ingest_locomo_samples_through_core_memory(samples=[sample], base_root=td)
+
+        self.assertFalse(out['ok'])
+        self.assertTrue(out['cancelled'])
+        self.assertFalse(out['drain_failed'])
+        self.assertEqual('drain_cancelled', out['post_drain']['error'])
+        self.assertEqual(1, out['ingested_turns'])
+
     def test_ingest_replay_flushes_each_locomo_session_before_post_flush_drain(self):
         if runtime_mod is None:
             self.skipTest('runtime unavailable')
