@@ -42,25 +42,46 @@ def normalize_embedded_qdrant_summary(summary: dict[str, Any], *, root: str | Pa
 
     backend = str(out.get("backend") or "not_built")
     rows_count = int(out.get("rows_count") or 0)
-    if backend == "not_built" and rows_count > 0:
+    qdrant_import_ok = False
+    qdrant_import_error = ""
+    if path_ok:
+        try:
+            import qdrant_client  # noqa: F401
+
+            qdrant_import_ok = True
+        except Exception as exc:  # pragma: no cover - depends on deployment image
+            qdrant_import_error = f"qdrant_import_error:{exc}"
+
+    # Core Memory's doctor can report lexical/not_built for an empty embedded
+    # Qdrant store because there are zero semantic rows.  That is not the same
+    # as the backend being unavailable: the benchmark can still build Qdrant
+    # indexes on demand once data exists.  Use a direct import/path probe for
+    # deployment health instead of row count.
+    if path_ok and qdrant_import_ok:
         backend = "qdrant"
 
     out.update(
         {
             "backend": backend,
             "connectivity_checked": True,
-            "connectivity_ok": bool(path_ok),
-            "connectivity_error": path_error,
+            "connectivity_ok": bool(path_ok and qdrant_import_ok),
+            "connectivity_error": path_error or qdrant_import_error,
             "deployment_profile": "embedded_qdrant_path",
             "multi_worker_safe": False,
         }
     )
-    if path_ok and backend == "qdrant" and rows_count > 0:
+    if path_ok and qdrant_import_ok and backend == "qdrant":
         out["usable_backend"] = True
         out["concurrency_warning"] = ""
-        out["next_step"] = "Embedded Qdrant semantic backend is ready."
+        out["next_step"] = (
+            "Embedded Qdrant semantic backend is ready."
+            if rows_count > 0
+            else "Embedded Qdrant semantic backend is ready; no semantic rows have been built yet."
+        )
     elif path_ok:
-        out["concurrency_warning"] = str(out.get("concurrency_warning") or "")
+        out["usable_backend"] = False
+        out["concurrency_warning"] = "Qdrant dependency is not importable in this deployment image."
+        out["next_step"] = "Install qdrant-client[fastembed] and redeploy."
     return out
 
 
