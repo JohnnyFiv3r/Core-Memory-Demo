@@ -120,19 +120,22 @@ class TestFrontendBenchmarkGraphWiring(unittest.TestCase):
 
 
 class TestGpt55Default(unittest.TestCase):
-    def test_openai_fallback_is_gpt_5_5(self):
+    def test_openai_fallback_is_current_gpt5_alias(self):
         import inspect
         from app.core import runtime
 
+        # gpt-5.5 is not a real OpenAI model; gpt-5.2 is the current latest alias.
         src = inspect.getsource(runtime.detect_model)
-        self.assertIn("openai:gpt-5.5", src)
+        self.assertIn("openai:gpt-5.2", src)
+        self.assertNotIn("openai:gpt-5.5", src)
         self.assertNotIn("openai:gpt-4o\"", src)
 
-    def test_gpt_5_5_in_presets(self):
+    def test_gpt5_alias_in_presets(self):
         from app.core.runtime import DEMO_MODEL_PRESETS
 
         ids = [m for m, _ in DEMO_MODEL_PRESETS]
-        self.assertIn("openai:gpt-5.5", ids)
+        self.assertIn("openai:gpt-5.2", ids)
+        self.assertNotIn("openai:gpt-5.5", ids)
 
 
 if __name__ == "__main__":

@@ -197,7 +197,7 @@ DEMO_MODEL_PRESETS: tuple[tuple[str, str], ...] = (
     ("anthropic:claude-opus-4-20250514", "Claude Opus 4"),
     ("anthropic:claude-sonnet-4-20250514", "Claude Sonnet 4"),
     ("anthropic:claude-3-5-haiku-latest", "Claude Haiku"),
-    ("openai:gpt-5.5", "GPT-5.5"),
+    ("openai:gpt-5.2", "GPT-5.2"),
     ("openai:gpt-4.1", "GPT-4.1"),
     ("openai:gpt-4o", "GPT-4o"),
     ("google-gla:gemini-2.5-pro", "Gemini 2.5 Pro"),
@@ -1029,7 +1029,7 @@ def detect_model() -> str:
 
     # If configured model is missing credentials, fall through to supported fallbacks.
     if os.getenv("OPENAI_API_KEY"):
-        return "openai:gpt-5.5"
+        return "openai:gpt-5.2"
     if os.getenv("ANTHROPIC_API_KEY"):
         return "anthropic:claude-sonnet-4-20250514"
     if os.getenv("GEMINI_API_KEY") or os.getenv("GOOGLE_API_KEY"):
