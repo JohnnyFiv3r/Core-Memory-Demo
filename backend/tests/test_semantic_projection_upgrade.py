@@ -16,6 +16,7 @@ class TestSemanticProjectionUpgrade(unittest.TestCase):
         self.assertIn("fcf29b8a01957cff3604c44a2a7864d43b09164e", requirements)
         self.assertIn("core-memory[qdrant,kuzu,mcp]", requirements)
         self.assertIn("qdrant-client[fastembed]>=1.9", requirements)
+        self.assertIn("psycopg[binary]==3.3.2", requirements)
         self.assertNotIn("48d21794424c3efd996ee3ed80839d33c4b4fee0", requirements)
 
     def test_queues_projection_rebuild_once(self):

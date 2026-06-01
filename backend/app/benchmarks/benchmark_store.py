@@ -44,6 +44,16 @@ def enabled() -> bool:
     return bool(_database_url()) and psycopg is not None
 
 
+def diagnostics() -> dict[str, Any]:
+    """Return non-secret benchmark queue readiness details for route errors."""
+    db_url = _database_url()
+    return {
+        'enabled': enabled(),
+        'database_url_configured': bool(db_url),
+        'psycopg_importable': psycopg is not None,
+    }
+
+
 def _migration_path() -> Path:
     return Path(__file__).resolve().parents[2] / 'migrations' / '0001_benchmarks_schema.sql'
 

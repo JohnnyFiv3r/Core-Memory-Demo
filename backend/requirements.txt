@@ -6,6 +6,8 @@ pyjwt[crypto]==2.10.1
 # Use slim provider extras only; the full pydantic-ai meta-package pulls all providers
 # and Render currently fails resolving the mistral extra (`mistralai>=2.0.0`).
 pydantic-ai-slim[anthropic,google,openai]==1.80.0
+# Benchmark queue persistence for hosted queued/cron benchmark mode.
+psycopg[binary]==3.3.2
 # Pinned to explicit Core-Memory commit for deploy stability.
 # Includes the semantic projection reconcile rebuild fix used by PR #145.
 core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@fcf29b8a01957cff3604c44a2a7864d43b09164e

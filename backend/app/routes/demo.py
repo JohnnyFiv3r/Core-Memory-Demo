@@ -693,8 +693,13 @@ async def _run_seed_job(job_id: str, kwargs: dict[str, Any]) -> None:
         elif bool((out or {}).get('ok')):
             current['status'] = 'completed'
             seeded = int((out or {}).get('seeded') or 0)
-            _seed_event(current, 'done', f'Seed completed: {seeded} turns ingested', seeded=seeded)
-            _set_seed_status(active=False, kind='locomo', status='completed', message=f'LoCoMo replay complete: {seeded} turns')
+            if bool((out or {}).get('drain_warning')):
+                warning = str(((out or {}).get('post_drain') or {}).get('error') or 'semantic_drain_warning')
+                _seed_event(current, 'done', f'Seed completed with async warning: {seeded} turns ingested', seeded=seeded, warning=warning)
+                _set_seed_status(active=False, kind='locomo', status='completed', message=f'LoCoMo replay complete: {seeded} turns; async warning: {warning}')
+            else:
+                _seed_event(current, 'done', f'Seed completed: {seeded} turns ingested', seeded=seeded)
+                _set_seed_status(active=False, kind='locomo', status='completed', message=f'LoCoMo replay complete: {seeded} turns')
         else:
             current['status'] = 'failed'
             turn_errors = list((out or {}).get('errors') or [])
@@ -1724,6 +1729,7 @@ async def benchmark_run(request: Request):
         # ACTIVE_BENCHMARK_JOB_ID is cleared.
         _force_finalize_benchmark_job(prior_row, status='cancelled', message='Benchmark superseded by a newer run')
     if run_mode in {'queue', 'queued', 'cron'}:
+        queue_diag = benchmark_store.diagnostics()
         try:
             queued = benchmark_store.enqueue_job(job_id=job_id, request=dict(body or {}), kwargs=kwargs)
         except Exception as exc:
@@ -1733,8 +1739,18 @@ async def benchmark_run(request: Request):
             row['status'] = 'failed'
             row['done'] = True
             row['error'] = 'benchmark_queue_unavailable'
-            _benchmark_event(row, 'failed', 'Benchmark queue unavailable', detail=str(row.get('queue_error_detail') or ''))
-            return JSONResponse({'ok': False, 'job_id': job_id, 'status': 'failed', 'error': row['error'], 'detail': str(row.get('queue_error_detail') or '')}, status_code=503)
+            detail = str(row.get('queue_error_detail') or '')
+            if not detail:
+                if not bool(queue_diag.get('database_url_configured')):
+                    detail = 'BENCHMARK_DATABASE_URL is not configured'
+                elif not bool(queue_diag.get('psycopg_importable')):
+                    detail = 'psycopg is not importable; install psycopg[binary]'
+                else:
+                    detail = 'benchmark queue enqueue returned false'
+            row['queue_error_detail'] = detail
+            row['queue_diagnostics'] = dict(queue_diag)
+            _benchmark_event(row, 'failed', 'Benchmark queue unavailable', detail=detail, diagnostics=dict(queue_diag))
+            return JSONResponse({'ok': False, 'job_id': job_id, 'status': 'failed', 'error': row['error'], 'detail': detail, 'diagnostics': dict(queue_diag)}, status_code=503)
         row['status'] = 'queued_external'
         row['done'] = True
         row['result'] = {'queued': True}
