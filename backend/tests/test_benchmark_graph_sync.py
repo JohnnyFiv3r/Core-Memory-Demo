@@ -158,6 +158,55 @@ class TestSyncGraphBackend(unittest.TestCase):
         sync_spy.assert_called_once()
         self.assertEqual({"ok": True, "synced": True, "backend": "kuzu"}, out["graph_sync"])
 
+    def test_isolated_qa_rescopes_backend_paths_to_qa_root(self):
+        """In isolated mode, recall/write for each QA must see env paths pinned to
+        the per-QA copy, not the shared base root (otherwise hosted qdrant/kuzu
+        access defeats isolation)."""
+        from app.benchmarks import lifecycle_runner as lr
+        from app.benchmarks.contracts import BenchmarkConversation, BenchmarkQA, BenchmarkTurn
+
+        os.environ["CORE_MEMORY_KUZU_PATH"] = "/var/data/core-memory/.beads/kuzu"
+        seen_kuzu_paths = []
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            # Capture the env path the recall would resolve for this QA case.
+            seen_kuzu_paths.append(os.environ.get("CORE_MEMORY_KUZU_PATH"))
+            return {"answer": "a", "warnings": [], "raw": {"results": []}}
+
+        conv = BenchmarkConversation(
+            benchmark_name="locomo",
+            conversation_id="conv-1",
+            session_id="bench:locomo:conv-1:replay",
+            turns=[BenchmarkTurn(turn_id="locomo:conv-1:D1:1:1", speaker="A", role="user", content="hi", metadata={"locomo_dia_id": "D1:1"})],
+            qa_cases=[BenchmarkQA(qa_id="conv-1:q1", question="q?", expected_answer="a", category="2", gold_evidence=["D1:1"])],
+            metadata={},
+        )
+        with tempfile.TemporaryDirectory() as td:
+            base = Path(td) / "base"
+            (base / ".beads").mkdir(parents=True, exist_ok=True)
+            (base / ".beads" / "index.json").write_text(json.dumps({"beads": {}, "associations": []}), encoding="utf-8")
+            try:
+                lr.run_lifecycle_conversation(
+                    root=str(base),
+                    conversation=conv,
+                    qa_session_mode="isolated",
+                    process_turn_finalized_fn=lambda **kw: {"ok": True},
+                    process_flush_fn=lambda **kw: {"ok": True},
+                    run_async_jobs_fn=lambda **kw: {"ok": True},
+                    recall_fn=fake_recall,
+                    write_qa_beads=False,
+                )
+            finally:
+                os.environ.pop("CORE_MEMORY_KUZU_PATH", None)
+
+        # recall ran with the env pinned to the isolated qa_root's kuzu dir,
+        # NOT the base root and NOT the live /var/data path.
+        self.assertTrue(seen_kuzu_paths)
+        for p in seen_kuzu_paths:
+            self.assertIn("-qa-isolated", str(p))
+            self.assertTrue(str(p).endswith(".beads/kuzu"))
+            self.assertNotEqual("/var/data/core-memory/.beads/kuzu", p)
+
 
 if __name__ == "__main__":
     unittest.main()
