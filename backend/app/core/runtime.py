@@ -3487,9 +3487,19 @@ def _resolve_benchmark_embeddings_provider(explicit_provider: str | None = None)
     explicit = str(explicit_provider or "").strip().lower()
     if explicit:
         return explicit
+    # Benchmark-specific override takes precedence when set.
     default_env = str(os.environ.get("CORE_MEMORY_DEMO_BENCHMARK_EMBEDDINGS_PROVIDER") or "").strip().lower()
     if default_env:
         return default_env
+    # Otherwise inherit the process-wide embeddings provider (e.g. the worker's
+    # CORE_MEMORY_EMBEDDINGS_PROVIDER=openai). Without this, the benchmark built
+    # the semantic index with 'hash' (random-projection) embeddings regardless of
+    # the configured provider — producing near-random ~0.3 cosine anchors that
+    # capped recall, which is exactly what the OpenAI-embeddings work is meant to
+    # fix. 'hash' remains the zero-config local default when nothing is set.
+    process_env = str(os.environ.get("CORE_MEMORY_EMBEDDINGS_PROVIDER") or "").strip().lower()
+    if process_env:
+        return process_env
     return "hash"
 
 

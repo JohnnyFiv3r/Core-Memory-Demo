@@ -983,9 +983,10 @@
           </select>
           <input id="bench-qa-session-mode" type="hidden" value="isolated">
           <span class="control-label" data-dataset="locomo">embeddings</span>
-          <select id="bench-embeddings-provider" class="control-select" title="Benchmark embeddings provider" data-dataset="locomo">
-            <option value="hash" selected>hash</option>
+          <select id="bench-embeddings-provider" class="control-select" title="Benchmark embeddings provider (auto = server default, e.g. OpenAI)" data-dataset="locomo">
+            <option value="" selected>auto</option>
             <option value="openai">openai</option>
+            <option value="hash">hash</option>
           </select>
 
           <span class="control-label" data-dataset="story_pack default_demo">turns</span>
@@ -1042,6 +1043,6 @@
   </div>
 </div>
 
-<script src="/chat-app.js?v=20260601-chat-clear-gating-7"></script>
+<script src="/chat-app.js?v=20260601-bench-embeddings-8"></script>
 </body>
 </html>
