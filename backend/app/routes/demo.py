@@ -837,6 +837,11 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
         # live Beads pane can be built from the event stream on hosted, where the
         # web container can't read the worker's isolated filesystem.
         evidence = [r for r in ((result or {}).get('evidence') or []) if isinstance(r, dict)]
+        # Full causal graph (beads + associations), emitted once after replay so
+        # the live graph/associations panes can render the run without reading
+        # the worker's isolated filesystem.
+        graph_beads = [b for b in ((result or {}).get('graph_beads') or []) if isinstance(b, dict)]
+        graph_associations = [a for a in ((result or {}).get('graph_associations') or []) if isinstance(a, dict)]
         _benchmark_event(
             current,
             stage,
@@ -857,6 +862,9 @@ async def _run_benchmark_job(job_id: str, kwargs: dict[str, Any]) -> None:
             answer_f1=(float((result or {}).get('answer_f1') or 0.0) if status == 'ok' else None),
             evidence_bead_ids=evidence_bead_ids or None,
             evidence=evidence or None,
+            graph_beads=graph_beads or None,
+            graph_associations=graph_associations or None,
+            graph_stats=((result or {}).get('graph_stats') or None),
         )
 
     try:

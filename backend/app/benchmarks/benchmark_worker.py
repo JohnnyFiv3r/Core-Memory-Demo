@@ -110,6 +110,15 @@ def run_once() -> int:
                     event['evidence_bead_ids'] = evidence_bead_ids
                 if evidence:
                     event['evidence'] = evidence
+                # Causal graph snapshot (beads + associations) for the live graph.
+                graph_beads = [b for b in (result_d.get('graph_beads') or []) if isinstance(b, dict)]
+                graph_associations = [a for a in (result_d.get('graph_associations') or []) if isinstance(a, dict)]
+                if graph_beads:
+                    event['graph_beads'] = graph_beads
+                if graph_associations:
+                    event['graph_associations'] = graph_associations
+                if result_d.get('graph_stats'):
+                    event['graph_stats'] = dict(result_d.get('graph_stats') or {})
                 benchmark_store.update_job_progress(
                     job_id,
                     status='running',
