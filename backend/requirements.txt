@@ -7,4 +7,8 @@ pyjwt[crypto]==2.10.1
 # and Render currently fails resolving the mistral extra (`mistralai>=2.0.0`).
 pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Pinned to explicit Core-Memory commit for deploy stability.
-core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@48d21794424c3efd996ee3ed80839d33c4b4fee0
+# Includes the semantic projection reconcile rebuild fix used by PR #145.
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@fcf29b8a01957cff3604c44a2a7864d43b09164e
+# Keep Qdrant explicit so deployment logs fail loudly if the semantic backend
+# dependency is skipped instead of silently falling back to lexical mode.
+qdrant-client[fastembed]>=1.9

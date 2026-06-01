@@ -10,6 +10,14 @@ from app.core.semantic_upgrade import (
 
 
 class TestSemanticProjectionUpgrade(unittest.TestCase):
+    def test_requirements_pin_core_memory_reconcile_fix_and_explicit_qdrant(self):
+        requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
+
+        self.assertIn("fcf29b8a01957cff3604c44a2a7864d43b09164e", requirements)
+        self.assertIn("core-memory[qdrant,kuzu,mcp]", requirements)
+        self.assertIn("qdrant-client[fastembed]>=1.9", requirements)
+        self.assertNotIn("48d21794424c3efd996ee3ed80839d33c4b4fee0", requirements)
+
     def test_queues_projection_rebuild_once(self):
         with tempfile.TemporaryDirectory() as td:
             root = Path(td) / "core-memory"
