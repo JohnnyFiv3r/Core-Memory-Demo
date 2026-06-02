@@ -1566,6 +1566,13 @@ function isTransientTransportError(err) {
   return /network_changed|network_io_suspended|failed to fetch|networkerror|returned non-json \(http 5\d\d\)|http 5\d\d/i.test(msg);
 }
 
+class BenchmarkJobFailureError extends Error {
+  constructor(message) {
+    super(message || 'benchmark_failed');
+    this.name = 'BenchmarkJobFailureError';
+  }
+}
+
 async function sendMessageLegacyApi(text, progressMsg) {
   if (progressMsg) progressMsg.textContent = 'Chat pipeline: sending';
   const res = await fetch('/api/chat', {
@@ -4964,12 +4971,13 @@ async function runBenchmark() {
         syncBenchmarkButton(lastBenchmarkSummary || {});
         addMsg('system', formatBenchmarkSummary(lastBenchmarkSummary || {}));
       } else if (job.error) {
-        throw new Error(job.error || 'benchmark_failed');
+        throw new BenchmarkJobFailureError(job.error || 'benchmark_failed');
       }
     }
   } catch (err) {
     const msg = String((err && err.message) || err || 'benchmark_failed');
-    if (isTransientTransportError(msg)) {
+    const isJobFailure = err instanceof BenchmarkJobFailureError || (err && err.name === 'BenchmarkJobFailureError');
+    if (!isJobFailure && isTransientTransportError(msg)) {
       const liveRun = await benchmarkHasLiveRun();
       if (liveRun) {
         addMsg('system', 'Benchmark started, but live polling briefly lost connection. Recovering from backend state...');
