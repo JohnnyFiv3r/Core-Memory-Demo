@@ -9,6 +9,13 @@ pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Benchmark queue persistence for hosted queued/cron benchmark mode.
 psycopg[binary]==3.3.2
 # Pinned to explicit Core-Memory commit for deploy stability.
+# PR #175 (schema): type-vocabulary revision + bead dataclass completeness. Retires
+# 7 primary types (failed_hypothesis/reversal/correction/misjudgment/overfitted_pattern/
+# abandoned_path/proposed_theme) in favor of modifier fields (revises_bead_id/
+# revision_type, hypothesis_status, reflection_type); adds hypothesis/blocked/incident
+# types; tightens per-type required fields (warn-first); replaces promoted/candidate
+# status values with boolean flags (promoted/promotion_candidate); adds next_bead_id
+# forward chaining and unknown-type→context coercion.
 # PR #174 (phases 1-12): remove the legacy retrieval-gate fields. Beads are event
 # normalization, not retrieval candidates — every bead is indexed unconditionally
 # and quality is handled at ranking time. Drops retrieval_eligible/retrieval_title/
@@ -16,7 +23,7 @@ psycopg[binary]==3.3.2
 # adds prev_bead_id temporal auto-linking.
 # Carries forward #173 (OpenAI/external Qdrant embeddings), #170/#171 (recall
 # traversal seed/merge + structural hints), #169 (unified bead projection).
-core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@7cb8f932d5f09cf3726ade95e549bac60988011b
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@ca5038bf05a35f35e774bd4dc13df440daf712a0
 # Keep Qdrant explicit so deployment logs fail loudly if the semantic backend
 # dependency is skipped instead of silently falling back to lexical mode.
 qdrant-client[fastembed]>=1.9

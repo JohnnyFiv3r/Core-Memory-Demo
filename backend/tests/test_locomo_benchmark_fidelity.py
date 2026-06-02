@@ -54,7 +54,11 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
         self.assertEqual(['locomo:conv-1:D2:7', 'D2:7'], captured['metadata']['crawler_updates']['beads_create'][0]['source_turn_ids'])
         evidence_rows = [r for r in corpus if 'locomo_turn_evidence' in list(((r.get('bead') or {}).get('tags') or []))]
         self.assertEqual(1, len(evidence_rows))
-        self.assertEqual('promoted', (evidence_rows[0].get('bead') or {}).get('status'))
+        # CM #175: the anchor turn is a `context` bead (evidence now requires
+        # supports_bead_ids); promotion is a boolean flag, status stays operational.
+        self.assertEqual('context', (evidence_rows[0].get('bead') or {}).get('type'))
+        self.assertTrue(bool((evidence_rows[0].get('bead') or {}).get('promoted')))
+        self.assertEqual('open', (evidence_rows[0].get('bead') or {}).get('status'))
         self.assertEqual(['locomo:conv-1:D2:7', 'D2:7'], evidence_rows[0].get('source_turn_ids'))
         self.assertEqual('D2:7', ((evidence_rows[0].get('bead') or {}).get('metadata') or {}).get('locomo_dia_id'))
 

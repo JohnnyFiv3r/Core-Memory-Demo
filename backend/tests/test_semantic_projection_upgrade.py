@@ -13,13 +13,14 @@ class TestSemanticProjectionUpgrade(unittest.TestCase):
     def test_requirements_pin_core_memory_reconcile_fix_and_explicit_qdrant(self):
         requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
 
-        # PR #174 schema-migration pin (removes the legacy retrieval-gate fields;
-        # supersedes the #173 external-embeddings pin).
-        self.assertIn("7cb8f932d5f09cf3726ade95e549bac60988011b", requirements)
+        # PR #175 schema pin (type-vocabulary revision + bead dataclass
+        # completeness; supersedes the #174 retrieval-gate-removal pin).
+        self.assertIn("ca5038bf05a35f35e774bd4dc13df440daf712a0", requirements)
         self.assertIn("core-memory[qdrant,kuzu,mcp]", requirements)
         self.assertIn("qdrant-client[fastembed]>=1.9", requirements)
         self.assertIn("psycopg[binary]==3.3.2", requirements)
         self.assertNotIn("c0c85606ddb3799b171f6fea9a67d35c2bfea66e", requirements)
+        self.assertNotIn("7cb8f932d5f09cf3726ade95e549bac60988011b", requirements)
 
     def test_queues_projection_rebuild_once(self):
         with tempfile.TemporaryDirectory() as td:

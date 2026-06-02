@@ -491,7 +491,12 @@ def _ensure_locomo_evidence_bead(*, root: str, row: dict[str, Any], session_id: 
 
     return str(
         store.add_bead(
-            type="evidence",
+            # CM #175: a raw replay turn is `context`, not `evidence` — evidence now
+            # requires non-empty supports_bead_ids (a bead it backs), which a bare
+            # conversational turn has none of. context only requires entities, always
+            # populated below via the sample anchor. The "locomo_turn_evidence" tag is
+            # kept for idempotency/lookup stability; recall scores on dia_ids, not type.
+            type="context",
             title=display[:160] or "LoCoMo replay turn",
             summary=[display[:240] or "LoCoMo replay turn"],
             detail=detail,
@@ -503,8 +508,12 @@ def _ensure_locomo_evidence_bead(*, root: str, row: dict[str, Any], session_id: 
             # authority removed. All beads are indexed; supporting_facts carries
             # the recall facts (was retrieval_facts); title carries the heading.
             supporting_facts=[detail[:500]],
-            status="promoted",
-            promotion_state="promoted",
+            # CM #175: promotion is a boolean flag now, not a status value. Keep the
+            # anchor retrievable and compaction-proof via promoted/promotion_locked
+            # while status stays operational ("open").
+            status="open",
+            promoted=True,
+            promoted_at=_utc_now_iso(),
             promotion_locked=True,
             metadata={
                 "sample_id": sample_id,
@@ -1612,21 +1621,21 @@ def _seed_crawler_updates(*, user_query: str, turn_id: str) -> dict[str, Any]:
 
 
 def _infer_seed_bead_type(user_query: str) -> str:
+    # CM #175 tightened per-type required fields. The seed payload only carries
+    # because / entities / supporting_facts, so inference is restricted to the
+    # types those satisfy: decision (because), lesson (because + entities +
+    # supporting_facts), and context (entities). goal/outcome/evidence now require
+    # fields a single chat line can't synthesize (goal_id + success_criteria,
+    # result + linked_bead_id, supports_bead_ids), and checkpoint is system-only —
+    # emitting any of them would only produce validation_warnings, so they fold
+    # into context.
     text = str(user_query or "").strip().lower()
     if not text:
         return "context"
     if any(x in text for x in ["decide", "decision", "chose", "choose", "selected", "approved", "policy"]):
         return "decision"
-    if any(x in text for x in ["goal", "objective", "target", "milestone", "pending", "plan"]):
-        return "goal"
-    if any(x in text for x in ["evidence", "because", "proof", "supports", "why"]):
-        return "evidence"
-    if any(x in text for x in ["outcome", "result", "completed", "shipped", "done"]):
-        return "outcome"
     if any(x in text for x in ["lesson", "learned", "learning"]):
         return "lesson"
-    if any(x in text for x in ["checkpoint", "flush", "session"]):
-        return "checkpoint"
     return "context"
 
 
