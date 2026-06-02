@@ -50,7 +50,9 @@ class TestLocomoTurnCrawler(unittest.TestCase):
             'crawler_context': {'beads': []},
         })
         self.assertIn('Caroline met mentors', out['beads_create'][0]['title'])
-        self.assertTrue(out['beads_create'][0]['retrieval_eligible'])
+        # CM #174: retrieval_eligible removed (all beads indexed); the crawler now
+        # carries the recall signal in supporting_facts instead of a gate flag.
+        self.assertTrue(out['beads_create'][0]['supporting_facts'])
 
     def test_uses_current_turn_alias_before_current_bead_exists(self):
         out = locomo_crawler_callable({

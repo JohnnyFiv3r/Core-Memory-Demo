@@ -8,9 +8,11 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Core-Memory PR #169 changed the canonical retrieval projection so association
-# anchors (entities/topics/*_keys/candidates/etc.) are now embedded and included
-# in lexical scoring. Existing Render disks can still hold a manifest built with
-# the older projection, so queue one reconcile rebuild per persistent root.
+# anchors (entities + supporting_facts) are embedded and included in lexical
+# scoring. (PR #174 later removed the legacy topics/*_keys/candidate anchors and
+# the retrieval_eligible gate — all beads are now indexed.) Existing Render disks
+# can still hold a manifest built with the older projection, so queue one
+# reconcile rebuild per persistent root.
 _UNIFIED_BEAD_PROJECTION_UPGRADE = "core-memory-pr-169-unified-bead-projection"
 
 

@@ -9,11 +9,14 @@ pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Benchmark queue persistence for hosted queued/cron benchmark mode.
 psycopg[binary]==3.3.2
 # Pinned to explicit Core-Memory commit for deploy stability.
-# PR #173: optional OpenAI/external embeddings for Qdrant (CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS)
-# — fixes weak FastEmbed semantic anchors (~0.3 cosine) that capped recall.
-# Also includes #170 (recall traversal seed/merge + soft structural hints) and
-# #171 (keep structural hints out of metadata filters).
-core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@c0c85606ddb3799b171f6fea9a67d35c2bfea66e
+# PR #174 (phases 1-12): remove the legacy retrieval-gate fields. Beads are event
+# normalization, not retrieval candidates — every bead is indexed unconditionally
+# and quality is handled at ranking time. Drops retrieval_eligible/retrieval_title/
+# retrieval_facts/topics/authority/*_keys/cause_candidates/effect_candidates/etc.;
+# adds prev_bead_id temporal auto-linking.
+# Carries forward #173 (OpenAI/external Qdrant embeddings), #170/#171 (recall
+# traversal seed/merge + structural hints), #169 (unified bead projection).
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@7cb8f932d5f09cf3726ade95e549bac60988011b
 # Keep Qdrant explicit so deployment logs fail loudly if the semantic backend
 # dependency is skipped instead of silently falling back to lexical mode.
 qdrant-client[fastembed]>=1.9

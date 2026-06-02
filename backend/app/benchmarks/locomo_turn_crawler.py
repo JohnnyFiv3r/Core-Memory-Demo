@@ -159,12 +159,11 @@ def locomo_crawler_callable(payload: dict[str, Any]) -> dict[str, Any]:
             'summary': [(source_text or 'LoCoMo replay turn')[:240]],
             'detail': bead_detail,
             'source_turn_ids': source_turn_ids,
-            'entities': sorted(x for x in current_entities if x)[:12],
-            'topics': [x for x in ['locomo', speaker] if x][:8],
+            # CM #174: topics removed — fold the topic tokens into entities.
+            # retrieval_eligible/retrieval_title/retrieval_facts removed — every
+            # bead is now indexed; title/supporting_facts carry the recall signal.
+            'entities': sorted({x for x in (*current_entities, 'locomo', speaker) if x})[:12],
             'supporting_facts': [source_text[:240]] if source_text else [],
-            'retrieval_eligible': True,
-            'retrieval_title': title or 'LoCoMo replay turn',
-            'retrieval_facts': [source_text[:240]] if source_text else [],
             'tags': ['crawler_reviewed', 'turn_finalized', 'locomo_replay', 'agent_authored_semantic'],
         }],
         'associations': associations,

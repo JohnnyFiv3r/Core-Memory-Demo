@@ -499,14 +499,13 @@ def _ensure_locomo_evidence_bead(*, root: str, row: dict[str, Any], session_id: 
             source_turn_ids=[turn_id, dia_id],
             tags=["locomo_replay", "locomo_turn_evidence", f"sample:{sample_id}", f"session:{session_index}"],
             entities=[x for x in [speaker, f"locomo:{sample_id}"] if x],
-            topics=[f"sample:{sample_id}", f"session:{session_index}"],
-            retrieval_eligible=True,
-            retrieval_title=display[:200] or "LoCoMo replay turn",
-            retrieval_facts=[detail[:500]],
+            # CM #174: topics/retrieval_eligible/retrieval_title/retrieval_facts/
+            # authority removed. All beads are indexed; supporting_facts carries
+            # the recall facts (was retrieval_facts); title carries the heading.
+            supporting_facts=[detail[:500]],
             status="promoted",
             promotion_state="promoted",
             promotion_locked=True,
-            authority="benchmark_transcript_replay",
             metadata={
                 "sample_id": sample_id,
                 "locomo_sample_id": sample_id,
@@ -565,12 +564,10 @@ def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[
                     "summary": [display[:240] or "LoCoMo replay turn"],
                     "detail": detail,
                     "source_turn_ids": [turn_id, dia_id],
-                    "entities": [x for x in [speaker, f"locomo:{sample_id}"] if x],
-                    "topics": [x for x in ["locomo", speaker] if x],
+                    # CM #174: topics folded into entities; retrieval_eligible/
+                    # retrieval_title/retrieval_facts removed (all beads indexed).
+                    "entities": [x for x in [speaker, f"locomo:{sample_id}", "locomo"] if x],
                     "supporting_facts": [display[:240] or "LoCoMo replay turn"],
-                    "retrieval_eligible": True,
-                    "retrieval_title": display[:160] or "LoCoMo replay turn",
-                    "retrieval_facts": [display[:240] or "LoCoMo replay turn"],
                     "tags": ["crawler_reviewed", "turn_finalized", "locomo_replay", "agent_authored_semantic"],
                     "metadata": {
                         "locomo_sample_id": sample_id,
@@ -1604,12 +1601,10 @@ def _seed_crawler_updates(*, user_query: str, turn_id: str) -> dict[str, Any]:
                 "summary": [uq[:240]] if uq else ["turn memory"],
                 "because": [uq[:240]] if uq else [],
                 "source_turn_ids": [str(turn_id or "")],
-                "entities": entities,
-                "topics": ["demo_chat"],
+                # CM #174: topics folded into entities; retrieval_eligible/
+                # retrieval_title/retrieval_facts removed (all beads indexed).
+                "entities": [*entities, "demo_chat"],
                 "supporting_facts": [uq[:240]] if uq else [],
-                "retrieval_eligible": bool(uq),
-                "retrieval_title": title or "Turn memory",
-                "retrieval_facts": [uq[:240]] if uq else [],
                 "tags": ["demo_seed", "crawler_reviewed", "turn_finalized", "agent_authored_semantic"],
             }
         ]
@@ -1650,7 +1645,7 @@ def _bead_text(bead: dict[str, Any]) -> str:
         val = str((bead or {}).get(key) or "").strip()
         if val:
             parts.append(val)
-    for key in ("summary", "because", "retrieval_facts"):
+    for key in ("summary", "because", "supporting_facts"):
         vals = list((bead or {}).get(key) or [])
         for v in vals:
             s = str(v or "").strip()

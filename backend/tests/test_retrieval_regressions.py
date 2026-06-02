@@ -21,11 +21,12 @@ class _FakeConn:
         return _FakeCursor()
 
 
-def _set_retrieval_eligible(root: Path, bead_id: str) -> None:
+def _mark_bead_open(root: Path, bead_id: str) -> None:
+    # CM #174 removed the retrieval_eligible gate — all beads are indexed. We only
+    # need the bead in "open" status to exercise the retrieval path here.
     idx_path = root / ".beads" / "index.json"
     data = json.loads(idx_path.read_text(encoding="utf-8"))
     row = dict((data.get("beads") or {}).get(bead_id) or {})
-    row["retrieval_eligible"] = True
     row["status"] = "open"
     data.setdefault("beads", {})[bead_id] = row
     idx_path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -82,7 +83,7 @@ class TestRetrievalRegressions(unittest.TestCase):
                 session_id="demo-regression",
                 source_turn_ids=["turn-1"],
             )
-            _set_retrieval_eligible(root, bead_id)
+            _mark_bead_open(root, bead_id)
 
             out = memory_tools.execute(
                 {"query": "Why did we choose PostgreSQL?", "intent": "remember", "k": 8},
