@@ -9,6 +9,12 @@ pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Benchmark queue persistence for hosted queued/cron benchmark mode.
 psycopg[binary]==3.3.2
 # Pinned to explicit Core-Memory commit for deploy stability.
+# PR #177 (retrieval): retrieval_eligible derives from typeability, not richness.
+# Note this partially reverses #174's "no eligibility gate" stance below: a
+# retrieval_eligible flag exists again, but it is set at the write chokepoint
+# purely from type canonicality (eligible unless the bead type is unrecognized);
+# write-richness is demoted to advisory ranking metadata. Fixes the recall
+# regression where thin-but-typed beads were dropped from retrieval.
 # PR #175 (schema): type-vocabulary revision + bead dataclass completeness. Retires
 # 7 primary types (failed_hypothesis/reversal/correction/misjudgment/overfitted_pattern/
 # abandoned_path/proposed_theme) in favor of modifier fields (revises_bead_id/
@@ -23,7 +29,7 @@ psycopg[binary]==3.3.2
 # adds prev_bead_id temporal auto-linking.
 # Carries forward #173 (OpenAI/external Qdrant embeddings), #170/#171 (recall
 # traversal seed/merge + structural hints), #169 (unified bead projection).
-core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@ca5038bf05a35f35e774bd4dc13df440daf712a0
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@1640be3a199f260e7b185090e3f2c829e2da2503
 # Keep Qdrant explicit so deployment logs fail loudly if the semantic backend
 # dependency is skipped instead of silently falling back to lexical mode.
 qdrant-client[fastembed]>=1.9
