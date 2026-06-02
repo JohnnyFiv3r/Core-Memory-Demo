@@ -60,7 +60,7 @@ def _extract_locomo_claims(turn: dict[str, Any]) -> list[dict[str, Any]]:
     return []
 
 
-def _build_retrieval_facts(*, sample_id: str, session_index: int, turn_index: int, dia_id: str, speaker: str, text: str, session_date_time: str, blip_caption: str, img_url: str) -> list[str]:
+def _build_supporting_facts(*, sample_id: str, session_index: int, turn_index: int, dia_id: str, speaker: str, text: str, session_date_time: str, blip_caption: str, img_url: str) -> list[str]:
     facts: list[str] = [
         f"sample_id={sample_id}",
         f"session_index={session_index}",
@@ -157,7 +157,7 @@ def build_turn_bead(turn: dict[str, Any]) -> dict[str, Any]:
     if img_url:
         detail = detail + f"\nImage URL: {img_url}"
 
-    retrieval_facts = _build_retrieval_facts(
+    supporting_facts = _build_supporting_facts(
         sample_id=sample_id,
         session_index=session_index,
         turn_index=turn_index,
@@ -169,18 +169,20 @@ def build_turn_bead(turn: dict[str, Any]) -> dict[str, Any]:
         img_url=img_url,
     )
 
+    # CM #174: retrieval_eligible/retrieval_title/retrieval_facts removed — every
+    # bead is indexed, and build_retrieval_text() embeds `title` directly. Carry
+    # the utterance in the title (was in retrieval_title) so recall text is rich.
     return {
         "type": "context",
-        "title": f"{speaker} at session {session_index}, turn {turn_index}".strip(),
+        "title": _compact_text(f"{speaker}: {text}".strip(), limit=160)
+        or f"{speaker} at session {session_index}, turn {turn_index}".strip(),
         "summary": [f"{speaker}: {text}".strip()],
         "detail": detail,
         "session_id": f"locomo:{sample_id}",
         "source_turn_ids": [dia_id],
         "tags": _turn_tags(sample_id=sample_id, session_index=session_index, speaker=speaker),
         "entities": [x for x in [speaker, f"locomo:{sample_id}" if sample_id else ""] if x],
-        "retrieval_eligible": True,
-        "retrieval_title": _compact_text(f"{speaker}: {text}".strip(), limit=160),
-        "retrieval_facts": retrieval_facts,
+        "supporting_facts": supporting_facts,
         "metadata": {
             "source": "locomo",
             "sample_id": sample_id,

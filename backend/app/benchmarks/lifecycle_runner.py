@@ -527,7 +527,7 @@ def graph_snapshot_payload(root: str | Path, *, max_beads: int = 400, max_associ
             continue
         beads.append({
             "id": str(bead.get("id") or bid),
-            "title": str(bead.get("title") or bead.get("retrieval_title") or "")[:120],
+            "title": str(bead.get("title") or "")[:120],
             "type": str(bead.get("type") or "context"),
             "source_turn_ids": [str(x) for x in (bead.get("source_turn_ids") or [])],
         })

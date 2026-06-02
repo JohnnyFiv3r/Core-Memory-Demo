@@ -8,10 +8,16 @@ from typing import Any
 logger = logging.getLogger(__name__)
 
 # Core-Memory PR #169 changed the canonical retrieval projection so association
-# anchors (entities/topics/*_keys/candidates/etc.) are now embedded and included
-# in lexical scoring. Existing Render disks can still hold a manifest built with
-# the older projection, so queue one reconcile rebuild per persistent root.
-_UNIFIED_BEAD_PROJECTION_UPGRADE = "core-memory-pr-169-unified-bead-projection"
+# anchors (entities + supporting_facts) are embedded and included in lexical
+# scoring. PR #174 then removed the legacy topics/*_keys/candidate anchors and
+# the retrieval_eligible gate — all beads are now indexed (not just the formerly
+# eligible ones), and the projection swaps to supporting_facts. Existing Render
+# disks can still hold a manifest built with either older projection, so queue
+# one reconcile rebuild per persistent root. The marker id is bumped for #174 so
+# roots that already ran the #169 rebuild re-reconcile once: the corpus now spans
+# all beads (previously-ineligible beads had no semantic rows) and the embedded
+# fields changed.
+_UNIFIED_BEAD_PROJECTION_UPGRADE = "core-memory-pr-174-all-bead-projection"
 
 
 def _read_json(path: Path) -> dict[str, Any]:
@@ -32,7 +38,7 @@ def _write_json(path: Path, data: dict[str, Any]) -> None:
 
 
 def queue_semantic_projection_upgrade_once(root: str | Path) -> dict[str, Any]:
-    """Queue the PR #169 projection rebuild once for a persistent demo root.
+    """Queue the #174 projection rebuild once for a persistent demo root.
 
     The newest Core-Memory package automatically uses the richer projection for
     new writes/rebuilds, but persisted demo indexes need a full reconcile so the
