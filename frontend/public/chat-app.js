@@ -1285,6 +1285,18 @@ async function refreshBenchmarkRunBeads() {
     renderBenchmarkRunGraph();
     return;
   }
+  const liveStatus = String((lastBenchmarkSummary || {}).status || '').trim().toLowerCase();
+  const liveJobId = String(activeBenchmarkPollJobId || (lastBenchmarkSummary || {}).job_id || '').trim();
+  if (liveJobId && (liveStatus === 'running' || liveStatus === 'queued' || liveStatus === 'waiting_for_slot')) {
+    // Hosted queue mode runs the benchmark in a separate Render worker whose
+    // /tmp root is not shared with the web service. Re-reading /run-state here
+    // makes the 2GB web service repeatedly inspect stale local artifacts during
+    // the run, wasting CPU and causing restarts. While active, rely on streamed
+    // job events/graph snapshots; the filesystem view is only useful after the
+    // run has completed or in local shared-root development.
+    renderBenchmarkRunBeads();
+    return;
+  }
   try {
     const res = await fetch('/api/demo/benchmark/run-state');
     const data = await parseApiJsonResponse(res, 'benchmark-run-state');
@@ -1547,6 +1559,11 @@ async function parseApiJsonResponse(res, label) {
     throw new Error(detail);
   }
   return data || {};
+}
+
+function isTransientTransportError(err) {
+  const msg = String((err && err.message) || err || '');
+  return /network_changed|network_io_suspended|failed to fetch|networkerror|returned non-json \(http 5\d\d\)|http 5\d\d/i.test(msg);
 }
 
 async function sendMessageLegacyApi(text, progressMsg) {
@@ -4260,7 +4277,7 @@ async function refreshMemory() {
     restartRefreshTimer(refreshBackoffMs);
   } catch (err) {
     const errMsg = String((err && err.message) || err || '');
-    const isTransientNetwork = /network_changed|network_io_suspended|failed to fetch|networkerror/i.test(errMsg);
+    const isTransientNetwork = isTransientTransportError(errMsg);
     if (!isTransientNetwork) {
       refreshErrorStreak += 1;
       refreshBackoffMs = Math.min(30000, Math.max(2500, refreshBackoffMs * 2));
@@ -4861,7 +4878,7 @@ async function runBenchmark() {
         pollBackoffMs = POLL_BACKOFF_MIN_MS;
       } catch (pollErr) {
         const pollErrMsg = String((pollErr && pollErr.message) || pollErr || '');
-        if (/network_changed|network_io_suspended|failed to fetch|networkerror/i.test(pollErrMsg)) {
+        if (isTransientTransportError(pollErrMsg)) {
           await new Promise(r => setTimeout(r, pollBackoffMs));
           pollBackoffMs = Math.min(POLL_BACKOFF_MAX_MS, pollBackoffMs * 2);
           continue;
@@ -4952,7 +4969,7 @@ async function runBenchmark() {
     }
   } catch (err) {
     const msg = String((err && err.message) || err || 'benchmark_failed');
-    if (/failed to fetch/i.test(msg)) {
+    if (isTransientTransportError(msg)) {
       const liveRun = await benchmarkHasLiveRun();
       if (liveRun) {
         addMsg('system', 'Benchmark started, but live polling briefly lost connection. Recovering from backend state...');
