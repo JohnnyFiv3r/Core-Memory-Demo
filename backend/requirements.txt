@@ -9,6 +9,18 @@ pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Benchmark queue persistence for hosted queued/cron benchmark mode.
 psycopg[binary]==3.3.2
 # Pinned to explicit Core-Memory commit for deploy stability.
+# PR #180 (fix): default retrieval_eligible to True in the LLM-judge normalize
+# path. Follow-up to #179 — when the judge omits retrieval_eligible, beads must
+# default to eligible (records are eligible by default; False is only for
+# forced-context/retrieval turns). Without this, judge-authored beads that omit
+# the field are dropped from retrieval. Required for enrich_mode=judge.
+# PR #179 (feat): LLM-judged claims + LLM-judged entities + retire
+# retrieval_title/facts + eligibility-gate fix. The bead-field judge
+# (policy/bead_judge.judge_bead_fields) now authors type/entities/because/
+# claims/temporal fields via one LLM call (CORE_MEMORY_BEAD_FIELD_JUDGE_MODE
+# auto/llm), used as the default turn-bead author when CORE_MEMORY_BEAD_JUDGE_
+# FALLBACK=1 and no agent crawler_updates are supplied. Includes #178's Qdrant
+# live-mirror external-embeddings fix (ends the size=1536/3072 upsert spam).
 # PR #177 (retrieval): retrieval_eligible derives from typeability, not richness.
 # Note this partially reverses #174's "no eligibility gate" stance below: a
 # retrieval_eligible flag exists again, but it is set at the write chokepoint
@@ -29,7 +41,7 @@ psycopg[binary]==3.3.2
 # adds prev_bead_id temporal auto-linking.
 # Carries forward #173 (OpenAI/external Qdrant embeddings), #170/#171 (recall
 # traversal seed/merge + structural hints), #169 (unified bead projection).
-core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@1640be3a199f260e7b185090e3f2c829e2da2503
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@0639420119d55063d27c9251f96166961ea61f16
 # Keep Qdrant explicit so deployment logs fail loudly if the semantic backend
 # dependency is skipped instead of silently falling back to lexical mode.
 qdrant-client[fastembed]>=1.9
