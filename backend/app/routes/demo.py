@@ -1662,6 +1662,12 @@ async def benchmark_run(request: Request):
     retrieval_pipeline = str((body or {}).get('retrieval_pipeline') or 'execute_trace').strip().lower() or 'execute_trace'
     if retrieval_pipeline not in {'execute_trace', 'execute_trace_hydrate', 'forced_three_phase', 'three_phase'}:
         retrieval_pipeline = 'execute_trace'
+    # enrich_mode='judge' uses Core Memory's native LLM bead-field judge to author
+    # typed/entity/claim-rich beads during replay (one LLM call per turn; requires
+    # the #179 pin + a provider key). Default keeps the deterministic crawler.
+    enrich_mode = str((body or {}).get('enrich_mode') or 'deterministic').strip().lower() or 'deterministic'
+    if enrich_mode not in {'deterministic', 'judge'}:
+        enrich_mode = 'deterministic'
 
     kwargs = dict(
         suite=suite,
@@ -1688,6 +1694,7 @@ async def benchmark_run(request: Request):
         compare_retrieval_modes=compare_retrieval_modes,
         retrieval_pipeline=retrieval_pipeline,
         qa_session_mode=qa_session_mode,
+        enrich_mode=enrich_mode,
     )
 
     _prune_benchmark_jobs()
