@@ -12,10 +12,12 @@ class TestBenchmarkPreflightRoute(unittest.TestCase):
         from fastapi.testclient import TestClient
         from app.main import app
 
-        with patch('app.routes.demo.build_locomo_suite_metadata') as build_meta:
+        env = patch.dict(os.environ, {
+            'CORE_MEMORY_EMBEDDINGS_PROVIDER': 'openai',
+            'CORE_MEMORY_EMBEDDINGS_MODEL': 'text-embedding-3-small',
+        }, clear=False)
+        with patch('app.routes.demo.build_locomo_suite_metadata') as build_meta, env:
             build_meta.return_value = ({'dataset': {'selected_samples': 1, 'selected_qa_cases': 1}}, [], [], {})
-            os.environ['CORE_MEMORY_EMBEDDINGS_PROVIDER'] = 'openai'
-            os.environ['CORE_MEMORY_EMBEDDINGS_MODEL'] = 'text-embedding-3-small'
             c = TestClient(app)
             res = c.get('/api/demo/benchmark/preflight?semantic_mode=required&answer_mode=llm&generator_model=openai:gpt-4o-mini')
 

@@ -3094,15 +3094,28 @@ def semantic_mode(mode: str, *, build_on_read: bool | None = None, embeddings_pr
     key = "CORE_MEMORY_CANONICAL_SEMANTIC_MODE"
     build_key = "CORE_MEMORY_SEMANTIC_BUILD_ON_READ"
     provider_key = "CORE_MEMORY_EMBEDDINGS_PROVIDER"
+    ext_key = "CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS"
     old = os.environ.get(key)
     old_build = os.environ.get(build_key)
     old_provider = os.environ.get(provider_key)
+    old_ext = os.environ.get(ext_key)
+    # When an external embeddings provider is requested (openai/gemini/...), force
+    # the Qdrant external-embeddings path ON in-process. Otherwise the corpus
+    # build silently uses Qdrant's built-in FastEmbed (no provider API call) and
+    # the configured provider is ignored — exactly the "embeddings never hit the
+    # API" failure. Relying on the render.yaml env var alone is not enough: it
+    # must be effective in this worker build process. Scoped to the same context
+    # as the provider so reads and writes agree on the `_ext_<model>` collection.
+    _provider_norm = str(embeddings_provider or "").strip().lower()
+    _force_external = bool(embeddings_provider is not None and _provider_norm not in {"", "hash", "fastembed"})
     try:
         os.environ[key] = str(mode or "degraded_allowed")
         if build_on_read is not None:
             os.environ[build_key] = "1" if build_on_read else "0"
         if embeddings_provider is not None:
             os.environ[provider_key] = str(embeddings_provider)
+        if _force_external:
+            os.environ[ext_key] = "1"
         yield
     finally:
         if old is None:
@@ -3119,6 +3132,11 @@ def semantic_mode(mode: str, *, build_on_read: bool | None = None, embeddings_pr
                 os.environ.pop(provider_key, None)
             else:
                 os.environ[provider_key] = old_provider
+        if _force_external:
+            if old_ext is None:
+                os.environ.pop(ext_key, None)
+            else:
+                os.environ[ext_key] = old_ext
 
 
 @contextmanager

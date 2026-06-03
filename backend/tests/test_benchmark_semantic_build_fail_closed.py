@@ -47,5 +47,63 @@ class TestSemanticBuildFailClosed(unittest.TestCase):
             _assert_semantic_build_ok({"ok": False, "error": {"code": "x"}})
 
 
+class TestExternalEmbeddingsActuallyUsed(unittest.TestCase):
+    """Build can report ok=True while silently using FastEmbed instead of the
+    requested external provider (no provider API call). Catch that."""
+
+    def _required_openai(self):
+        return patch.dict(
+            "os.environ",
+            {
+                "CORE_MEMORY_CANONICAL_SEMANTIC_MODE": "required",
+                "CORE_MEMORY_EMBEDDINGS_PROVIDER": "openai",
+            },
+            clear=False,
+        )
+
+    def test_raises_when_openai_requested_but_built_with_fastembed(self):
+        build = {"ok": True, "backend": "qdrant", "manifest": "/tmp/ignored"}
+        manifest = {"provider": "fastembed", "backend": "qdrant", "semantic_ready": True}
+        with self._required_openai():
+            with self.assertRaises(BenchmarkLifecycleError) as ctx:
+                _assert_semantic_build_ok(build, manifest=manifest)
+        msg = str(ctx.exception)
+        self.assertIn("benchmark_semantic_external_not_used", msg)
+        self.assertIn("openai", msg)
+        self.assertIn("fastembed", msg)
+
+    def test_raises_when_semantic_not_ready(self):
+        build = {"ok": True, "manifest": "/tmp/ignored"}
+        manifest = {"provider": "openai", "backend": "lexical", "semantic_ready": False}
+        with self._required_openai():
+            with self.assertRaises(BenchmarkLifecycleError):
+                _assert_semantic_build_ok(build, manifest=manifest)
+
+    def test_passes_when_openai_actually_used(self):
+        build = {"ok": True, "manifest": "/tmp/ignored"}
+        manifest = {"provider": "openai", "backend": "qdrant", "semantic_ready": True, "dimension": 3072}
+        with self._required_openai():
+            # Should not raise.
+            _assert_semantic_build_ok(build, manifest=manifest)
+
+    def test_no_provider_check_for_local_hash_provider(self):
+        build = {"ok": True, "manifest": "/tmp/ignored"}
+        manifest = {"provider": "fastembed", "backend": "qdrant", "semantic_ready": True}
+        with patch.dict(
+            "os.environ",
+            {"CORE_MEMORY_CANONICAL_SEMANTIC_MODE": "required", "CORE_MEMORY_EMBEDDINGS_PROVIDER": "hash"},
+            clear=False,
+        ):
+            # hash provider does not demand the external path.
+            _assert_semantic_build_ok(build, manifest=manifest)
+
+    def test_unreadable_manifest_does_not_false_fail(self):
+        # ok build, external requested, but manifest path missing/unreadable and no
+        # inline manifest -> must not raise (ok-check already passed).
+        build = {"ok": True, "manifest": "/nonexistent/path/manifest.json"}
+        with self._required_openai():
+            _assert_semantic_build_ok(build)
+
+
 if __name__ == "__main__":
     unittest.main()
