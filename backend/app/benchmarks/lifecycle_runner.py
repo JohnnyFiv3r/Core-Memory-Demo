@@ -109,6 +109,41 @@ def _build_semantic_index(root: str | Path) -> dict[str, Any]:
     return dict(build_semantic_index(Path(root)) or {})
 
 
+def _assert_semantic_build_ok(semantic_build: dict[str, Any]) -> None:
+    """Fail closed when the semantic corpus index did not build in required mode.
+
+    build_semantic_index() does NOT raise when the embeddings backend is
+    unavailable — in required mode it returns {"ok": False, "error": {...}} and
+    falls back to a lexical-only corpus, leaving Qdrant empty. If the benchmark
+    proceeds, every QA recall then degrades ("semantic_backend_unavailable_
+    degraded") and the real root cause (a missing OPENAI_API_KEY on the worker,
+    blocked egress to the embeddings API, a model/dimension error, ...) is buried
+    in the discarded build result. Surface it at the point of failure so the run
+    fails with the actual reason instead of a generic downstream symptom.
+
+    Only enforced when CORE_MEMORY_CANONICAL_SEMANTIC_MODE == 'required'; degraded
+    modes are left to run lexically.
+    """
+    mode = str(os.environ.get("CORE_MEMORY_CANONICAL_SEMANTIC_MODE") or "").strip().lower()
+    if mode != "required" or bool(semantic_build.get("ok", False)):
+        return
+    err = semantic_build.get("error")
+    if isinstance(err, dict):
+        code = str(err.get("code") or "semantic_build_failed")
+        detail = err.get("detail")
+        last_err = ""
+        if isinstance(detail, dict):
+            last_err = str(detail.get("last_build_error") or detail.get("cause") or "")
+        reason = f"{code}: {last_err or err.get('message') or detail or 'no detail'}"
+    else:
+        reason = str(err or "semantic_build_failed")
+    raise BenchmarkLifecycleError(
+        "benchmark_semantic_build_failed_required: the semantic corpus index did "
+        "not build with real embeddings, so retrieval would degrade to lexical-"
+        f"only. Refusing to run a 'required' benchmark. cause={reason}"
+    )
+
+
 # Per-root paths for the embedded vector/graph backends, derived from the
 # benchmark run's own root. Core Memory's factories give CORE_MEMORY_QDRANT_PATH
 # / CORE_MEMORY_KUZU_PATH priority over the root argument, and on hosted those
@@ -1061,6 +1096,9 @@ def _run_lifecycle_conversation_impl(
         semantic_build = _build_semantic_index(root)
     except Exception as exc:
         semantic_build = {"ok": False, "error": str(exc)}
+
+    # Fail closed on a degraded semantic build (see _assert_semantic_build_ok).
+    _assert_semantic_build_ok(semantic_build)
 
     # Build the authoritative bead_id -> dia_id map AFTER replay + pre-QA flush so
     # it reflects the post-compaction corpus that recall actually retrieves from.
