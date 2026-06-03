@@ -3507,6 +3507,85 @@ def _resolve_benchmark_embeddings_provider(explicit_provider: str | None = None)
     return "hash"
 
 
+class BenchmarkSemanticUnavailable(RuntimeError):
+    """Raised when a benchmark configured for required semantic recall would run
+    (or did run) in degraded lexical/hash mode.
+
+    Benchmarks must fail closed: a degraded run produces near-random recall and
+    would masquerade as a fair result, so we refuse it instead of silently
+    falling back.
+    """
+
+
+# Markers Core Memory emits on a recall when the semantic/vector backend is not
+# actually serving embeddings. Any of these appearing in a required-semantic
+# benchmark report means the run degraded and must be rejected.
+_DEGRADED_SEMANTIC_MARKERS = (
+    "semantic_backend_unavailable_degraded",
+    "empty_results_with_semantic_backend_unavailable",
+    "semantic_backend_unavailable",
+)
+
+
+def _assert_benchmark_semantic_ready(provider: str | None, semantic_mode_name: str) -> None:
+    """Preflight a required-semantic benchmark before any work is done.
+
+    'hash' is a random-projection fallback that yields near-random ~0.3 cosine
+    anchors — allowing it would silently degrade recall to lexical quality and
+    invalidate the run. In 'required' mode we therefore demand a real embeddings
+    provider whose dependencies are actually present. Only enforced for
+    semantic_mode_name == 'required'; other modes are left untouched.
+    """
+    if str(semantic_mode_name or "").strip().lower() != "required":
+        return
+    resolved = str(provider or "").strip().lower()
+    if resolved in {"", "hash"}:
+        raise BenchmarkSemanticUnavailable(
+            "benchmark_semantic_required_but_provider_is_hash: semantic_mode="
+            "'required' needs real vector embeddings, but the resolved embeddings "
+            f"provider is {resolved or 'unset'!r} (random-projection fallback). "
+            "Set CORE_MEMORY_EMBEDDINGS_PROVIDER (e.g. 'openai') or pass "
+            "embeddings_provider explicitly."
+        )
+    if resolved == "openai":
+        import importlib.util
+
+        if not str(os.environ.get("OPENAI_API_KEY") or "").strip():
+            raise BenchmarkSemanticUnavailable(
+                "benchmark_semantic_required_openai_missing_key: embeddings "
+                "provider 'openai' requires OPENAI_API_KEY in the benchmark "
+                "environment."
+            )
+        if importlib.util.find_spec("openai") is None:
+            raise BenchmarkSemanticUnavailable(
+                "benchmark_semantic_required_openai_not_installed: the 'openai' "
+                "package is not importable in this deployment image."
+            )
+
+
+def _assert_no_degraded_semantic(report: Any, semantic_mode_name: str) -> None:
+    """Reject a required-semantic benchmark report that degraded mid-run.
+
+    Defense in depth behind the preflight: a backend can pass startup checks and
+    still emit 'semantic_backend_unavailable_degraded' per recall (e.g. an
+    embeddings model that fails to load on first query). We scan the produced
+    report and refuse to return a degraded result in 'required' mode.
+    """
+    if str(semantic_mode_name or "").strip().lower() != "required":
+        return
+    try:
+        blob = json.dumps(report, default=str)
+    except Exception:
+        blob = str(report)
+    hit = next((m for m in _DEGRADED_SEMANTIC_MARKERS if m in blob), None)
+    if hit:
+        raise BenchmarkSemanticUnavailable(
+            f"benchmark_semantic_degraded_midrun:{hit}: the semantic backend was "
+            "unavailable during a 'required' benchmark run; refusing to report a "
+            "degraded result."
+        )
+
+
 def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", qa_session_mode: str = "isolated", progress: Any | None = None, ingest_progress: Any | None = None, cancel_event: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini", "locomo_native_lifecycle"}:
@@ -3552,6 +3631,9 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             snapshot_sanitize_meta = _sanitize_locomo_benchmark_snapshot(base_root)
         if suite_name == "locomo_native_lifecycle":
             benchmark_embeddings_provider = _resolve_benchmark_embeddings_provider(embeddings_provider)
+            # Fail closed before doing any work: a required-semantic LoCoMo run
+            # must use real embeddings, never the hash/lexical fallback.
+            _assert_benchmark_semantic_ready(benchmark_embeddings_provider, semantic_mode_name)
             resolved_answer_mode = str(answer_mode or "llm").strip().lower() or "llm"
             if resolved_answer_mode not in {"llm", "extractive", "none"}:
                 resolved_answer_mode = "llm"
@@ -3569,6 +3651,9 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     generator_model=resolved_generator_model,
                     progress=progress,
                 )
+            # Defense in depth: reject a report that degraded mid-run even though
+            # the embeddings preflight passed.
+            _assert_no_degraded_semantic(lifecycle_report, semantic_mode_name)
             if snapshot_sanitize_meta:
                 lifecycle_report["snapshot_sanitize"] = dict(snapshot_sanitize_meta)
             lifecycle_scores = dict(lifecycle_report.get("scores") or {})
