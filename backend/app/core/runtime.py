@@ -3090,6 +3090,44 @@ async def replay_story_pack(
 
 
 @contextmanager
+def benchmark_enrich_mode(mode: str | None):
+    """Scope LoCoMo benchmark bead-enrichment to the run.
+
+    mode='judge' lets Core Memory's native LLM bead-field judge author each
+    replayed turn's bead (type + entities + claims + because/temporal) instead of
+    the deterministic crawler. It flips:
+      - CORE_MEMORY_DEMO_BENCHMARK_ENRICH_MODE=judge  (read by the lifecycle
+        runner to stop supplying agent crawler_updates and skip the
+        crawler-not-invoked gate);
+      - CORE_MEMORY_BEAD_JUDGE_FALLBACK=1             (engine uses _judged_turn_bead
+        as the default author when no agent updates are present);
+      - CORE_MEMORY_BEAD_FIELD_JUDGE_MODE=llm         (judge_bead_fields uses the LLM
+        path, not the heuristic fallback).
+    Requires Core Memory >= #179 and a provider key (OPENAI/ANTHROPIC). Any other
+    mode is a no-op (deterministic crawler).
+    """
+    keys = {
+        "CORE_MEMORY_DEMO_BENCHMARK_ENRICH_MODE": "judge",
+        "CORE_MEMORY_BEAD_JUDGE_FALLBACK": "1",
+        "CORE_MEMORY_BEAD_FIELD_JUDGE_MODE": "llm",
+    }
+    old = {k: os.environ.get(k) for k in keys}
+    active = str(mode or "").strip().lower() == "judge"
+    try:
+        if active:
+            for k, v in keys.items():
+                os.environ[k] = v
+        yield
+    finally:
+        if active:
+            for k, prev in old.items():
+                if prev is None:
+                    os.environ.pop(k, None)
+                else:
+                    os.environ[k] = prev
+
+
+@contextmanager
 def semantic_mode(mode: str, *, build_on_read: bool | None = None, embeddings_provider: str | None = None):
     key = "CORE_MEMORY_CANONICAL_SEMANTIC_MODE"
     build_key = "CORE_MEMORY_SEMANTIC_BUILD_ON_READ"
@@ -3604,7 +3642,7 @@ def _assert_no_degraded_semantic(report: Any, semantic_mode_name: str) -> None:
         )
 
 
-def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", qa_session_mode: str = "isolated", progress: Any | None = None, ingest_progress: Any | None = None, cancel_event: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
+def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", qa_session_mode: str = "isolated", enrich_mode: str = "deterministic", progress: Any | None = None, ingest_progress: Any | None = None, cancel_event: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini", "locomo_native_lifecycle"}:
         try:
@@ -3658,7 +3696,10 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             resolved_generator_model = str(generator_model or "").strip()
             if resolved_answer_mode == "llm" and not resolved_generator_model:
                 resolved_generator_model = detect_model()
-            with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
+            # enrich_mode='judge' lets Core Memory's native LLM bead-field judge
+            # author typed/entity/claim-rich beads during replay (requires #179).
+            resolved_enrich_mode = str(enrich_mode or "deterministic").strip().lower() or "deterministic"
+            with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider), benchmark_enrich_mode(resolved_enrich_mode):
                 lifecycle_report = run_locomo_lifecycle_suite(
                     root=str(base_root),
                     samples=selected_samples,

@@ -35,6 +35,18 @@ def _turn_text(turn: BenchmarkTurn) -> str:
     return f"{turn.speaker} [{turn.role}]: {turn.content}"
 
 
+def _benchmark_judge_mode_active() -> bool:
+    """True when the benchmark should let Core Memory's native LLM bead-field
+    judge author beads (type + entities + claims + because/temporal) instead of
+    supplying deterministic agent crawler_updates.
+
+    Set by run_benchmark via CORE_MEMORY_DEMO_BENCHMARK_ENRICH_MODE=judge, which
+    also flips CORE_MEMORY_BEAD_JUDGE_FALLBACK / CORE_MEMORY_BEAD_FIELD_JUDGE_MODE
+    (see benchmark_enrich_mode). Requires Core Memory >= #179.
+    """
+    return str(os.environ.get("CORE_MEMORY_DEMO_BENCHMARK_ENRICH_MODE") or "").strip().lower() == "judge"
+
+
 def _locomo_replay_metadata(
     *,
     root: str | Path,
@@ -47,6 +59,12 @@ def _locomo_replay_metadata(
     concurrent server. Instead, it computes the LoCoMo crawler updates for this
     turn and passes them through metadata.crawler_updates, which is already a
     request-scoped Core Memory contract.
+
+    In judge mode (_benchmark_judge_mode_active) it deliberately omits
+    crawler_updates so the engine falls back to its native LLM bead-field judge,
+    which authors type/entities/claims/because/temporal natively (Core Memory
+    #179). That path keys off req.turn_text, which the engine derives from the
+    replayed turn content.
     """
 
     metadata: dict[str, Any] = {
@@ -60,6 +78,10 @@ def _locomo_replay_metadata(
         return metadata
 
     metadata["replay_source"] = "locomo"
+    if _benchmark_judge_mode_active():
+        # No agent crawler_updates → engine authors the bead via judge_bead_fields.
+        metadata["_crawler_updates_source"] = "native_judge"
+        return metadata
     try:
         from core_memory.association.crawler_contract import build_crawler_context
 
@@ -750,9 +772,15 @@ def replay_conversation_turns(
                     "result": dict(out or {}),
                 }
             )
+            # In judge mode we intentionally supply no agent crawler_updates and
+            # let the native judge author the bead, so a "missing agent updates"
+            # gate is expected, not an error.
             gate = (((out or {}).get("crawler_handoff") or {}).get("agent_authored_gate") or {})
             invocation = dict(gate.get("agent_invocation") or {}) if isinstance(gate, dict) else {}
-            if str(gate.get("error_code") or "") == "agent_updates_missing" or str(invocation.get("reason") or "") == "invocation_disabled":
+            if not _benchmark_judge_mode_active() and (
+                str(gate.get("error_code") or "") == "agent_updates_missing"
+                or str(invocation.get("reason") or "") == "invocation_disabled"
+            ):
                 errors.append({
                     "turn_id": turn.turn_id,
                     "error": "locomo_crawler_not_invoked",
