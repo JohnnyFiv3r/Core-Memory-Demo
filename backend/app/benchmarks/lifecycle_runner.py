@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import threading
 import shutil
 import time
 from pathlib import Path
@@ -36,15 +37,32 @@ def _turn_text(turn: BenchmarkTurn) -> str:
 
 
 def _benchmark_judge_mode_active() -> bool:
-    """True when the benchmark should let Core Memory's native LLM bead-field
+    """True when this benchmark job should let Core Memory's native LLM bead-field
     judge author beads (type + entities + claims + because/temporal) instead of
     supplying deterministic agent crawler_updates.
 
-    Set by run_benchmark via CORE_MEMORY_DEMO_BENCHMARK_ENRICH_MODE=judge, which
-    also flips CORE_MEMORY_BEAD_JUDGE_FALLBACK / CORE_MEMORY_BEAD_FIELD_JUDGE_MODE
-    (see benchmark_enrich_mode). Requires Core Memory >= #179.
+    Job-scoped via thread-local state (each benchmark job runs in its own worker
+    thread) rather than process-global env, so an in-flight judge run cannot leak
+    its mode into a concurrently-starting deterministic run (which would then skip
+    crawler_updates and corrupt its replay). Set by run_benchmark through
+    benchmark_enrich_mode -> set_benchmark_enrich_mode. The library judge env
+    (CORE_MEMORY_BEAD_JUDGE_FALLBACK / CORE_MEMORY_BEAD_FIELD_JUDGE_MODE) is still
+    env, but it only matters when no agent crawler_updates are supplied — which a
+    deterministic run never allows once this flag is correctly thread-scoped.
+    Requires Core Memory >= #179.
     """
-    return str(os.environ.get("CORE_MEMORY_DEMO_BENCHMARK_ENRICH_MODE") or "").strip().lower() == "judge"
+    return str(getattr(_ENRICH_STATE, "mode", "") or "").strip().lower() == "judge"
+
+
+_ENRICH_STATE = threading.local()
+
+
+def set_benchmark_enrich_mode(mode: str | None) -> str | None:
+    """Set the calling thread's benchmark enrich mode; returns the prior value
+    (for restore). Thread-local so concurrent benchmark jobs don't interfere."""
+    prev = getattr(_ENRICH_STATE, "mode", None)
+    _ENRICH_STATE.mode = (str(mode).strip().lower() if mode is not None else None)
+    return prev
 
 
 def _locomo_replay_metadata(
