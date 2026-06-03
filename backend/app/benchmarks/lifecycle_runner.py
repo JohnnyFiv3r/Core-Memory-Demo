@@ -1201,6 +1201,17 @@ def _run_lifecycle_conversation_impl(
         # already-synced base graph, so no re-sync is needed. Shared mode keeps
         # the base scope (qa_root is root), so the override is a harmless no-op.
         with benchmark_backend_paths(qa_root):
+            # The embedded Qdrant collection name is derived from sha1(root path)
+            # (_vector_collection_name). An isolated QA root is a copytree clone at
+            # a NEW path, so the copied collection is orphaned under the base
+            # root's name and recall here would query a non-existent collection,
+            # return 0 rows, and degrade to lexical. Rebuild the index on the
+            # isolated root so its own collection exists and recall runs against
+            # real semantic vectors. Only needed when the base build actually
+            # produced a semantic index (skip pure lexical/degraded runs).
+            if qa_session_mode_name == "isolated" and bool(semantic_build.get("ok")):
+                qa_semantic_build = _build_semantic_index(qa_root)
+                _assert_semantic_build_ok(qa_semantic_build)
             qa_result = run_qa_efforts(root=qa_root, conversation=conversation, qa=qa, recall_fn=recall_fn, k=retrieval_k, answer_mode=answer_mode, generator_model=generator_model, bead_to_dias=bead_to_dias)
             if write_qa_beads:
                 qa_result.update(write_qa_turn(root=qa_root, conversation=conversation, qa=qa, qa_result=qa_result, qa_session_id=qa_session_id_for_case, process_turn_finalized_fn=process_turn_finalized_fn))
