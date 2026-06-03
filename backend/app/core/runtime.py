@@ -3090,6 +3090,33 @@ async def replay_story_pack(
 
 
 @contextmanager
+def locomo_crawler_mode(mode: str | None, model: str | None):
+    """Scope LoCoMo benchmark crawler enrichment to the run.
+
+    When mode == 'llm' (and a model is set), the lifecycle replay classifies and
+    enriches each turn into a typed, schema-rich bead via an LLM crawler instead
+    of the flat deterministic `context` bead. Set via env so the replay call
+    chain does not have to thread the model through every layer.
+    """
+    mode_key = "CORE_MEMORY_DEMO_LOCOMO_CRAWLER_MODE"
+    model_key = "CORE_MEMORY_DEMO_LOCOMO_CRAWLER_MODEL"
+    old_mode = os.environ.get(mode_key)
+    old_model = os.environ.get(model_key)
+    active = str(mode or "").strip().lower() == "llm" and bool(str(model or "").strip())
+    try:
+        if active:
+            os.environ[mode_key] = "llm"
+            os.environ[model_key] = str(model)
+        yield
+    finally:
+        for key, old in ((mode_key, old_mode), (model_key, old_model)):
+            if old is None:
+                os.environ.pop(key, None)
+            else:
+                os.environ[key] = old
+
+
+@contextmanager
 def semantic_mode(mode: str, *, build_on_read: bool | None = None, embeddings_provider: str | None = None):
     key = "CORE_MEMORY_CANONICAL_SEMANTIC_MODE"
     build_key = "CORE_MEMORY_SEMANTIC_BUILD_ON_READ"
@@ -3604,7 +3631,7 @@ def _assert_no_degraded_semantic(report: Any, semantic_mode_name: str) -> None:
         )
 
 
-def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", qa_session_mode: str = "isolated", progress: Any | None = None, ingest_progress: Any | None = None, cancel_event: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
+def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", qa_session_mode: str = "isolated", crawler_mode: str = "deterministic", progress: Any | None = None, ingest_progress: Any | None = None, cancel_event: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini", "locomo_native_lifecycle"}:
         try:
@@ -3658,7 +3685,11 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             resolved_generator_model = str(generator_model or "").strip()
             if resolved_answer_mode == "llm" and not resolved_generator_model:
                 resolved_generator_model = detect_model()
-            with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider):
+            # crawler_mode='llm' enriches each replay turn into a typed, schema-rich
+            # bead via an LLM crawler (default 'deterministic' = flat context bead).
+            resolved_crawler_mode = str(crawler_mode or "deterministic").strip().lower() or "deterministic"
+            resolved_crawler_model = resolved_generator_model or detect_model() if resolved_crawler_mode == "llm" else ""
+            with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider), locomo_crawler_mode(resolved_crawler_mode, resolved_crawler_model):
                 lifecycle_report = run_locomo_lifecycle_suite(
                     root=str(base_root),
                     samples=selected_samples,

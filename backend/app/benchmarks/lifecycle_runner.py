@@ -76,6 +76,22 @@ def _locomo_replay_metadata(
             "metadata": metadata,
         }
         updates = locomo_crawler_callable({"root": str(root), "request": req, "crawler_context": crawler_context})
+        # Opt-in LLM enrichment: classify + enrich each turn into a typed,
+        # schema-rich bead (decision/goal/outcome/... + because/state_change/
+        # effective_from) instead of a flat `context` bead, so the benchmark
+        # actually exercises the bead schema. Scoped via benchmark env so it does
+        # not require threading the model through the replay call chain. Falls
+        # back to the deterministic bead per-turn on any LLM failure.
+        if str(os.environ.get("CORE_MEMORY_DEMO_LOCOMO_CRAWLER_MODE") or "").strip().lower() == "llm":
+            from app.benchmarks.locomo_llm_crawler import locomo_llm_crawler_callable
+
+            crawler_model = str(os.environ.get("CORE_MEMORY_DEMO_LOCOMO_CRAWLER_MODEL") or "").strip()
+            if crawler_model:
+                updates = locomo_llm_crawler_callable(
+                    {"root": str(root), "request": req, "crawler_context": crawler_context},
+                    model_id=crawler_model,
+                )
+
     except Exception as exc:  # noqa: BLE001 - replay result should surface exact failure
         raise BenchmarkLifecycleError(f"locomo_crawler_prepare_failed:{exc}") from exc
 

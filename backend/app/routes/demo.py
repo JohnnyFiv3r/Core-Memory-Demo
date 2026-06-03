@@ -1662,6 +1662,12 @@ async def benchmark_run(request: Request):
     retrieval_pipeline = str((body or {}).get('retrieval_pipeline') or 'execute_trace').strip().lower() or 'execute_trace'
     if retrieval_pipeline not in {'execute_trace', 'execute_trace_hydrate', 'forced_three_phase', 'three_phase'}:
         retrieval_pipeline = 'execute_trace'
+    # crawler_mode='llm' enriches each replay turn into a typed, schema-rich bead
+    # via an LLM crawler (cost: one LLM call per replay turn). Default keeps the
+    # deterministic flat-context crawler.
+    crawler_mode = str((body or {}).get('crawler_mode') or 'deterministic').strip().lower() or 'deterministic'
+    if crawler_mode not in {'deterministic', 'llm'}:
+        crawler_mode = 'deterministic'
 
     kwargs = dict(
         suite=suite,
@@ -1688,6 +1694,7 @@ async def benchmark_run(request: Request):
         compare_retrieval_modes=compare_retrieval_modes,
         retrieval_pipeline=retrieval_pipeline,
         qa_session_mode=qa_session_mode,
+        crawler_mode=crawler_mode,
     )
 
     _prune_benchmark_jobs()
