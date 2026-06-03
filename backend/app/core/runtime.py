@@ -3095,45 +3095,31 @@ def benchmark_enrich_mode(mode: str | None):
 
     mode='judge' lets Core Memory's native LLM bead-field judge author each
     replayed turn's bead (type + entities + claims + because/temporal) instead of
-    the deterministic crawler. It:
-      - sets the calling thread's enrich mode (thread-local, via
-        set_benchmark_enrich_mode) which the lifecycle runner reads to stop
-        supplying agent crawler_updates and to skip the crawler-not-invoked gate.
-        This is JOB-scoped on purpose: an os.environ flag here would be visible to
-        every thread, so an orphaned in-flight judge run could make a
-        concurrently-starting deterministic run skip crawler_updates and corrupt
-        its replay;
-      - sets CORE_MEMORY_BEAD_JUDGE_FALLBACK=1 (engine uses _judged_turn_bead as
-        the default author when no agent updates are present) and
-        CORE_MEMORY_BEAD_FIELD_JUDGE_MODE=llm (judge_bead_fields uses the LLM path).
-        These remain process env because the library reads them there, but they
-        only take effect when no agent crawler_updates are supplied — which a
-        deterministic run never allows now that the mode flag is thread-scoped.
-    Requires Core Memory >= #179 and a provider key (OPENAI/ANTHROPIC). Any other
+    the deterministic crawler. It sets the calling thread's enrich mode
+    (thread-local, via set_benchmark_enrich_mode) which the lifecycle runner reads
+    to (a) stop supplying agent crawler_updates and skip the crawler-not-invoked
+    gate, and (b) attach metadata["bead_judge"]="llm" to each turn-authoring
+    request so the engine enables its judge fallback and the LLM field-judge for
+    THAT request only.
+
+    This is fully JOB-scoped: nothing here touches os.environ. The directive
+    rides per-request metadata (Core Memory #182: _judge_fallback_enabled(req) and
+    judge_bead_fields(..., mode=) honor metadata["bead_judge"] before the
+    process-global CORE_MEMORY_BEAD_JUDGE_FALLBACK / CORE_MEMORY_BEAD_FIELD_JUDGE_
+    MODE env), so an orphaned in-flight judge run can no longer leak its mode into
+    a concurrently-starting deterministic run on another thread.
+
+    Requires Core Memory >= #182 and a provider key (OPENAI/ANTHROPIC). Any other
     mode is a no-op (deterministic crawler).
     """
     from app.benchmarks.lifecycle_runner import set_benchmark_enrich_mode
 
-    keys = {
-        "CORE_MEMORY_BEAD_JUDGE_FALLBACK": "1",
-        "CORE_MEMORY_BEAD_FIELD_JUDGE_MODE": "llm",
-    }
-    old = {k: os.environ.get(k) for k in keys}
     active = str(mode or "").strip().lower() == "judge"
     prev_mode = set_benchmark_enrich_mode("judge" if active else "deterministic")
     try:
-        if active:
-            for k, v in keys.items():
-                os.environ[k] = v
         yield
     finally:
         set_benchmark_enrich_mode(prev_mode)
-        if active:
-            for k, prev in old.items():
-                if prev is None:
-                    os.environ.pop(k, None)
-                else:
-                    os.environ[k] = prev
 
 
 @contextmanager

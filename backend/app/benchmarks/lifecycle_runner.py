@@ -45,11 +45,11 @@ def _benchmark_judge_mode_active() -> bool:
     thread) rather than process-global env, so an in-flight judge run cannot leak
     its mode into a concurrently-starting deterministic run (which would then skip
     crawler_updates and corrupt its replay). Set by run_benchmark through
-    benchmark_enrich_mode -> set_benchmark_enrich_mode. The library judge env
-    (CORE_MEMORY_BEAD_JUDGE_FALLBACK / CORE_MEMORY_BEAD_FIELD_JUDGE_MODE) is still
-    env, but it only matters when no agent crawler_updates are supplied — which a
-    deterministic run never allows once this flag is correctly thread-scoped.
-    Requires Core Memory >= #179.
+    benchmark_enrich_mode -> set_benchmark_enrich_mode. This flag only governs the
+    demo side (whether to omit crawler_updates); the engine's judge fallback is
+    enabled per-request via metadata["bead_judge"]="llm" (see
+    _locomo_replay_metadata), not env, so no process-global state is involved.
+    Requires Core Memory >= #182.
     """
     return str(getattr(_ENRICH_STATE, "mode", "") or "").strip().lower() == "judge"
 
@@ -79,10 +79,12 @@ def _locomo_replay_metadata(
     request-scoped Core Memory contract.
 
     In judge mode (_benchmark_judge_mode_active) it deliberately omits
-    crawler_updates so the engine falls back to its native LLM bead-field judge,
-    which authors type/entities/claims/because/temporal natively (Core Memory
-    #179). That path keys off req.turn_text, which the engine derives from the
-    replayed turn content.
+    crawler_updates AND sets metadata["bead_judge"]="llm" so the engine enables
+    its judge fallback and LLM bead-field judge for this request only (Core Memory
+    #182), authoring type/entities/claims/because/temporal natively. The directive
+    is request-scoped — it does not touch process env, so concurrent deterministic
+    jobs are unaffected. That path keys off req.turn_text, which the engine derives
+    from the replayed turn content.
     """
 
     metadata: dict[str, Any] = {
@@ -98,6 +100,9 @@ def _locomo_replay_metadata(
     metadata["replay_source"] = "locomo"
     if _benchmark_judge_mode_active():
         # No agent crawler_updates → engine authors the bead via judge_bead_fields.
+        # The per-request directive (Core Memory #182) enables the judge fallback
+        # + LLM field-judge for this turn only, without any process-global env.
+        metadata["bead_judge"] = "llm"
         metadata["_crawler_updates_source"] = "native_judge"
         return metadata
     try:
@@ -1047,6 +1052,10 @@ def write_qa_turn(
             "qa_id": qa.qa_id,
             "retrieval_efforts": list(RETRIEVAL_EFFORT_ORDER),
             "selected_answer_effort": "high",
+            # Match the replay path: in judge mode this QA lifecycle bead (no agent
+            # crawler_updates supplied) is judge-authored per-request (#182), not
+            # via process-global env.
+            **({"bead_judge": "llm"} if _benchmark_judge_mode_active() else {}),
         },
         origin="BENCHMARK_QA",
     )

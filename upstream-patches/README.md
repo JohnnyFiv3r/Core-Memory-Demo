@@ -129,9 +129,15 @@ upstream fix stops the log spam and makes *live* (non-benchmark) writes use the
 configured external provider for incremental indexing instead of silently
 falling back to FastEmbed.
 
-## TODO: request-scoped bead-judge directive (`CORE_MEMORY_BEAD_JUDGE_FALLBACK` is process-global)
+## DONE: request-scoped bead-judge directive (`CORE_MEMORY_BEAD_JUDGE_FALLBACK` was process-global)
 
-**Status:** spec only (needs a Core-Memory checkout to generate hunks).
+**Status:** ✅ landed upstream as **Core-Memory #182** (`97df332`) — `metadata["bead_judge"]`
+/ `req["_bead_judge"]` is now honored by `_judge_fallback_enabled(req)` and
+`judge_bead_fields(..., mode=)` (and forwarded in `_judged_turn_bead`), falling
+back to env when absent. Demo wired to it: pin bumped to `97df332`,
+`benchmark_enrich_mode` no longer touches env, and the replay + QA write paths set
+`metadata["bead_judge"]="llm"` per-request in judge mode. The spec below is kept
+for the record.
 
 **Why:** the judge-fallback decision is read from process-global env mid-turn and
 applied to *supplied* crawler_updates rows, so it can't be scoped to one job:

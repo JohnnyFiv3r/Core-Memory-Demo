@@ -14,8 +14,8 @@ from app.benchmarks.lifecycle_runner import (  # noqa: E402
     set_benchmark_enrich_mode,
 )
 
-# Library judge env (process-wide on purpose; only consulted when no agent
-# crawler_updates are supplied). The demo-side mode flag is thread-local, not env.
+# The demo must NOT toggle these process-wide; the judge is enabled per-request
+# via metadata["bead_judge"] (Core Memory #182). These names are asserted-absent.
 _JUDGE_ENV = ("CORE_MEMORY_BEAD_JUDGE_FALLBACK", "CORE_MEMORY_BEAD_FIELD_JUDGE_MODE")
 
 
@@ -47,12 +47,13 @@ class TestBenchmarkEnrichMode(unittest.TestCase):
         _clear()
         self.addCleanup(_clear)
 
-    def test_judge_mode_sets_threadlocal_and_library_env_then_restores(self):
+    def test_judge_mode_sets_threadlocal_and_never_touches_env(self):
         self.assertFalse(_benchmark_judge_mode_active())
         with benchmark_enrich_mode("judge"):
             self.assertTrue(_benchmark_judge_mode_active())
-            self.assertEqual("1", os.environ["CORE_MEMORY_BEAD_JUDGE_FALLBACK"])
-            self.assertEqual("llm", os.environ["CORE_MEMORY_BEAD_FIELD_JUDGE_MODE"])
+            # The directive is request-scoped (metadata), never process env.
+            for k in _JUDGE_ENV:
+                self.assertIsNone(os.environ.get(k))
         self.assertFalse(_benchmark_judge_mode_active())
         for k in _JUDGE_ENV:
             self.assertIsNone(os.environ.get(k))
@@ -63,12 +64,14 @@ class TestBenchmarkEnrichMode(unittest.TestCase):
             for k in _JUDGE_ENV:
                 self.assertIsNone(os.environ.get(k))
 
-    def test_judge_mode_omits_crawler_updates(self):
+    def test_judge_mode_omits_crawler_updates_and_sets_directive(self):
         conv, turn = _conv()
         with benchmark_enrich_mode("judge"):
             md = _locomo_replay_metadata(root="/tmp/does-not-matter", conversation=conv, turn=turn)
         self.assertNotIn("crawler_updates", md)
         self.assertEqual("native_judge", md.get("_crawler_updates_source"))
+        # Per-request directive (#182) enables the judge for this turn only.
+        self.assertEqual("llm", md.get("bead_judge"))
 
     def test_mode_is_thread_scoped_not_global(self):
         # Codex regression: an in-flight judge run must NOT leak its mode into a

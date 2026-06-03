@@ -9,6 +9,15 @@ pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Benchmark queue persistence for hosted queued/cron benchmark mode.
 psycopg[binary]==3.3.2
 # Pinned to explicit Core-Memory commit for deploy stability.
+# PR #182 (feat): per-request bead-judge directive. Adds metadata["bead_judge"]
+# / req["_bead_judge"] ("llm"|"heuristic"|"off") as a request-scoped override for
+# CORE_MEMORY_BEAD_JUDGE_FALLBACK + CORE_MEMORY_BEAD_FIELD_JUDGE_MODE, falling
+# back to env when absent. _judge_fallback_enabled(req) and judge_bead_fields(
+# ..., mode=) both honor it (and _judged_turn_bead forwards mode=). Lets the demo
+# enable the native judge per replay turn instead of mutating process-global env,
+# eliminating the cross-job leak in concurrent inline benchmark runs.
+# PR #181 (fix): pass dimension=0 sentinel through to QdrantVectorBackend so
+# FastEmbed mode skips VectorParams instead of clamping to size=1.
 # PR #180 (fix): default retrieval_eligible to True in the LLM-judge normalize
 # path. Follow-up to #179 — when the judge omits retrieval_eligible, beads must
 # default to eligible (records are eligible by default; False is only for
@@ -41,7 +50,7 @@ psycopg[binary]==3.3.2
 # adds prev_bead_id temporal auto-linking.
 # Carries forward #173 (OpenAI/external Qdrant embeddings), #170/#171 (recall
 # traversal seed/merge + structural hints), #169 (unified bead projection).
-core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@0639420119d55063d27c9251f96166961ea61f16
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@97df33274c20a0ba7aa32d090efdce5076114f37
 # Keep Qdrant explicit so deployment logs fail loudly if the semantic backend
 # dependency is skipped instead of silently falling back to lexical mode.
 qdrant-client[fastembed]>=1.9
