@@ -128,3 +128,63 @@ the authoritative `build_semantic_index` (which already embeds externally). This
 upstream fix stops the log spam and makes *live* (non-benchmark) writes use the
 configured external provider for incremental indexing instead of silently
 falling back to FastEmbed.
+
+## TODO: request-scoped bead-judge directive (`CORE_MEMORY_BEAD_JUDGE_FALLBACK` is process-global)
+
+**Status:** spec only (needs a Core-Memory checkout to generate hunks).
+
+**Why:** the judge-fallback decision is read from process-global env mid-turn and
+applied to *supplied* crawler_updates rows, so it can't be scoped to one job:
+
+- `runtime/engine.py:_judge_fallback_enabled()` reads `CORE_MEMORY_BEAD_JUDGE_FALLBACK`.
+- `runtime/engine.py:_ensure_turn_creation_update()` calls
+  `_maybe_apply_judge_fallback(row, ...)` on **every supplied `beads_create` row**
+  when that env is set, LLM-filling any missing semantic field.
+- `policy/bead_judge.py:judge_bead_fields()` reads `CORE_MEMORY_BEAD_FIELD_JUDGE_MODE`.
+
+The demo runs benchmarks in worker threads in one process (inline mode). If a
+judge-mode run sets the env and is then orphaned by the watchdog/supersede path
+while stuck in an un-timed LLM call, a concurrently-starting *deterministic* run
+on another thread sees the leaked env and has its supplied beads LLM-augmented →
+corrupted, non-deterministic results. (The deployed queue/cron path runs one job
+per process, so it is not exposed — this is for inline/local correctness, and so
+the demo can pass judge intent per-request instead of mutating global env.)
+
+**Fix:** honor a per-request `bead_judge` directive carried on `req`/`metadata`,
+falling back to env for backward compat:
+
+```python
+# runtime/engine.py
+def _req_judge_directive(req: dict | None) -> str | None:
+    md = dict((req or {}).get("metadata") or {})
+    val = str((req or {}).get("_bead_judge") or md.get("bead_judge") or "").strip().lower()
+    return val or None  # "llm" | "heuristic" | "off" | None(=use env)
+
+def _judge_fallback_enabled(req: dict | None = None) -> bool:
+    d = _req_judge_directive(req)
+    if d is not None:
+        return d in {"llm", "heuristic", "1", "true", "on"}
+    return str(os.getenv("CORE_MEMORY_BEAD_JUDGE_FALLBACK", "0")).strip().lower() in {"1","true","yes","on"}
+
+def _maybe_apply_judge_fallback(row, user_query, assistant_final, *, req: dict | None = None):
+    if not _judge_fallback_enabled(req):
+        return row
+    judged = judge_bead_fields(user_query, assistant_final, mode=_req_judge_directive(req))
+    ...
+```
+
+- Thread `req` into `_maybe_apply_judge_fallback` / `_judged_turn_bead` /
+  `_default_crawler_updates` calls in `_ensure_turn_creation_update` (it already
+  has `req`).
+- `policy/bead_judge.judge_bead_fields(user_query, assistant_final, mode=None)` —
+  add the optional `mode`; when `None`, read `CORE_MEMORY_BEAD_FIELD_JUDGE_MODE`.
+
+Default-None preserves today's env behavior. Then the demo passes
+`metadata["bead_judge"]="llm"` per replay turn (request-scoped) and stops setting
+`CORE_MEMORY_BEAD_JUDGE_FALLBACK` / `CORE_MEMORY_BEAD_FIELD_JUDGE_MODE` process-wide,
+eliminating the cross-job leak entirely.
+
+**After it merges (demo side):** bump the pin; in `benchmark_enrich_mode` drop the
+env writes; in `_locomo_replay_metadata` set `metadata["bead_judge"]="llm"` (judge
+mode) and keep omitting `crawler_updates`. The thread-local mode flag can then be
+removed in favor of the per-request metadata directive.
