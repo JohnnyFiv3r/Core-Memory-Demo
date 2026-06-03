@@ -13,12 +13,14 @@ class TestSemanticProjectionUpgrade(unittest.TestCase):
     def test_requirements_pin_core_memory_reconcile_fix_and_explicit_qdrant(self):
         requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
 
-        # PR #177 retrieval pin (retrieval_eligible derives from typeability,
-        # not richness; supersedes the #175 schema pin).
-        self.assertIn("1640be3a199f260e7b185090e3f2c829e2da2503", requirements)
+        # PR #179 pin (LLM-judged claims + entities + retire retrieval_title/
+        # facts + eligibility fix; includes #178 mirror fix; supersedes #177/#178).
+        self.assertIn("c8ec297342bf16bdd89b2406ad3e667f67cf3bdb", requirements)
         self.assertIn("core-memory[qdrant,kuzu,mcp]", requirements)
         self.assertIn("qdrant-client[fastembed]>=1.9", requirements)
         self.assertIn("psycopg[binary]==3.3.2", requirements)
+        self.assertNotIn("df897776fe4cc4bfead9417aa0ba07c7f3aa853f", requirements)
+        self.assertNotIn("1640be3a199f260e7b185090e3f2c829e2da2503", requirements)
         self.assertNotIn("ca5038bf05a35f35e774bd4dc13df440daf712a0", requirements)
         self.assertNotIn("c0c85606ddb3799b171f6fea9a67d35c2bfea66e", requirements)
         self.assertNotIn("7cb8f932d5f09cf3726ade95e549bac60988011b", requirements)
