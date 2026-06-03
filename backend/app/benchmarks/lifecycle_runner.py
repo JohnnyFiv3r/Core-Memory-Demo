@@ -109,6 +109,80 @@ def _build_semantic_index(root: str | Path) -> dict[str, Any]:
     return dict(build_semantic_index(Path(root)) or {})
 
 
+def _assert_semantic_build_ok(semantic_build: dict[str, Any], *, manifest: dict[str, Any] | None = None) -> None:
+    """Fail closed when the semantic corpus index did not build in required mode.
+
+    build_semantic_index() does NOT raise when the embeddings backend is
+    unavailable — in required mode it returns {"ok": False, "error": {...}} and
+    falls back to a lexical-only corpus, leaving Qdrant empty. If the benchmark
+    proceeds, every QA recall then degrades ("semantic_backend_unavailable_
+    degraded") and the real root cause (a missing OPENAI_API_KEY on the worker,
+    blocked egress to the embeddings API, a model/dimension error, ...) is buried
+    in the discarded build result. Surface it at the point of failure so the run
+    fails with the actual reason instead of a generic downstream symptom.
+
+    Beyond the ok flag, a build can report ok=True while having silently used
+    Qdrant's built-in FastEmbed instead of the requested external provider — the
+    success return only carries backend="qdrant" for BOTH paths, and the provider
+    distinction lives in the manifest. In that case the configured OpenAI API is
+    never called and recall is capped by FastEmbed's small model. So when an
+    external provider (openai/gemini/...) is requested, verify from the manifest
+    that it was actually used.
+
+    Only enforced when CORE_MEMORY_CANONICAL_SEMANTIC_MODE == 'required'; degraded
+    modes are left to run lexically.
+    """
+    mode = str(os.environ.get("CORE_MEMORY_CANONICAL_SEMANTIC_MODE") or "").strip().lower()
+    if mode != "required":
+        return
+    if not bool(semantic_build.get("ok", False)):
+        err = semantic_build.get("error")
+        if isinstance(err, dict):
+            code = str(err.get("code") or "semantic_build_failed")
+            detail = err.get("detail")
+            last_err = ""
+            if isinstance(detail, dict):
+                last_err = str(detail.get("last_build_error") or detail.get("cause") or "")
+            reason = f"{code}: {last_err or err.get('message') or detail or 'no detail'}"
+        else:
+            reason = str(err or "semantic_build_failed")
+        raise BenchmarkLifecycleError(
+            "benchmark_semantic_build_failed_required: the semantic corpus index "
+            "did not build with real embeddings, so retrieval would degrade to "
+            f"lexical-only. Refusing to run a 'required' benchmark. cause={reason}"
+        )
+
+    # Build reported ok. If an external provider was requested, confirm it was the
+    # one actually used (not a silent FastEmbed fallback that never calls the API).
+    requested = str(os.environ.get("CORE_MEMORY_EMBEDDINGS_PROVIDER") or "").strip().lower()
+    if requested in {"", "hash", "fastembed"}:
+        return
+    if manifest is None:
+        manifest_path = str(semantic_build.get("manifest") or "").strip()
+        if not manifest_path:
+            return  # cannot verify provider; ok-check already passed
+        try:
+            manifest = json.loads(Path(manifest_path).read_text(encoding="utf-8"))
+        except Exception:
+            return  # unreadable manifest; do not raise a false failure
+    if not isinstance(manifest, dict):
+        return
+    man_provider = str(manifest.get("provider") or "").strip().lower()
+    backend = str(manifest.get("backend") or "").strip().lower()
+    semantic_ready = bool(manifest.get("semantic_ready", False))
+    if (not semantic_ready) or backend == "lexical" or man_provider in {"", "hash", "fastembed"}:
+        raise BenchmarkLifecycleError(
+            "benchmark_semantic_external_not_used: requested embeddings provider "
+            f"'{requested}' but the corpus index was built with "
+            f"'{man_provider or backend or 'unknown'}' (semantic_ready={semantic_ready}). "
+            "The external-embeddings path was not taken, so the provider API was "
+            "never called. Verify the pinned core-memory build implements external "
+            "Qdrant embeddings (PR #173) and that CORE_MEMORY_QDRANT_EXTERNAL_"
+            "EMBEDDINGS=1 is effective in the benchmark worker process."
+        )
+
+
+
 # Per-root paths for the embedded vector/graph backends, derived from the
 # benchmark run's own root. Core Memory's factories give CORE_MEMORY_QDRANT_PATH
 # / CORE_MEMORY_KUZU_PATH priority over the root argument, and on hosted those
@@ -1061,6 +1135,9 @@ def _run_lifecycle_conversation_impl(
         semantic_build = _build_semantic_index(root)
     except Exception as exc:
         semantic_build = {"ok": False, "error": str(exc)}
+
+    # Fail closed on a degraded semantic build (see _assert_semantic_build_ok).
+    _assert_semantic_build_ok(semantic_build)
 
     # Build the authoritative bead_id -> dia_id map AFTER replay + pre-QA flush so
     # it reflects the post-compaction corpus that recall actually retrieves from.

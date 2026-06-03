@@ -65,5 +65,36 @@ class TestNoDegradedSemanticGuard(unittest.TestCase):
         _assert_no_degraded_semantic(report, "degraded_allowed")
 
 
+class TestSemanticModeForcesExternalEmbeddings(unittest.TestCase):
+    """An external provider must force CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS on
+    in-process, so the corpus build cannot silently fall back to FastEmbed."""
+
+    def setUp(self):
+        from app.core.runtime import semantic_mode  # noqa: F401
+        self.semantic_mode = semantic_mode
+
+    def test_openai_provider_forces_external_flag(self):
+        import os
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS", None)
+            with self.semantic_mode("required", embeddings_provider="openai"):
+                self.assertEqual("1", os.environ.get("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS"))
+            # Restored / removed after the context exits.
+            self.assertIsNone(os.environ.get("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS"))
+
+    def test_hash_provider_does_not_force_external_flag(self):
+        import os
+        with patch.dict("os.environ", {}, clear=False):
+            os.environ.pop("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS", None)
+            with self.semantic_mode("degraded_allowed", embeddings_provider="hash"):
+                self.assertIsNone(os.environ.get("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS"))
+
+    def test_no_provider_leaves_flag_untouched(self):
+        import os
+        with patch.dict("os.environ", {"CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS": "preexisting"}, clear=False):
+            with self.semantic_mode("required"):
+                self.assertEqual("preexisting", os.environ.get("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS"))
+
+
 if __name__ == "__main__":
     unittest.main()
