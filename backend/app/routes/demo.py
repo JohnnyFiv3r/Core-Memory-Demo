@@ -1604,6 +1604,10 @@ async def benchmark_run(request: Request):
     # root into a memory-heavy benchmark path.
     if suite == 'locomo_native_lifecycle':
         root_mode = 'clean'
+        # LoCoMo recall is the headline metric: it must fail closed rather than
+        # silently degrade to lexical/hash retrieval. Force 'required' so the
+        # run errors out if real semantic embeddings are not available.
+        semantic_mode = 'required'
     preload_from_demo = bool((body or {}).get('preload_from_demo', False))
     preload_turns_max = int((body or {}).get('preload_turns_max') or 200)
     preload_turns_max = min(max(1, preload_turns_max), max(1, int(settings.benchmark_preload_turns_max)))
