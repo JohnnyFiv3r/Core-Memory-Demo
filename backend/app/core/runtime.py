@@ -3091,34 +3091,43 @@ async def replay_story_pack(
 
 @contextmanager
 def benchmark_enrich_mode(mode: str | None):
-    """Scope LoCoMo benchmark bead-enrichment to the run.
+    """Scope LoCoMo benchmark bead-enrichment to this job.
 
     mode='judge' lets Core Memory's native LLM bead-field judge author each
     replayed turn's bead (type + entities + claims + because/temporal) instead of
-    the deterministic crawler. It flips:
-      - CORE_MEMORY_DEMO_BENCHMARK_ENRICH_MODE=judge  (read by the lifecycle
-        runner to stop supplying agent crawler_updates and skip the
-        crawler-not-invoked gate);
-      - CORE_MEMORY_BEAD_JUDGE_FALLBACK=1             (engine uses _judged_turn_bead
-        as the default author when no agent updates are present);
-      - CORE_MEMORY_BEAD_FIELD_JUDGE_MODE=llm         (judge_bead_fields uses the LLM
-        path, not the heuristic fallback).
+    the deterministic crawler. It:
+      - sets the calling thread's enrich mode (thread-local, via
+        set_benchmark_enrich_mode) which the lifecycle runner reads to stop
+        supplying agent crawler_updates and to skip the crawler-not-invoked gate.
+        This is JOB-scoped on purpose: an os.environ flag here would be visible to
+        every thread, so an orphaned in-flight judge run could make a
+        concurrently-starting deterministic run skip crawler_updates and corrupt
+        its replay;
+      - sets CORE_MEMORY_BEAD_JUDGE_FALLBACK=1 (engine uses _judged_turn_bead as
+        the default author when no agent updates are present) and
+        CORE_MEMORY_BEAD_FIELD_JUDGE_MODE=llm (judge_bead_fields uses the LLM path).
+        These remain process env because the library reads them there, but they
+        only take effect when no agent crawler_updates are supplied — which a
+        deterministic run never allows now that the mode flag is thread-scoped.
     Requires Core Memory >= #179 and a provider key (OPENAI/ANTHROPIC). Any other
     mode is a no-op (deterministic crawler).
     """
+    from app.benchmarks.lifecycle_runner import set_benchmark_enrich_mode
+
     keys = {
-        "CORE_MEMORY_DEMO_BENCHMARK_ENRICH_MODE": "judge",
         "CORE_MEMORY_BEAD_JUDGE_FALLBACK": "1",
         "CORE_MEMORY_BEAD_FIELD_JUDGE_MODE": "llm",
     }
     old = {k: os.environ.get(k) for k in keys}
     active = str(mode or "").strip().lower() == "judge"
+    prev_mode = set_benchmark_enrich_mode("judge" if active else "deterministic")
     try:
         if active:
             for k, v in keys.items():
                 os.environ[k] = v
         yield
     finally:
+        set_benchmark_enrich_mode(prev_mode)
         if active:
             for k, prev in old.items():
                 if prev is None:
