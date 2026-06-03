@@ -9,6 +9,11 @@ pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Benchmark queue persistence for hosted queued/cron benchmark mode.
 psycopg[binary]==3.3.2
 # Pinned to explicit Core-Memory commit for deploy stability.
+# PR #180 (fix): default retrieval_eligible to True in the LLM-judge normalize
+# path. Follow-up to #179 — when the judge omits retrieval_eligible, beads must
+# default to eligible (records are eligible by default; False is only for
+# forced-context/retrieval turns). Without this, judge-authored beads that omit
+# the field are dropped from retrieval. Required for enrich_mode=judge.
 # PR #179 (feat): LLM-judged claims + LLM-judged entities + retire
 # retrieval_title/facts + eligibility-gate fix. The bead-field judge
 # (policy/bead_judge.judge_bead_fields) now authors type/entities/because/
@@ -36,7 +41,7 @@ psycopg[binary]==3.3.2
 # adds prev_bead_id temporal auto-linking.
 # Carries forward #173 (OpenAI/external Qdrant embeddings), #170/#171 (recall
 # traversal seed/merge + structural hints), #169 (unified bead projection).
-core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@c8ec297342bf16bdd89b2406ad3e667f67cf3bdb
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@0639420119d55063d27c9251f96166961ea61f16
 # Keep Qdrant explicit so deployment logs fail loudly if the semantic backend
 # dependency is skipped instead of silently falling back to lexical mode.
 qdrant-client[fastembed]>=1.9
