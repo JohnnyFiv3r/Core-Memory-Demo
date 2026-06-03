@@ -72,3 +72,59 @@ git push -u origin feat/qdrant-external-embeddings
    (`OPENAI_API_KEY` is already configured.)
 3. Re-seed / rebuild the semantic index so the corpus is re-embedded with the
    new provider, then re-run conv-26 to measure the recall lift.
+
+## TODO: complete external embeddings on the live write path (`_mirror_bead_to_backends`)
+
+**Status:** spec only (no `.patch` yet — needs a Core-Memory checkout at the pinned
+commit to generate accurate hunks).
+
+**Why:** the original external-embeddings patch covered the batch *build* path
+(`build_semantic_index`) and the *read* path (`hybrid._qdrant_hybrid_rows`), but
+**not** the live per-bead write path. `core_memory/persistence/store_add_bead_ops.py:
+_mirror_bead_to_backends` constructs the Qdrant backend at the manifest dimension
+(e.g. 3072 for `text-embedding-3-large`) but always upserts via
+`upsert_texts()` → `client.add()` → **FastEmbed (384-dim)**. Every live bead write
+then throws:
+
+```
+qdrant upsert failed for bead <id>: Collection have incompatible vector params: size=3072 ...
+```
+
+It's swallowed (logged at WARNING), so live mirroring silently no-ops in external
+mode and the worker logs are flooded during benchmark replay/flush/QA-bead writes.
+
+**Fix:** make `_mirror_bead_to_backends` provider-aware, mirroring
+`_qdrant_hybrid_rows`. Read `provider`/`model` from the manifest; when
+`provider != "fastembed"`, embed the bead text with that provider and `upsert()`
+the pre-computed vector instead of `upsert_texts()`:
+
+```python
+from core_memory.retrieval.semantic_index import (
+    _create_external_backend, _paths, _embed_vectors, _vector_rows,
+    _default_embedding_model,
+)
+manifest_file, *_ = _paths(root_path)
+dimension, provider, model = 1536, "fastembed", ""
+try:
+    m = json.loads(manifest_file.read_text(encoding="utf-8"))
+    dimension = int(m.get("dimension") or 1536)
+    provider = str(m.get("provider") or "fastembed").strip().lower() or "fastembed"
+    model = str(m.get("model") or "").strip()
+except Exception:
+    pass
+vec_backend = _create_external_backend(root=root_path, backend=VECTOR_BACKEND_QDRANT, dimension=dimension)
+payload, text, bead_id = _bead_payload(bead), _embed_text(bead), str(bead.get("id") or "")
+if provider != "fastembed":
+    vecs = _embed_vectors(texts=[text], provider=provider,
+                          model=(model or _default_embedding_model(provider)), hash_dim=dimension)
+    vec_backend.upsert(bead_id=bead_id, embedding=list(list(_vector_rows(vecs))[0]), metadata=payload)
+else:
+    vec_backend.upsert_texts(bead_ids=[bead_id], texts=[text], metadatas=[payload])
+```
+
+**Note (demo side):** the benchmark no longer depends on this. The lifecycle
+runner rebuilds the semantic index per isolated QA root, so recall is served by
+the authoritative `build_semantic_index` (which already embeds externally). This
+upstream fix stops the log spam and makes *live* (non-benchmark) writes use the
+configured external provider for incremental indexing instead of silently
+falling back to FastEmbed.
