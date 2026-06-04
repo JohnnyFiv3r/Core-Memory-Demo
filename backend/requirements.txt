@@ -9,6 +9,16 @@ pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Benchmark queue persistence for hosted queued/cron benchmark mode.
 psycopg[binary]==3.3.2
 # Pinned to explicit Core-Memory commit for deploy stability.
+# PR #184 (fix): extend demo ingest job polling timeout 3s->20s.
+# PR #183 (fix): engine recall quality. (1) Removes the causal_crawler
+# context->reflection auto-retype that mis-typed 91/92 conv-26 beads as
+# reflection/meta_analysis on any causal edge — beads now keep their authored/
+# judge-assigned type. (2) Effort-tier association-hop expansion so low/medium/high
+# stop returning identical candidates: low=0 hops, medium=1 hop, high=2 hops
+# (co-retrieves multi-hop chains); hop items score just below the min vector score
+# so they never displace grounded results. Directly addresses the demo's
+# retrieval_identical_across_efforts + bead_type_skew diagnostics and the cat-1
+# multi-hop recall gap.
 # PR #182 (feat): per-request bead-judge directive. Adds metadata["bead_judge"]
 # / req["_bead_judge"] ("llm"|"heuristic"|"off") as a request-scoped override for
 # CORE_MEMORY_BEAD_JUDGE_FALLBACK + CORE_MEMORY_BEAD_FIELD_JUDGE_MODE, falling
@@ -50,7 +60,7 @@ psycopg[binary]==3.3.2
 # adds prev_bead_id temporal auto-linking.
 # Carries forward #173 (OpenAI/external Qdrant embeddings), #170/#171 (recall
 # traversal seed/merge + structural hints), #169 (unified bead projection).
-core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@97df33274c20a0ba7aa32d090efdce5076114f37
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@4f8929bf217ed067a8481bec28c1aa0fa813cf0e
 # Keep Qdrant explicit so deployment logs fail loudly if the semantic backend
 # dependency is skipped instead of silently falling back to lexical mode.
 qdrant-client[fastembed]>=1.9
