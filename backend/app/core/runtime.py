@@ -63,7 +63,7 @@ except Exception:  # pragma: no cover - compatibility with older core-memory ver
 from app.benchmarks.fixture_smoke import load_fixture_smoke_cases
 from app.benchmarks import benchmark_store
 from app.benchmarks.locomo_loader import LocomoLoaderError
-from app.benchmarks.lifecycle_runner import run_locomo_lifecycle_suite
+from app.benchmarks.lifecycle_runner import MULTI_HOP_CATEGORY, MULTI_HOP_RETRIEVAL_K, run_locomo_lifecycle_suite
 from app.benchmarks.locomo_runner import BenchmarkCancelledError, run_locomo_retrieval_suite
 from app.benchmarks.locomo_scoring import aggregate_case_scores
 from app.benchmarks.locomo_suite import build_locomo_comparison, build_locomo_suite_metadata, ingest_locomo_samples, make_locomo_missing_dataset_response, write_locomo_run_artifacts
@@ -3790,6 +3790,13 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     "category_filter": list(category_filter or []),
                     "qa_per_category": {str(k): int(v) for k, v in dict(qa_per_category or {}).items()},
                     "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
+                    # Multi-hop (LoCoMo cat MULTI_HOP_CATEGORY) QAs are measured at a
+                    # higher k floor than the configured retrieval_k (see
+                    # _qa_recall_request). Record the effective per-category k so a
+                    # mixed-category run isn't mislabeled as uniformly retrieval_k —
+                    # cat-1 cases were actually evaluated at retrieval_k_multi_hop.
+                    "retrieval_k_multi_hop": max(int(retrieval_k or settings.locomo_default_retrieval_k), int(MULTI_HOP_RETRIEVAL_K)),
+                    "multi_hop_category": int(MULTI_HOP_CATEGORY),
                     "retrieval_efforts": ["low", "medium", "high"],
                     "recall_scope": "full_bead_corpus",
                     "qa_session_mode": str(qa_session_mode or "isolated"),
