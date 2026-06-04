@@ -250,7 +250,15 @@ fails closed (`benchmark_judge_requested_but_not_engaged`); and the report carri
 `scores.retrieval_varies_by_effort=false` + warnings `retrieval_identical_across_efforts`
 and `bead_type_skew:<type>:<share>` so #1 and #2 are visible in artifacts.
 
-## SPEC: #183 follow-up (#185?) — make effort-hop evidence rank competitively
+## DONE: #183 follow-up — make effort-hop evidence rank competitively
+
+**Status:** ✅ landed upstream as **Core-Memory #185** (`11b706c`). Hop items are
+now scored `seed_score × rel_weight × confidence × HOP_DECAY` (causal/semantic
+edges 0.82–0.90 > associative 0.55–0.60 > temporal 0.35; 0.80 decay/hop), the full
+evidence list is re-sorted post-expansion, and the strongest causal neighbours are
+kept when capping. Both asks below are addressed. Demo pinned to `11b706c`; the
+`MULTI_HOP_RETRIEVAL_K=12` floor stays as a complementary lever. Spec kept for
+the record.
 
 After #183 landed (pin `4f8929b`), a deterministic conv-26 re-run confirmed the
 two fixes work but **recall@5 did not move** (0.6625, byte-identical to the prior
