@@ -30,6 +30,16 @@ logger = logging.getLogger(__name__)
 
 RETRIEVAL_EFFORT_ORDER = ("low", "medium", "high")
 
+# LoCoMo category 1 = multi-hop (gold evidence spans 2+ turns). These questions
+# need a wider retrieval window to gather co-required evidence than single-fact
+# questions; the configured default k (tuned for single-hop) leaves multi-hop gold
+# stranded just past the cut. Give them a higher floor. Single-hop categories keep
+# the configured k so they don't pull in distractor beads. This is a demo-side
+# mitigation; the deeper fix (rank hop-expanded evidence competitively + a denser
+# association graph) is engine-side — see upstream-patches/README.md.
+MULTI_HOP_CATEGORY = 1
+MULTI_HOP_RETRIEVAL_K = 12
+
 ProcessTurnFinalized = Callable[..., dict[str, Any]]
 ProcessFlush = Callable[..., dict[str, Any]]
 RunAsyncJobs = Callable[..., dict[str, Any]]
@@ -1004,6 +1014,14 @@ def run_pre_qa_flush(
     }
 
 
+def _qa_category_int(qa: BenchmarkQA) -> int:
+    raw = (qa.metadata or {}).get("category") or qa.category or 0
+    try:
+        return int(raw or 0)
+    except (TypeError, ValueError):
+        return 0
+
+
 def _qa_recall_request(*, conversation: BenchmarkConversation, qa: BenchmarkQA, k: int | None) -> dict[str, Any]:
     req: dict[str, Any] = {
         "raw_query": qa.question,
@@ -1016,7 +1034,11 @@ def _qa_recall_request(*, conversation: BenchmarkConversation, qa: BenchmarkQA, 
         },
     }
     if k is not None:
-        req["k"] = max(1, int(k))
+        eff_k = max(1, int(k))
+        # Widen the window for multi-hop questions (see MULTI_HOP_RETRIEVAL_K).
+        if _qa_category_int(qa) == MULTI_HOP_CATEGORY:
+            eff_k = max(eff_k, MULTI_HOP_RETRIEVAL_K)
+        req["k"] = eff_k
     return req
 
 

@@ -9,6 +9,13 @@ pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Benchmark queue persistence for hosted queued/cron benchmark mode.
 psycopg[binary]==3.3.2
 # Pinned to explicit Core-Memory commit for deploy stability.
+# PR #185 (feat): score effort-hop items competitively instead of pinning them to
+# a flat sub-floor. hop_score = seed_score x rel_weight x confidence x HOP_DECAY,
+# with a relationship-weight table (causal/semantic edges 0.82-0.90 > associative
+# 0.55-0.60 > temporal follows/precedes 0.35) and 0.80 decay per hop. Strong causal
+# 1-hop neighbours can now rank above weak vector matches (and the final evidence
+# list is re-sorted post-expansion), so multi-hop gold reaches top-k instead of
+# being buried at ranks 9-24. Pairs with the demo's MULTI_HOP_RETRIEVAL_K=12 floor.
 # PR #184 (fix): extend demo ingest job polling timeout 3s->20s.
 # PR #183 (fix): engine recall quality. (1) Removes the causal_crawler
 # context->reflection auto-retype that mis-typed 91/92 conv-26 beads as
@@ -60,7 +67,7 @@ psycopg[binary]==3.3.2
 # adds prev_bead_id temporal auto-linking.
 # Carries forward #173 (OpenAI/external Qdrant embeddings), #170/#171 (recall
 # traversal seed/merge + structural hints), #169 (unified bead projection).
-core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@4f8929bf217ed067a8481bec28c1aa0fa813cf0e
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@11b706cf0246e52c115068e7db4fdbe35cb3aca7
 # Keep Qdrant explicit so deployment logs fail loudly if the semantic backend
 # dependency is skipped instead of silently falling back to lexical mode.
 qdrant-client[fastembed]>=1.9

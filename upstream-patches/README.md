@@ -249,3 +249,43 @@ graph the bridges, traversal gathers them.
 fails closed (`benchmark_judge_requested_but_not_engaged`); and the report carries
 `scores.retrieval_varies_by_effort=false` + warnings `retrieval_identical_across_efforts`
 and `bead_type_skew:<type>:<share>` so #1 and #2 are visible in artifacts.
+
+## DONE: #183 follow-up — make effort-hop evidence rank competitively
+
+**Status:** ✅ landed upstream as **Core-Memory #185** (`11b706c`). Hop items are
+now scored `seed_score × rel_weight × confidence × HOP_DECAY` (causal/semantic
+edges 0.82–0.90 > associative 0.55–0.60 > temporal 0.35; 0.80 decay/hop), the full
+evidence list is re-sorted post-expansion, and the strongest causal neighbours are
+kept when capping. Both asks below are addressed. Demo pinned to `11b706c`; the
+`MULTI_HOP_RETRIEVAL_K=12` floor stays as a complementary lever. Spec kept for
+the record.
+
+After #183 landed (pin `4f8929b`), a deterministic conv-26 re-run confirmed the
+two fixes work but **recall@5 did not move** (0.6625, byte-identical to the prior
+run; cat-1 multi-hop still 0.344). Diagnosis of the retrieved rows shows why:
+
+1. **Hop items are scored below the vector floor and never rank into top-k.**
+   `retrieved_count` grew 8→24 at `high` (2-hop expansion is firing), but every
+   hop item sits at a flat `min_vector_score − 0.05` (≈0.35) at ranks 9–24. So
+   they don't affect recall@5/@8 and only nudge `hit_any` (0.80→0.85). The
+   co-required multi-hop evidence is retrieved-but-buried.
+   **Ask:** score hop items on association strength × source score (and hop
+   distance decay) so a strongly-linked 1-hop neighbour can rank among the top-k,
+   instead of pinning all hop items to a constant sub-floor. They should be able
+   to displace weak vector matches when the association is strong.
+
+2. **The association graph is too sparse to reach multi-hop gold.** For the hard
+   misses (e.g. q0008 gold `D3:13`/`D2:14`), the gold is not within 2 hops at all,
+   so expansion adds noise neighbours rather than the answer. In the deterministic
+   path the graph is entity-overlap only (≤3 `supports` edges/turn). Judge mode
+   (#182) should help by authoring richer entities/claims, but the traversal also
+   needs to follow semantic/claim edges, not just lexical entity overlap.
+   **Ask:** when expanding, prefer association edges that connect
+   semantically-related-but-lexically-different beads (claim/temporal/causal),
+   not only shared-surface-entity edges.
+
+**Demo-side mitigation already shipped:** multi-hop questions (LoCoMo cat 1) now
+use a higher retrieval-k floor (`MULTI_HOP_RETRIEVAL_K=12` vs the single-hop
+default 8) so vector-near gold at ranks 9–12 is no longer cut off. This is a
+partial lever only — it can't surface evidence the graph never reaches (#2) or
+re-rank sub-floor hop items (#1); those remain engine-side.

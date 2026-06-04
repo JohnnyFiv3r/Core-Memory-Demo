@@ -134,5 +134,38 @@ class TestJudgeEngagementGuard(unittest.TestCase):
         _assert_judge_engaged(enrich_mode="judge", corpus={"claims": 0}, turns_replayed=0)
 
 
+class TestMultiHopRetrievalK(unittest.TestCase):
+    """Multi-hop (LoCoMo cat 1) questions get a wider retrieval window than the
+    configured single-hop default, so co-required evidence isn't stranded past k."""
+
+    def _req(self, category):
+        from app.benchmarks.contracts import BenchmarkConversation, BenchmarkQA
+        from app.benchmarks.lifecycle_runner import _qa_recall_request, MULTI_HOP_RETRIEVAL_K
+        conv = BenchmarkConversation(
+            benchmark_name="locomo", conversation_id="conv-26",
+            session_id="bench:locomo:conv-26:replay", turns=[], qa_cases=[],
+        )
+        qa = BenchmarkQA(qa_id="locomo:conv-26:q1", question="q?", category=category)
+        return _qa_recall_request(conversation=conv, qa=qa, k=8), MULTI_HOP_RETRIEVAL_K
+
+    def test_multihop_category_widens_k(self):
+        req, mh_k = self._req(1)
+        self.assertEqual(mh_k, req["k"])  # bumped from 8 to the multi-hop floor
+
+    def test_single_hop_category_keeps_configured_k(self):
+        req, _ = self._req(2)
+        self.assertEqual(8, req["k"])  # single-fact keeps the configured k
+
+    def test_configured_k_above_floor_is_respected(self):
+        from app.benchmarks.contracts import BenchmarkConversation, BenchmarkQA
+        from app.benchmarks.lifecycle_runner import _qa_recall_request
+        conv = BenchmarkConversation(
+            benchmark_name="locomo", conversation_id="c", session_id="s", turns=[], qa_cases=[],
+        )
+        qa = BenchmarkQA(qa_id="q", question="q?", category=1)
+        # A caller asking for k=20 on multi-hop must not be lowered to the floor.
+        self.assertEqual(20, _qa_recall_request(conversation=conv, qa=qa, k=20)["k"])
+
+
 if __name__ == "__main__":
     unittest.main()

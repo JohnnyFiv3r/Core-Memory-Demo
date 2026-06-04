@@ -13,15 +13,16 @@ class TestSemanticProjectionUpgrade(unittest.TestCase):
     def test_requirements_pin_core_memory_reconcile_fix_and_explicit_qdrant(self):
         requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
 
-        # PR #184 pin (master tip): engine recall quality (#183: drop causal
-        # context->reflection over-typing + effort-tier association-hop expansion)
-        # and demo ingest polling timeout (#184); on top of the #182 per-request
-        # bead-judge directive and #181 Qdrant dim sentinel.
-        self.assertIn("4f8929bf217ed067a8481bec28c1aa0fa813cf0e", requirements)
+        # PR #185 pin (master tip): competitive effort-hop scoring (edge strength x
+        # seed x decay), on top of #183 recall quality (drop causal->reflection
+        # over-typing + effort-tier hops), #184 ingest poll timeout, #182 per-request
+        # bead-judge directive, and #181 Qdrant dim sentinel.
+        self.assertIn("11b706cf0246e52c115068e7db4fdbe35cb3aca7", requirements)
         self.assertIn("core-memory[qdrant,kuzu,mcp]", requirements)
         self.assertIn("qdrant-client[fastembed]>=1.9", requirements)
         self.assertIn("psycopg[binary]==3.3.2", requirements)
         # Superseded pins must not linger.
+        self.assertNotIn("4f8929bf217ed067a8481bec28c1aa0fa813cf0e", requirements)
         self.assertNotIn("0639420119d55063d27c9251f96166961ea61f16", requirements)
         self.assertNotIn("97df33274c20a0ba7aa32d090efdce5076114f37", requirements)
         self.assertNotIn("c8ec297342bf16bdd89b2406ad3e667f67cf3bdb", requirements)
