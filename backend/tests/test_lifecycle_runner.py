@@ -609,19 +609,22 @@ class TestLifecycleAggregateVacuousExclusion(unittest.TestCase):
     def test_excluded_category_dropped_from_answer_f1(self):
         from app.benchmarks.lifecycle_runner import aggregate_lifecycle_effort_scores
 
+        # High effort always synthesizes a prediction (run_qa_efforts), so include
+        # one — that is what marks the answer as generated (answer_generated=True).
         cases = [
             {"efforts": {"high": {
-                "answer_f1": 0.0, "latency_ms": 1.0, "excluded": False,
+                "answer_f1": 0.0, "latency_ms": 1.0, "excluded": False, "prediction": "wrong",
                 "evidence_recall": {"recall@5": 0.0, "hit_any": False, "vacuous": False},
             }}},
             # Excluded (e.g. cat 5) row scores a neutral 1.0 — must not be averaged in.
             {"efforts": {"high": {
-                "answer_f1": 1.0, "latency_ms": 1.0, "excluded": True,
+                "answer_f1": 1.0, "latency_ms": 1.0, "excluded": True, "prediction": "n/a",
                 "evidence_recall": {"recall@5": 1.0, "hit_any": True, "vacuous": False},
             }}},
         ]
         high = aggregate_lifecycle_effort_scores(cases)["by_effort"]["high"]
         self.assertEqual(0.0, high["answer_f1_mean"])  # excluded row dropped, not 0.5
+        self.assertTrue(high["answer_generated"])
 
 
 if __name__ == "__main__":

@@ -194,3 +194,58 @@ eliminating the cross-job leak entirely.
 env writes; in `_locomo_replay_metadata` set `metadata["bead_judge"]="llm"` (judge
 mode) and keep omitting `crawler_updates`. The thread-local mode flag can then be
 removed in favor of the per-request metadata directive.
+
+## SPEC: engine findings from benchmark run `bench-c25084e5c4` (conv-26, LoCoMo)
+
+Three engine-side issues surfaced by an end-to-end diagnosis of a 20-QA conv-26
+run. (The run was deterministic — `enrich_mode` was not set to `judge` — so #182
+is still unvalidated; these are orthogonal to the judge and limit recall even with
+it. Demo-side guards for "judge requested but not engaged" and these symptoms have
+landed, but the fixes below are engine-side.)
+
+### 1. Retrieval effort tiers are a no-op (`recall(req, effort=...)`)
+`core_memory.retrieval.agent.recall` returns an **identical candidate set** for
+`effort ∈ {low, medium, high}` — verified across **20/20 QA** (same bead IDs, same
+order). The benchmark calls recall three times per QA (only `high` is used to
+answer), so this is ~3× retrieval latency for one usable result.
+
+**Ask:** make effort monotonically widen recall, or drop the parameter:
+- `low` = vector top-k only;
+- `medium` = + 1-hop association expansion;
+- `high` = + multi-hop graph traversal / claim expansion.
+If effort is intentionally answer-only and never affects retrieval, document that
+so callers can collapse the tiers.
+
+### 2. `causal_crawler` over-types beads to `reflection`/`meta_analysis`
+Deterministic crawler_updates author `type:"context"`. The engine's causal_crawler
+then re-types **91/92 beads** to `reflection` (`reflection_type=meta_analysis`) on
+the first causal edge. Each bead's `type_log` shows
+`context (initial_write) → reflection (causal_crawler, edge_count=1)`. Typing nearly
+every chat turn as a meta-analytical reflection is implausible and degrades
+type-aware ranking (and any per-type retrieval gating).
+
+**Ask:** causal_crawler should not change a bead's type merely because an edge was
+added. Re-type to `reflection` only when the bead content is actually reflective;
+otherwise preserve the authored/inferred type. (In judge mode, the bead-field judge
+assigns the real type — so this mainly bites the deterministic/non-judge path, but
+the "any edge ⇒ reflection" rule looks wrong in both.)
+
+### 3. Multi-hop recall breadth
+Evidence recall@5 by LoCoMo category on this run: **cat-2 (single-fact) 0.90** vs
+**cat-1 (multi-hop) 0.34**. Questions whose gold evidence spans 2–4 turns retrieve
+at most one of them in the top-k; the single-vector query can't gather
+complementary evidence (e.g. "moved 4 years ago" + "from Sweden" live in different
+turns and only one is recalled). Even when both are retrieved, the answer can't be
+synthesized without a bridging claim.
+
+**Ask:** when a query's anchors fan out to multiple beads, expand recall along the
+association/claim graph (k-hop) so co-required evidence is co-retrieved, rather than
+returning the top-k nearest single vectors. This is the primary lever for multi-hop
+F1 and composes directly with judge-authored claims/entities (#182): claims give the
+graph the bridges, traversal gathers them.
+
+**Demo-side (already landed, for context):** the report now records
+`config.enrich_mode` + `enrich_mode_engaged`; a `judge` run that authors 0 claims
+fails closed (`benchmark_judge_requested_but_not_engaged`); and the report carries
+`scores.retrieval_varies_by_effort=false` + warnings `retrieval_identical_across_efforts`
+and `bead_type_skew:<type>:<share>` so #1 and #2 are visible in artifacts.
