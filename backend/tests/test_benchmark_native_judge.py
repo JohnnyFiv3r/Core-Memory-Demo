@@ -100,5 +100,39 @@ class TestBenchmarkEnrichMode(unittest.TestCase):
         self.assertFalse(seen["other_thread_active"])     # other thread: NOT active
 
 
+class TestJudgeEngagementGuard(unittest.TestCase):
+    """Fail closed when enrich_mode='judge' but the judge authored no claims —
+    the demo-side defense against a silent deterministic masquerade."""
+
+    def test_judge_with_zero_claims_raises(self):
+        from app.benchmarks.contracts import BenchmarkLifecycleError
+        from app.benchmarks.lifecycle_runner import _assert_judge_engaged
+
+        with self.assertRaises(BenchmarkLifecycleError) as ctx:
+            _assert_judge_engaged(
+                enrich_mode="judge",
+                corpus={"beads": 175, "claims": 0},
+                turns_replayed=175,
+            )
+        self.assertIn("judge_requested_but_not_engaged", str(ctx.exception))
+
+    def test_judge_with_claims_passes(self):
+        from app.benchmarks.lifecycle_runner import _assert_judge_engaged
+
+        # Should not raise.
+        _assert_judge_engaged(enrich_mode="judge", corpus={"claims": 42}, turns_replayed=175)
+
+    def test_deterministic_with_zero_claims_is_fine(self):
+        from app.benchmarks.lifecycle_runner import _assert_judge_engaged
+
+        # Deterministic crawler legitimately produces 0 claims — must not raise.
+        _assert_judge_engaged(enrich_mode="deterministic", corpus={"claims": 0}, turns_replayed=175)
+
+    def test_empty_replay_does_not_false_alarm(self):
+        from app.benchmarks.lifecycle_runner import _assert_judge_engaged
+
+        _assert_judge_engaged(enrich_mode="judge", corpus={"claims": 0}, turns_replayed=0)
+
+
 if __name__ == "__main__":
     unittest.main()

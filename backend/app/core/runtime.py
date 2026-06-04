@@ -3796,6 +3796,13 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     "dataset_mode": "locomo_native_lifecycle",
                     "answer_mode": resolved_answer_mode,
                     "generator_model": resolved_generator_model,
+                    # Make the run self-describing: judge vs deterministic was
+                    # previously unrecoverable from the artifacts (only bead tags
+                    # told them apart). Record the requested mode and the mode the
+                    # lifecycle actually engaged (the lifecycle guard fails closed
+                    # if a 'judge' request authored no claims).
+                    "enrich_mode": resolved_enrich_mode,
+                    "enrich_mode_engaged": str((lifecycle_report.get("lifecycle") or {}).get("enrich_mode") or ""),
                 },
                 "dataset": dict((dataset_meta.get("dataset") or {})),
                 "lifecycle": dict(lifecycle_report.get("lifecycle") or {}),

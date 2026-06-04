@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import contextlib
 import json
+import logging
 import os
 import threading
 import shutil
@@ -24,6 +25,8 @@ from app.benchmarks.locomo_scoring import compute_evidence_recall
 from app.benchmarks import locomo_faithful
 from core_memory.integrations.api import hydrate_bead_sources
 from app.benchmarks.locomo_turn_crawler import locomo_crawler_callable
+
+logger = logging.getLogger(__name__)
 
 RETRIEVAL_EFFORT_ORDER = ("low", "medium", "high")
 
@@ -546,6 +549,26 @@ def _percentile(values: list[float], percentile: float) -> float:
     return round(ordered[idx], 3)
 
 
+def _effort_retrieved_ids(case: dict[str, Any], effort: str) -> tuple[str, ...]:
+    rows = ((case.get("efforts") or {}).get(effort) or {}).get("retrieved") or []
+    return tuple(str((r or {}).get("bead_id") or "") for r in rows)
+
+
+def _retrieval_varies_by_effort(cases: list[dict[str, Any]]) -> bool:
+    """True if any QA's retrieved bead set differs across low/medium/high.
+
+    Today Core Memory's recall() returns the same candidates regardless of the
+    effort tier (only the demo-side answer generation differs), so the three
+    efforts are redundant retrieval work. Surfacing this lets us flag the no-op
+    instead of silently paying ~3x retrieval latency. See run_qa_efforts.
+    """
+    for case in cases:
+        sets = {effort: _effort_retrieved_ids(case, effort) for effort in RETRIEVAL_EFFORT_ORDER}
+        if len({s for s in sets.values()}) > 1:
+            return True
+    return False
+
+
 def aggregate_lifecycle_effort_scores(cases: list[dict[str, Any]]) -> dict[str, Any]:
     by_effort: dict[str, dict[str, Any]] = {}
     for effort in RETRIEVAL_EFFORT_ORDER:
@@ -558,13 +581,19 @@ def aggregate_lifecycle_effort_scores(cases: list[dict[str, Any]]) -> dict[str, 
         # evidence can't inflate evidence_recall@5 / hit_any in the summary.
         scored_rows = [row for row in rows if not row.get("excluded")]
         ev_rows = [row for row in rows if not (row.get("evidence_recall") or {}).get("vacuous")]
-        answer_scores = [float(row.get("answer_f1") or 0.0) for row in scored_rows]
+        # Only 'high' synthesizes an answer (see run_qa_efforts); low/medium are
+        # retrieval-only. Report their answer_f1 as None ("not generated") instead
+        # of 0.0, which otherwise reads as a real accuracy of zero.
+        answered_rows = [row for row in scored_rows if str(row.get("prediction") or "").strip()]
+        answer_generated = bool(answered_rows)
+        answer_scores = [float(row.get("answer_f1") or 0.0) for row in answered_rows]
         recall5 = [float((row.get("evidence_recall") or {}).get("recall@5") or 0.0) for row in ev_rows]
         hit_any = [1.0 if bool((row.get("evidence_recall") or {}).get("hit_any")) else 0.0 for row in ev_rows]
         by_effort[effort] = {
             "qa_count": len(rows),
             "scored_qa_count": len(ev_rows),
-            "answer_f1_mean": round(sum(answer_scores) / len(answer_scores), 4) if answer_scores else 0.0,
+            "answer_generated": answer_generated,
+            "answer_f1_mean": round(sum(answer_scores) / len(answer_scores), 4) if answer_scores else None,
             "evidence_recall@5": round(sum(recall5) / len(recall5), 4) if recall5 else 0.0,
             "hit_any": round(sum(hit_any) / len(hit_any), 4) if hit_any else 0.0,
             "latency_ms": {
@@ -575,9 +604,12 @@ def aggregate_lifecycle_effort_scores(cases: list[dict[str, Any]]) -> dict[str, 
     return {
         "overall": dict(by_effort.get("high") or {}),
         "by_effort": by_effort,
-        "accuracy_by_effort": {effort: float((by_effort.get(effort) or {}).get("answer_f1_mean") or 0.0) for effort in RETRIEVAL_EFFORT_ORDER},
+        # answer accuracy only exists for efforts that generated answers; None
+        # marks "not generated" so a retrieval-only effort isn't read as 0% accurate.
+        "accuracy_by_effort": {effort: ((by_effort.get(effort) or {}).get("answer_f1_mean")) for effort in RETRIEVAL_EFFORT_ORDER},
         "evidence_recall_by_effort": {effort: float((by_effort.get(effort) or {}).get("evidence_recall@5") or 0.0) for effort in RETRIEVAL_EFFORT_ORDER},
         "latency_by_effort_ms": {effort: dict((by_effort.get(effort) or {}).get("latency_ms") or {}) for effort in RETRIEVAL_EFFORT_ORDER},
+        "retrieval_varies_by_effort": _retrieval_varies_by_effort(cases),
     }
 
 
@@ -617,6 +649,62 @@ def corpus_snapshot(root: str | Path) -> dict[str, int]:
         "entities": len(dict(payload.get("entities") or {})),
         "claims": claims,
     }
+
+
+def _assert_judge_engaged(*, enrich_mode: str, corpus: dict[str, Any], turns_replayed: int, conversation_id: str = "") -> None:
+    """FAIL CLOSED when enrich_mode='judge' but the native judge authored nothing.
+
+    Claims are exclusively a judge product in this pipeline — the deterministic
+    LoCoMo crawler (locomo_turn_crawler) emits none. So 0 claims across a non-empty
+    replay means the judge silently no-op'd and the run degraded to deterministic
+    crawler output, which must not be reported as a judge result. Mirrors
+    _assert_semantic_build_ok for embeddings: a 'judge' run that didn't engage is as
+    invalid as a 'required' semantic run that fell back to FastEmbed.
+    """
+    if str(enrich_mode or "").strip().lower() != "judge":
+        return
+    claims_n = int((corpus or {}).get("claims") or 0)
+    if int(turns_replayed or 0) > 0 and claims_n == 0:
+        raise BenchmarkLifecycleError(
+            "benchmark_judge_requested_but_not_engaged: enrich_mode='judge' but the "
+            f"replayed corpus has 0 claims across {turns_replayed} turns. The native "
+            "bead-field judge did not author (no claims produced), so this run silently "
+            "degraded to deterministic crawler output. Verify the pinned Core Memory "
+            ">= #182 honors metadata['bead_judge'] and that a provider key "
+            "(OPENAI_API_KEY/ANTHROPIC_API_KEY) is present in the benchmark worker."
+        )
+    logger.info(
+        "benchmark judge engaged: conversation=%s claims=%d across %d replayed turns",
+        conversation_id, claims_n, int(turns_replayed or 0),
+    )
+
+
+def _dominant_bead_type(root: str | Path) -> tuple[str, float] | None:
+    """Return (most_common_bead_type, share) from the bead index, or None.
+
+    Used only for a diagnostic skew warning; never raises (best-effort read of the
+    same index.json corpus_snapshot uses).
+    """
+    path = Path(root) / ".beads" / "index.json"
+    if not path.exists():
+        return None
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        beads = dict((payload or {}).get("beads") or {})
+    except Exception:
+        return None
+    if not beads:
+        return None
+    counts: dict[str, int] = {}
+    for bead in beads.values():
+        if not isinstance(bead, dict):
+            continue
+        bead_type = str(bead.get("type") or bead.get("bead_type") or "unknown").strip().lower() or "unknown"
+        counts[bead_type] = counts.get(bead_type, 0) + 1
+    if not counts:
+        return None
+    dom_type, dom_count = max(counts.items(), key=lambda kv: kv[1])
+    return dom_type, dom_count / max(1, len(beads))
 
 
 def graph_snapshot_payload(root: str | Path, *, max_beads: int = 400, max_associations: int = 1200) -> dict[str, Any]:
@@ -1288,10 +1376,57 @@ def _run_lifecycle_conversation_impl(
 
     scores = aggregate_lifecycle_effort_scores(qa_results)
     corpus_after_qa = corpus_snapshot(root)
+
+    # Record the actual enrich mode this job ran under (thread-local), so the
+    # report is self-describing — a judge run and a deterministic run are
+    # otherwise indistinguishable in the artifacts.
+    enrich_mode = "judge" if _benchmark_judge_mode_active() else "deterministic"
+
+    extra_warnings: list[str] = []
+
+    # FAIL CLOSED if a judge run authored nothing (see _assert_judge_engaged).
+    turns_replayed = int(replay.get("turns_replayed") or 0)
+    _assert_judge_engaged(
+        enrich_mode=enrich_mode,
+        corpus=corpus_after_qa,
+        turns_replayed=turns_replayed,
+        conversation_id=conversation.conversation_id,
+    )
+
+    # Diagnostic (not fatal): the three retrieval efforts returned identical
+    # candidate sets, so low/medium are redundant retrieval work. Surface it so the
+    # ~3x latency cost is visible instead of silent. The fix is engine-side (recall
+    # must vary candidates by effort) or demo-side (collapse the efforts).
+    if not bool(scores.get("retrieval_varies_by_effort", True)):
+        extra_warnings.append("after_qa:retrieval_identical_across_efforts")
+        logger.warning(
+            "benchmark retrieval efforts are a no-op: low/medium/high returned identical "
+            "candidate sets for every QA in conversation=%s (only 'high' generates an "
+            "answer). Core Memory recall() does not vary by effort tier.",
+            conversation.conversation_id,
+        )
+
+    # Diagnostic (not fatal): bead type skew. The deterministic crawler authors
+    # type='context'; the engine's causal_crawler then re-types most beads to a
+    # single type (observed: ~all 'reflection'/meta_analysis), which is implausible
+    # for chat and degrades type-aware ranking. Flag when one type dominates.
+    skew = _dominant_bead_type(root)
+    if skew is not None:
+        dom_type, share = skew
+        if share >= 0.8:
+            extra_warnings.append(f"after_qa:bead_type_skew:{dom_type}:{round(share, 2)}")
+            logger.warning(
+                "benchmark bead type skew: %.0f%% of beads typed '%s' in conversation=%s "
+                "(engine causal_crawler re-typing); type-aware ranking is degraded. "
+                "Judge mode (Core Memory #182) assigns real per-bead types.",
+                share * 100.0, dom_type, conversation.conversation_id,
+            )
+
     warnings = _dedupe_warnings(
         list(replay.get("warnings") or [])
         + list(pre_qa_flush.get("warnings") or [])
         + lifecycle_corpus_warnings(corpus_after_qa, phase="after_qa")
+        + extra_warnings
     )
 
     return {
@@ -1299,6 +1434,7 @@ def _run_lifecycle_conversation_impl(
         "dataset_mode": dataset_mode,
         "lifecycle": {
             "dataset_mode": dataset_mode,
+            "enrich_mode": enrich_mode,
             "lifecycle_faithful": dataset_mode == "locomo_native_lifecycle" and not flags.any_enabled(),
             "conversations": 1,
             "turns_replayed": int(replay.get("turns_replayed") or 0),
@@ -1508,6 +1644,7 @@ def run_locomo_lifecycle_suite(
         "dataset_mode": dataset_mode,
         "lifecycle": {
             "dataset_mode": dataset_mode,
+            "enrich_mode": next((str((r.get("lifecycle") or {}).get("enrich_mode") or "") for r in results if (r.get("lifecycle") or {}).get("enrich_mode")), "deterministic"),
             "lifecycle_faithful": dataset_mode == "locomo_native_lifecycle" and not flags.any_enabled(),
             "conversations": len(conversations),
             "turns_replayed": sum(int(((r.get("lifecycle") or {}).get("turns_replayed") or 0)) for r in results),
