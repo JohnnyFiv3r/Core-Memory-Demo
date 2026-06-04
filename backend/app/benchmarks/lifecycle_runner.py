@@ -3,6 +3,7 @@ from __future__ import annotations
 import contextlib
 import json
 import os
+import threading
 import shutil
 import time
 from pathlib import Path
@@ -36,15 +37,32 @@ def _turn_text(turn: BenchmarkTurn) -> str:
 
 
 def _benchmark_judge_mode_active() -> bool:
-    """True when the benchmark should let Core Memory's native LLM bead-field
+    """True when this benchmark job should let Core Memory's native LLM bead-field
     judge author beads (type + entities + claims + because/temporal) instead of
     supplying deterministic agent crawler_updates.
 
-    Set by run_benchmark via CORE_MEMORY_DEMO_BENCHMARK_ENRICH_MODE=judge, which
-    also flips CORE_MEMORY_BEAD_JUDGE_FALLBACK / CORE_MEMORY_BEAD_FIELD_JUDGE_MODE
-    (see benchmark_enrich_mode). Requires Core Memory >= #179.
+    Job-scoped via thread-local state (each benchmark job runs in its own worker
+    thread) rather than process-global env, so an in-flight judge run cannot leak
+    its mode into a concurrently-starting deterministic run (which would then skip
+    crawler_updates and corrupt its replay). Set by run_benchmark through
+    benchmark_enrich_mode -> set_benchmark_enrich_mode. This flag only governs the
+    demo side (whether to omit crawler_updates); the engine's judge fallback is
+    enabled per-request via metadata["bead_judge"]="llm" (see
+    _locomo_replay_metadata), not env, so no process-global state is involved.
+    Requires Core Memory >= #182.
     """
-    return str(os.environ.get("CORE_MEMORY_DEMO_BENCHMARK_ENRICH_MODE") or "").strip().lower() == "judge"
+    return str(getattr(_ENRICH_STATE, "mode", "") or "").strip().lower() == "judge"
+
+
+_ENRICH_STATE = threading.local()
+
+
+def set_benchmark_enrich_mode(mode: str | None) -> str | None:
+    """Set the calling thread's benchmark enrich mode; returns the prior value
+    (for restore). Thread-local so concurrent benchmark jobs don't interfere."""
+    prev = getattr(_ENRICH_STATE, "mode", None)
+    _ENRICH_STATE.mode = (str(mode).strip().lower() if mode is not None else None)
+    return prev
 
 
 def _locomo_replay_metadata(
@@ -61,10 +79,12 @@ def _locomo_replay_metadata(
     request-scoped Core Memory contract.
 
     In judge mode (_benchmark_judge_mode_active) it deliberately omits
-    crawler_updates so the engine falls back to its native LLM bead-field judge,
-    which authors type/entities/claims/because/temporal natively (Core Memory
-    #179). That path keys off req.turn_text, which the engine derives from the
-    replayed turn content.
+    crawler_updates AND sets metadata["bead_judge"]="llm" so the engine enables
+    its judge fallback and LLM bead-field judge for this request only (Core Memory
+    #182), authoring type/entities/claims/because/temporal natively. The directive
+    is request-scoped — it does not touch process env, so concurrent deterministic
+    jobs are unaffected. That path keys off req.turn_text, which the engine derives
+    from the replayed turn content.
     """
 
     metadata: dict[str, Any] = {
@@ -80,6 +100,9 @@ def _locomo_replay_metadata(
     metadata["replay_source"] = "locomo"
     if _benchmark_judge_mode_active():
         # No agent crawler_updates → engine authors the bead via judge_bead_fields.
+        # The per-request directive (Core Memory #182) enables the judge fallback
+        # + LLM field-judge for this turn only, without any process-global env.
+        metadata["bead_judge"] = "llm"
         metadata["_crawler_updates_source"] = "native_judge"
         return metadata
     try:
@@ -1029,6 +1052,10 @@ def write_qa_turn(
             "qa_id": qa.qa_id,
             "retrieval_efforts": list(RETRIEVAL_EFFORT_ORDER),
             "selected_answer_effort": "high",
+            # Match the replay path: in judge mode this QA lifecycle bead (no agent
+            # crawler_updates supplied) is judge-authored per-request (#182), not
+            # via process-global env.
+            **({"bead_judge": "llm"} if _benchmark_judge_mode_active() else {}),
         },
         origin="BENCHMARK_QA",
     )
