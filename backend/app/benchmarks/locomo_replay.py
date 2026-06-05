@@ -361,7 +361,7 @@ def _synthesize_locomo_associations(*, root: str, sample_id: str, session_index:
     }
 
 
-def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'transcript_only', flush_policy: str = 'per_session') -> dict[str, Any]:
+def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'transcript_only', flush_policy: str = 'per_session', synthesize_associations: bool = False) -> dict[str, Any]:
     if str(mode or 'transcript_only') == 'canonical_turn':
         if finalize_and_process_turn is None:
             raise RuntimeError('core_memory_unavailable:finalize_and_process_turn')
@@ -426,7 +426,7 @@ def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'tran
                         'trace': dict(env.get('metadata') or {}),
                     }
                 )
-        if str(mode or 'transcript_only') == 'canonical_turn':
+        if str(mode or 'transcript_only') == 'canonical_turn' and bool(synthesize_associations):
             try:
                 association_synthesis.append(_synthesize_locomo_associations(root=root, sample_id=sample_id, session_index=session_index, turns=[dict(t or {}) for t in session_turns]))
             except Exception as exc:
@@ -457,7 +457,11 @@ def replay_locomo_sample(*, root: str, sample: dict[str, Any], mode: str = 'tran
         'ingested_count': sum(1 for row in emitted if row.get('status') == 'ingested'),
         'skipped_existing_count': skipped_existing,
         'association_synthesis': {
-            'enabled': str(mode or 'transcript_only') == 'canonical_turn',
+            # Synthetic graph edges are a legacy/fixture ceiling helper only.
+            # Official/product LoCoMo replay must rely on native Core Memory
+            # judge/crawler semantics, so the default is disabled even for
+            # canonical_turn mode.
+            'enabled': str(mode or 'transcript_only') == 'canonical_turn' and bool(synthesize_associations),
             'sessions': association_synthesis,
             'associations_requested': sum(int((row or {}).get('associations_requested') or 0) for row in association_synthesis),
             'associations_appended': sum(int((row or {}).get('associations_appended') or 0) for row in association_synthesis),

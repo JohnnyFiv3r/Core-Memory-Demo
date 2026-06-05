@@ -5,7 +5,18 @@ from unittest.mock import AsyncMock, patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.benchmarks.locomo_answer import generate_locomo_answer
+from app.benchmarks.locomo_answer import generate_locomo_answer, validate_required_tool_phases
+
+
+class _FakeAgentResult:
+    output = '```json\n{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}\n```'
+
+    def all_messages(self):
+        return [
+            {"parts": [{"tool_name": "search_memory", "args": {"query": "When?"}}]},
+            {"parts": [{"tool_name": "trace_memory", "args": {"query": "When?", "max_depth": 6}}]},
+            {"parts": [{"tool_name": "hydrate_sources", "args": {"bead_ids_json": "[]"}}]},
+        ]
 
 
 class TestLocomoAnswer(unittest.TestCase):
@@ -60,10 +71,14 @@ class TestLocomoAnswer(unittest.TestCase):
                 retrieved_context=[],
             )
 
-    def test_llm_mode_uses_isolated_no_memory_agent_path(self):
-        with patch("app.benchmarks.locomo_answer.Agent") as Agent:
+    def test_llm_mode_uses_memory_tools_and_requires_tool_phases(self):
+        with patch("app.benchmarks.locomo_answer.Agent") as Agent, \
+             patch("app.benchmarks.locomo_answer.memory_execute_tool", return_value=lambda: None), \
+             patch("app.benchmarks.locomo_answer.memory_search_tool", return_value=lambda: None), \
+             patch("app.benchmarks.locomo_answer.memory_trace_tool", return_value=lambda: None), \
+             patch("app.benchmarks.locomo_answer.hydrate_bead_sources_tool", return_value=lambda: None):
             agent = Agent.return_value
-            agent.run = AsyncMock(return_value='```json\n{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}\n```')
+            agent.run = AsyncMock(return_value=_FakeAgentResult())
             out = generate_locomo_answer(
                 mode="llm",
                 root="/tmp/fake",
@@ -73,16 +88,25 @@ class TestLocomoAnswer(unittest.TestCase):
                 generator_model="openai:gpt-4o-mini",
             )
         Agent.assert_called_once()
-        self.assertNotIn("root", Agent.call_args.kwargs)
+        self.assertEqual(4, len(Agent.call_args.kwargs.get("tools") or []))
         self.assertEqual("7 May 2023", out["answer"])
         self.assertEqual(["D1:3"], out["used_dia_ids"])
         self.assertEqual("high", out["confidence"])
         self.assertFalse(out["unsupported"])
+        self.assertTrue(out["tool_phase_validation"]["ok"])
+        self.assertEqual(["search_memory", "trace_memory", "hydrate_sources"], out["tool_phase_validation"]["tool_names"])
 
     def test_llm_mode_reconciles_non_dataset_used_ids_back_to_retrieved_dia_ids(self):
-        with patch("app.benchmarks.locomo_answer.Agent") as Agent:
+        class FakeBadIdResult(_FakeAgentResult):
+            output = '```json\n{"answer":"7 May 2023","used_dia_ids":["turn-abc123"],"confidence":"high","unsupported":false}\n```'
+
+        with patch("app.benchmarks.locomo_answer.Agent") as Agent, \
+             patch("app.benchmarks.locomo_answer.memory_execute_tool", return_value=lambda: None), \
+             patch("app.benchmarks.locomo_answer.memory_search_tool", return_value=lambda: None), \
+             patch("app.benchmarks.locomo_answer.memory_trace_tool", return_value=lambda: None), \
+             patch("app.benchmarks.locomo_answer.hydrate_bead_sources_tool", return_value=lambda: None):
             agent = Agent.return_value
-            agent.run = AsyncMock(return_value='```json\n{"answer":"7 May 2023","used_dia_ids":["turn-abc123"],"confidence":"high","unsupported":false}\n```')
+            agent.run = AsyncMock(return_value=FakeBadIdResult())
             out = generate_locomo_answer(
                 mode="llm",
                 root="/tmp/fake",
@@ -92,6 +116,24 @@ class TestLocomoAnswer(unittest.TestCase):
                 generator_model="openai:gpt-4o-mini",
             )
         self.assertEqual(["D1:3", "D1:4"], out["used_dia_ids"])
+
+    def test_required_tool_phase_validation_rejects_search_trace_only(self):
+        out = validate_required_tool_phases([
+            {"tool_name": "search_memory"},
+            {"tool_name": "trace_memory"},
+        ])
+        self.assertFalse(out["ok"])
+        self.assertEqual("required_tool_phase_missing", out["error"])
+        self.assertEqual(["hydrate"], out["missing"])
+
+    def test_required_tool_phase_validation_rejects_answer_before_hydration_order(self):
+        out = validate_required_tool_phases([
+            {"tool_name": "search_memory"},
+            {"tool_name": "hydrate_sources"},
+            {"tool_name": "trace_memory"},
+        ])
+        self.assertFalse(out["ok"])
+        self.assertEqual("required_tool_phase_order_invalid", out["error"])
 
 
 if __name__ == "__main__":

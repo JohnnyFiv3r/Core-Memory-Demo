@@ -117,7 +117,7 @@ class TestLocomoReplay(unittest.TestCase):
         sample['sessions'][0]['turns'][0]['text'] = 'Alice and Bob discuss hiking plans.'
         sample['sessions'][0]['turns'][1]['text'] = 'Bob confirms the hiking plan with Alice.'
         with tempfile.TemporaryDirectory() as td, patch.dict(os.environ, {'CORE_MEMORY_ENRICHMENT_QUEUE': 'off'}):
-            out = replay_locomo_sample(root=td, sample=sample, mode='canonical_turn', flush_policy='end_only')
+            out = replay_locomo_sample(root=td, sample=sample, mode='canonical_turn', flush_policy='end_only', synthesize_associations=True)
             index = json.loads((Path(td) / '.beads' / 'index.json').read_text())
 
         self.assertTrue(out['association_synthesis']['enabled'])
@@ -126,6 +126,19 @@ class TestLocomoReplay(unittest.TestCase):
         relationships = {str(row.get('relationship') or '') for row in list(index.get('associations') or [])}
         self.assertIn('follows', relationships)
         self.assertIn('precedes', relationships)
+
+    def test_canonical_replay_does_not_synthesize_associations_by_default(self):
+        if replay_locomo_sample is None:
+            self.skipTest('pydantic_settings unavailable')
+        sample = self._sample()
+        with tempfile.TemporaryDirectory() as td, \
+             patch.object(locomo_replay_mod, '_synthesize_locomo_associations') as synthesize, \
+             patch.dict(os.environ, {'CORE_MEMORY_ENRICHMENT_QUEUE': 'off'}):
+            out = replay_locomo_sample(root=td, sample=sample, mode='canonical_turn', flush_policy='end_only')
+
+        synthesize.assert_not_called()
+        self.assertFalse(out['association_synthesis']['enabled'])
+        self.assertEqual(0, out['association_synthesis']['associations_requested'])
 
     def test_synthesized_entity_overlap_uses_canonical_relationship(self):
         if replay_locomo_sample is None:

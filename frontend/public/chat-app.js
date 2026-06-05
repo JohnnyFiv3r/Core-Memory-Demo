@@ -4777,11 +4777,6 @@ async function runBenchmark() {
   const answerModeRaw = document.getElementById('bench-answer-mode')?.value || 'llm';
   const answerMode = subset === 'locomo_native_lifecycle' ? 'llm' : ((answerModeRaw === 'auto' || !answerModeRaw) ? '' : answerModeRaw);
   const generatorModel = String(document.getElementById('bench-generator-model')?.value || '').trim();
-  // deterministic = LoCoMo crawler authors beads; judge = Core Memory's native LLM
-  // bead-field judge (type/entities/claims/temporal). Only meaningful for the
-  // lifecycle suite; the server defaults to deterministic when omitted.
-  const enrichMode = document.getElementById('bench-enrich-mode')?.value || 'deterministic';
-
   const prev = btn.textContent;
   btn.dataset.prevLabel = prev;
   btn.disabled = true;
@@ -4813,7 +4808,7 @@ async function runBenchmark() {
   updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
   addMsg(
     'system',
-    'Starting LOCOMO benchmark (' + subset + ', answer=' + optimisticAnswerMode + (generatorModel ? '/' + generatorModel : '') + (subset === 'locomo_native_lifecycle' ? ', enrich=' + enrichMode : '') + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
+    'Starting LOCOMO benchmark (' + subset + ', answer=' + optimisticAnswerMode + (generatorModel ? '/' + generatorModel : '') + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
       ', preload=' + (preloadEnabled ? preloadMax : 0) + ')...'
   );
   benchmarkProgressEl = addMsg('system', 'Benchmark running...');
@@ -4831,9 +4826,6 @@ async function runBenchmark() {
     };
     if (answerMode) benchmarkPayload.answer_mode = answerMode;
     if (generatorModel) benchmarkPayload.generator_model = generatorModel;
-    if (subset === 'locomo_native_lifecycle' && enrichMode === 'judge') {
-      benchmarkPayload.enrich_mode = 'judge';
-    }
     if (subset === 'locomo_mini' || subset === 'locomo_native_lifecycle') {
       if (locomoSampleMode === 'single' && locomoSampleId) {
         benchmarkPayload.sample_ids = [locomoSampleId];

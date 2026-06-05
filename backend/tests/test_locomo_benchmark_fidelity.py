@@ -40,7 +40,7 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
             corpus = runtime_mod.build_visible_corpus(Path(td))
 
         self.assertTrue(out['ok'])
-        self.assertTrue(out.get('evidence_bead_id'))
+        self.assertNotIn('evidence_bead_id', out)
         self.assertEqual('locomo:conv-1:session:2', out['session_id'])
         self.assertEqual('locomo:conv-1:session:2', captured['session_id'])
         self.assertEqual('locomo:conv-1:D2:7', captured['turn_id'])
@@ -51,16 +51,11 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
         self.assertEqual('Caroline', turns[0].speaker)
         self.assertEqual('I went to the support group on 7 May 2023.', turns[0].content)
         self.assertNotEqual('[LoCoMo transcript replay]', turns[0].content)
-        self.assertEqual(['locomo:conv-1:D2:7', 'D2:7'], captured['metadata']['crawler_updates']['beads_create'][0]['source_turn_ids'])
+        self.assertNotIn('crawler_updates', captured['metadata'])
+        self.assertEqual('llm', captured['metadata']['bead_judge'])
+        self.assertEqual('native_judge', captured['metadata']['_crawler_updates_source'])
         evidence_rows = [r for r in corpus if 'locomo_turn_evidence' in list(((r.get('bead') or {}).get('tags') or []))]
-        self.assertEqual(1, len(evidence_rows))
-        # CM #175: the anchor turn is a `context` bead (evidence now requires
-        # supports_bead_ids); promotion is a boolean flag, status stays operational.
-        self.assertEqual('context', (evidence_rows[0].get('bead') or {}).get('type'))
-        self.assertTrue(bool((evidence_rows[0].get('bead') or {}).get('promoted')))
-        self.assertEqual('open', (evidence_rows[0].get('bead') or {}).get('status'))
-        self.assertEqual(['locomo:conv-1:D2:7', 'D2:7'], evidence_rows[0].get('source_turn_ids'))
-        self.assertEqual('D2:7', ((evidence_rows[0].get('bead') or {}).get('metadata') or {}).get('locomo_dia_id'))
+        self.assertEqual([], evidence_rows)
 
     def test_replay_turn_reports_process_turn_failure(self):
         if runtime_mod is None:
@@ -70,7 +65,7 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
         self.assertFalse(out['ok'])
         self.assertEqual('boom', out['result']['error'])
 
-    def test_evidence_dedupe_requires_full_sample_scoped_turn_id(self):
+    def test_duplicate_dia_ids_keep_sample_scoped_turn_ids_without_direct_beads(self):
         if runtime_mod is None:
             self.skipTest('runtime unavailable')
         row1 = self._row(dia_id='D1:1')
@@ -84,12 +79,18 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
 
         self.assertTrue(out1['ok'])
         self.assertTrue(out2['ok'])
-        self.assertNotEqual(out1.get('evidence_bead_id'), out2.get('evidence_bead_id'))
+        self.assertEqual('locomo:conv-1:D1:1', out1.get('turn_id'))
+        self.assertEqual('locomo:conv-2:D1:1', out2.get('turn_id'))
         evidence_rows = [r for r in corpus if 'locomo_turn_evidence' in list(((r.get('bead') or {}).get('tags') or []))]
-        self.assertEqual(2, len(evidence_rows))
-        source_sets = {tuple(r.get('source_turn_ids') or []) for r in evidence_rows}
-        self.assertIn(('locomo:conv-1:D1:1', 'D1:1'), source_sets)
-        self.assertIn(('locomo:conv-2:D1:1', 'D1:1'), source_sets)
+        self.assertEqual([], evidence_rows)
+
+    def test_replay_turn_requires_stable_dia_id_and_text(self):
+        if runtime_mod is None:
+            self.skipTest('runtime unavailable')
+        with self.assertRaisesRegex(ValueError, 'locomo_missing_dia_id'):
+            runtime_mod._replay_locomo_row({**self._row(), 'dia_id': ''}, root='/tmp/fake')
+        with self.assertRaisesRegex(ValueError, 'locomo_empty_turn_text'):
+            runtime_mod._replay_locomo_row({**self._row(), 'text': ''}, root='/tmp/fake')
 
     def test_ingest_replay_fails_on_partial_turn_errors(self):
         if runtime_mod is None:

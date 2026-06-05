@@ -1,6 +1,5 @@
 import os
 import sys
-import threading
 import unittest
 from pathlib import Path
 
@@ -48,19 +47,19 @@ class TestBenchmarkEnrichMode(unittest.TestCase):
         self.addCleanup(_clear)
 
     def test_judge_mode_sets_threadlocal_and_never_touches_env(self):
-        self.assertFalse(_benchmark_judge_mode_active())
+        self.assertTrue(_benchmark_judge_mode_active())
         with benchmark_enrich_mode("judge"):
             self.assertTrue(_benchmark_judge_mode_active())
             # The directive is request-scoped (metadata), never process env.
             for k in _JUDGE_ENV:
                 self.assertIsNone(os.environ.get(k))
-        self.assertFalse(_benchmark_judge_mode_active())
+        self.assertTrue(_benchmark_judge_mode_active())
         for k in _JUDGE_ENV:
             self.assertIsNone(os.environ.get(k))
 
-    def test_deterministic_mode_is_noop(self):
+    def test_deterministic_mode_request_is_ignored_for_official_locomo(self):
         with benchmark_enrich_mode("deterministic"):
-            self.assertFalse(_benchmark_judge_mode_active())
+            self.assertTrue(_benchmark_judge_mode_active())
             for k in _JUDGE_ENV:
                 self.assertIsNone(os.environ.get(k))
 
@@ -73,31 +72,9 @@ class TestBenchmarkEnrichMode(unittest.TestCase):
         # Per-request directive (#182) enables the judge for this turn only.
         self.assertEqual("llm", md.get("bead_judge"))
 
-    def test_mode_is_thread_scoped_not_global(self):
-        # Codex regression: an in-flight judge run must NOT leak its mode into a
-        # concurrent deterministic run on another thread (which would skip
-        # crawler_updates and corrupt its replay).
-        seen: dict[str, bool] = {}
-        in_judge = threading.Event()
-        release = threading.Event()
-
-        def judge_thread():
-            with benchmark_enrich_mode("judge"):
-                in_judge.set()
-                release.wait(timeout=5)
-                seen["judge_thread_active"] = _benchmark_judge_mode_active()
-
-        t = threading.Thread(target=judge_thread)
-        t.start()
-        self.assertTrue(in_judge.wait(timeout=5))
-        # While the judge run is mid-flight on its thread, this (deterministic)
-        # thread must still see judge mode as inactive.
-        seen["other_thread_active"] = _benchmark_judge_mode_active()
-        release.set()
-        t.join(timeout=5)
-
-        self.assertTrue(seen["judge_thread_active"])      # judge thread: active
-        self.assertFalse(seen["other_thread_active"])     # other thread: NOT active
+    def test_no_mode_state_can_leak_because_official_locomo_is_always_judge(self):
+        self.assertIsNone(set_benchmark_enrich_mode("deterministic"))
+        self.assertTrue(_benchmark_judge_mode_active())
 
 
 class TestJudgeEngagementGuard(unittest.TestCase):
@@ -122,11 +99,11 @@ class TestJudgeEngagementGuard(unittest.TestCase):
         # Should not raise.
         _assert_judge_engaged(enrich_mode="judge", corpus={"claims": 42}, turns_replayed=175)
 
-    def test_deterministic_with_zero_claims_is_fine(self):
+    def test_deterministic_label_no_longer_bypasses_zero_claims_guard(self):
         from app.benchmarks.lifecycle_runner import _assert_judge_engaged
 
-        # Deterministic crawler legitimately produces 0 claims — must not raise.
-        _assert_judge_engaged(enrich_mode="deterministic", corpus={"claims": 0}, turns_replayed=175)
+        with self.assertRaises(Exception):
+            _assert_judge_engaged(enrich_mode="deterministic", corpus={"claims": 0}, turns_replayed=175)
 
     def test_empty_replay_does_not_false_alarm(self):
         from app.benchmarks.lifecycle_runner import _assert_judge_engaged
