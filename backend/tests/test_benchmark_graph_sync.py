@@ -173,6 +173,25 @@ class TestSyncGraphBackend(unittest.TestCase):
             seen_kuzu_paths.append(os.environ.get("CORE_MEMORY_KUZU_PATH"))
             return {"answer": "a", "warnings": [], "raw": {"results": []}}
 
+        def fake_process_turn_finalized(**kw):
+            beads_dir = Path(kw["root"]) / ".beads"
+            beads_dir.mkdir(parents=True, exist_ok=True)
+            (beads_dir / "index.json").write_text(
+                json.dumps({
+                    "beads": {
+                        "bead-judge-1": {
+                            "id": "bead-judge-1",
+                            "session_id": kw["session_id"],
+                            "source_turn_ids": [kw["turn_id"], "D1:1"],
+                            "claims": [{"text": "A said hi.", "confidence": 1.0}],
+                        }
+                    },
+                    "associations": [],
+                }),
+                encoding="utf-8",
+            )
+            return {"ok": True}
+
         conv = BenchmarkConversation(
             benchmark_name="locomo",
             conversation_id="conv-1",
@@ -190,7 +209,7 @@ class TestSyncGraphBackend(unittest.TestCase):
                     root=str(base),
                     conversation=conv,
                     qa_session_mode="isolated",
-                    process_turn_finalized_fn=lambda **kw: {"ok": True},
+                    process_turn_finalized_fn=fake_process_turn_finalized,
                     process_flush_fn=lambda **kw: {"ok": True},
                     run_async_jobs_fn=lambda **kw: {"ok": True},
                     recall_fn=fake_recall,

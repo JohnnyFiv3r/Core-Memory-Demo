@@ -8,6 +8,122 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 class TestBenchmarkRoutesLocomo(unittest.TestCase):
+    def tearDown(self):
+        try:
+            from app.routes import demo as demo_routes
+            demo_routes.SEED_JOBS.clear()
+            demo_routes.SEED_STATUS.clear()
+            demo_routes.SEED_STATUS.update({'active': False, 'kind': '', 'status': 'idle', 'updated_ms': 0, 'message': ''})
+        except Exception:
+            pass
+
+    def test_locomo_seed_eligibility_requires_completed_flushed_seed(self):
+        from app.routes import demo as demo_routes
+
+        demo_routes.SEED_JOBS.clear()
+        self.assertEqual("benchmark_requires_seeded_corpus", demo_routes._locomo_seed_eligibility(sample_ids=["conv-1"])["error"])
+
+        demo_routes.SEED_JOBS["seed-1"] = {
+            "job_id": "seed-1",
+            "status": "completed",
+            "done": True,
+            "updated_ms": 100,
+            "result": {"ok": True, "sample_ids": ["conv-1"], "seeded": 2, "seeded_turns": 2, "requested_turns": 2, "queue_idle": True},
+        }
+        self.assertEqual("benchmark_requires_flushed_corpus", demo_routes._locomo_seed_eligibility(sample_ids=["conv-1"])["error"])
+
+        demo_routes.SEED_JOBS["seed-1"]["result"].update({"final_flush_count": 1, "final_flush_failed": 0})
+        eligibility = demo_routes._locomo_seed_eligibility(sample_ids=["conv-1"])
+        self.assertTrue(eligibility["eligible"])
+        self.assertEqual("seed-1", eligibility["seed_record_id"])
+
+    def test_locomo_benchmark_route_fails_without_seed_record(self):
+        try:
+            from fastapi.testclient import TestClient
+        except Exception as exc:  # pragma: no cover
+            self.skipTest(f"fastapi unavailable: {exc}")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            os.environ["CORE_MEMORY_ROOT"] = str(root / "core-memory")
+            os.environ["CORE_MEMORY_DEMO_BENCHMARK_ROOT"] = str(root / "core-memory-bench")
+            os.environ["CORE_MEMORY_DEMO_ARTIFACTS_ROOT"] = str(root / "core-memory-artifacts")
+            os.environ["ALLOWED_ORIGIN"] = "http://localhost:5173"
+
+            from app.routes import demo as demo_routes
+            demo_routes.SEED_JOBS.clear()
+            old_mode = demo_routes.settings.benchmark_run_mode
+            demo_routes.settings.benchmark_run_mode = "queue"
+            from app.main import app
+
+            try:
+                res = TestClient(app).post("/api/benchmark-run", json={"suite": "locomo_native_lifecycle", "sample_ids": ["conv-1"]})
+            finally:
+                demo_routes.settings.benchmark_run_mode = old_mode
+            self.assertEqual(409, res.status_code)
+            data = res.json()
+            self.assertFalse(bool(data.get("ok")))
+            self.assertEqual("benchmark_requires_seeded_corpus", data.get("error"))
+
+    def test_locomo_benchmark_route_rejects_active_seed_job(self):
+        try:
+            from fastapi.testclient import TestClient
+        except Exception as exc:  # pragma: no cover
+            self.skipTest(f"fastapi unavailable: {exc}")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            os.environ["CORE_MEMORY_ROOT"] = str(root / "core-memory")
+            os.environ["CORE_MEMORY_DEMO_BENCHMARK_ROOT"] = str(root / "core-memory-bench")
+            os.environ["CORE_MEMORY_DEMO_ARTIFACTS_ROOT"] = str(root / "core-memory-artifacts")
+            os.environ["ALLOWED_ORIGIN"] = "http://localhost:5173"
+
+            from app.routes import demo as demo_routes
+            demo_routes.SEED_JOBS.clear()
+            now = demo_routes._now_ms()
+            demo_routes.SEED_JOBS["seed-live"] = {
+                "job_id": "seed-live",
+                "status": "running",
+                "done": False,
+                "started_ms": now,
+                "updated_ms": now,
+            }
+            demo_routes.SEED_STATUS.update({'active': True, 'kind': 'locomo', 'status': 'running', 'updated_ms': now, 'message': 'Seeding LoCoMo'})
+            old_mode = demo_routes.settings.benchmark_run_mode
+            demo_routes.settings.benchmark_run_mode = "queue"
+            from app.main import app
+
+            try:
+                res = TestClient(app).post("/api/benchmark-run", json={"suite": "locomo_native_lifecycle", "sample_ids": ["conv-1"]})
+            finally:
+                demo_routes.settings.benchmark_run_mode = old_mode
+            self.assertEqual(409, res.status_code)
+            data = res.json()
+            self.assertFalse(bool(data.get("ok")))
+            self.assertEqual("seed_in_progress", data.get("error"))
+            self.assertEqual("seed-live", data.get("active_seed_job_id"))
+
+    def test_prune_seed_jobs_reconciles_stale_unfinished_seed_status(self):
+        from app.routes import demo as demo_routes
+
+        demo_routes.SEED_JOBS.clear()
+        old = demo_routes._now_ms() - int((demo_routes.SEED_JOB_TTL_SECONDS * 2 + 601) * 1000)
+        demo_routes.SEED_JOBS["seed-stale"] = {
+            "job_id": "seed-stale",
+            "status": "running",
+            "done": False,
+            "started_ms": old,
+            "updated_ms": old,
+        }
+        demo_routes.SEED_STATUS.update({'active': True, 'kind': 'locomo', 'status': 'running', 'updated_ms': old, 'message': 'old'})
+
+        demo_routes._prune_seed_jobs()
+
+        self.assertNotIn("seed-stale", demo_routes.SEED_JOBS)
+        self.assertFalse(bool(demo_routes.SEED_STATUS.get("active")))
+        self.assertEqual("failed", demo_routes.SEED_STATUS.get("status"))
+        self.assertIn("Stale seed job pruned", str(demo_routes.SEED_STATUS.get("message") or ""))
+
     def test_active_benchmark_state_uses_active_job_not_stale_finished_snapshot(self):
         from app.routes import demo as demo_routes
 

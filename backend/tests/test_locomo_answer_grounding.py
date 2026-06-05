@@ -8,6 +8,17 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.benchmarks.locomo_answer import generate_locomo_answer
 
 
+class _FakeToolResult:
+    output = '{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}'
+
+    def all_messages(self):
+        return [
+            {"parts": [{"tool_name": "search_memory"}]},
+            {"parts": [{"tool_name": "trace_memory"}]},
+            {"parts": [{"tool_name": "hydrate_sources"}]},
+        ]
+
+
 class TestLocomoAnswerGrounding(unittest.TestCase):
     def test_extractive_abstains_when_retrieval_is_weak(self):
         out = generate_locomo_answer(
@@ -26,8 +37,14 @@ class TestLocomoAnswerGrounding(unittest.TestCase):
         self.assertTrue(out["unsupported"])
         self.assertEqual([], out["used_dia_ids"])
 
-    def test_llm_abstains_before_agent_call_when_support_is_weak(self):
-        with patch("app.benchmarks.locomo_answer.Agent") as Agent:
+    def test_llm_mode_calls_agent_even_when_prefetched_context_is_weak(self):
+        with patch("app.benchmarks.locomo_answer.Agent") as Agent, \
+             patch("app.benchmarks.locomo_answer.memory_execute_tool", return_value=lambda: None), \
+             patch("app.benchmarks.locomo_answer.memory_search_tool", return_value=lambda: None), \
+             patch("app.benchmarks.locomo_answer.memory_trace_tool", return_value=lambda: None), \
+             patch("app.benchmarks.locomo_answer.hydrate_bead_sources_tool", return_value=lambda: None):
+            agent = Agent.return_value
+            agent.run = unittest.mock.AsyncMock(return_value=_FakeToolResult())
             out = generate_locomo_answer(
                 mode="llm",
                 root="/tmp/fake",
@@ -43,14 +60,17 @@ class TestLocomoAnswerGrounding(unittest.TestCase):
                     }
                 ],
             )
-        Agent.assert_not_called()
-        self.assertEqual("No information available", out["answer"])
-        self.assertTrue(out["unsupported"])
+        Agent.assert_called_once()
+        self.assertEqual("7 May 2023", out["answer"])
 
-    def test_llm_uses_bounded_retrieved_context_prompt(self):
-        with patch("app.benchmarks.locomo_answer.Agent") as Agent:
+    def test_llm_uses_memory_tool_prompt_not_prefetched_gold_context_prompt(self):
+        with patch("app.benchmarks.locomo_answer.Agent") as Agent, \
+             patch("app.benchmarks.locomo_answer.memory_execute_tool", return_value=lambda: None), \
+             patch("app.benchmarks.locomo_answer.memory_search_tool", return_value=lambda: None), \
+             patch("app.benchmarks.locomo_answer.memory_trace_tool", return_value=lambda: None), \
+             patch("app.benchmarks.locomo_answer.hydrate_bead_sources_tool", return_value=lambda: None):
             agent = Agent.return_value
-            agent.run = unittest.mock.AsyncMock(return_value='{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}')
+            agent.run = unittest.mock.AsyncMock(return_value=_FakeToolResult())
             out = generate_locomo_answer(
                 mode="llm",
                 root="/tmp/fake",
@@ -71,8 +91,10 @@ class TestLocomoAnswerGrounding(unittest.TestCase):
         self.assertEqual("7 May 2023", out["answer"])
         self.assertEqual(["D1:3"], out["used_dia_ids"])
         prompt = str(agent.run.call_args.args[0])
-        self.assertIn("Retrieved evidence:", prompt)
-        self.assertIn("Only answer from the supplied retrieved evidence block", str(Agent.call_args.kwargs.get("system_prompt") or ""))
+        self.assertIn("semantic memory search", prompt)
+        self.assertIn("hydrate/get source turns", prompt)
+        self.assertNotIn("Retrieved evidence:", prompt)
+        self.assertIn("Use Core Memory tools before answering", str(Agent.call_args.kwargs.get("system_prompt") or ""))
 
 
 if __name__ == "__main__":

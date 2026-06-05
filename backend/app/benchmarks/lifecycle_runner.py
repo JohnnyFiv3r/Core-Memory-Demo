@@ -4,7 +4,6 @@ import contextlib
 import json
 import logging
 import os
-import threading
 import shutil
 import time
 from pathlib import Path
@@ -24,7 +23,6 @@ from app.benchmarks.locomo_loader import locomo_samples_to_benchmark_conversatio
 from app.benchmarks.locomo_scoring import compute_evidence_recall
 from app.benchmarks import locomo_faithful
 from core_memory.integrations.api import hydrate_bead_sources
-from app.benchmarks.locomo_turn_crawler import locomo_crawler_callable
 
 logger = logging.getLogger(__name__)
 
@@ -50,32 +48,25 @@ def _turn_text(turn: BenchmarkTurn) -> str:
 
 
 def _benchmark_judge_mode_active() -> bool:
-    """True when this benchmark job should let Core Memory's native LLM bead-field
-    judge author beads (type + entities + claims + because/temporal) instead of
-    supplying deterministic agent crawler_updates.
+    """Official LoCoMo replay always uses Core Memory's native LLM judge.
 
-    Job-scoped via thread-local state (each benchmark job runs in its own worker
-    thread) rather than process-global env, so an in-flight judge run cannot leak
-    its mode into a concurrently-starting deterministic run (which would then skip
-    crawler_updates and corrupt its replay). Set by run_benchmark through
-    benchmark_enrich_mode -> set_benchmark_enrich_mode. This flag only governs the
-    demo side (whether to omit crawler_updates); the engine's judge fallback is
-    enabled per-request via metadata["bead_judge"]="llm" (see
-    _locomo_replay_metadata), not env, so no process-global state is involved.
-    Requires Core Memory >= #182.
+    The old deterministic LoCoMo crawler path is no longer an official/product
+    benchmark mode. Keep this helper for compatibility with older call sites and
+    tests, but make the production-fidelity answer unambiguous: replay omits
+    demo-authored ``crawler_updates`` and supplies metadata["bead_judge"]="llm"
+    for every turn.
     """
-    return str(getattr(_ENRICH_STATE, "mode", "") or "").strip().lower() == "judge"
-
-
-_ENRICH_STATE = threading.local()
+    return True
 
 
 def set_benchmark_enrich_mode(mode: str | None) -> str | None:
-    """Set the calling thread's benchmark enrich mode; returns the prior value
-    (for restore). Thread-local so concurrent benchmark jobs don't interfere."""
-    prev = getattr(_ENRICH_STATE, "mode", None)
-    _ENRICH_STATE.mode = (str(mode).strip().lower() if mode is not None else None)
-    return prev
+    """Compatibility no-op.
+
+    Official LoCoMo no longer supports a deterministic-vs-judge runtime toggle;
+    native LLM judge mode is always active. The context manager in runtime.py can
+    still call this safely while older tests/imports settle.
+    """
+    return None
 
 
 def _locomo_replay_metadata(
@@ -84,20 +75,13 @@ def _locomo_replay_metadata(
     conversation: BenchmarkConversation,
     turn: BenchmarkTurn,
 ) -> dict[str, Any]:
-    """Build request-scoped LoCoMo crawler metadata for one replay turn.
+    """Build production-fidelity LoCoMo replay metadata for one source turn.
 
-    The benchmark must not toggle process-wide Core Memory env flags in a
-    concurrent server. Instead, it computes the LoCoMo crawler updates for this
-    turn and passes them through metadata.crawler_updates, which is already a
-    request-scoped Core Memory contract.
-
-    In judge mode (_benchmark_judge_mode_active) it deliberately omits
-    crawler_updates AND sets metadata["bead_judge"]="llm" so the engine enables
-    its judge fallback and LLM bead-field judge for this request only (Core Memory
-    #182), authoring type/entities/claims/because/temporal natively. The directive
-    is request-scoped — it does not touch process env, so concurrent deterministic
-    jobs are unaffected. That path keys off req.turn_text, which the engine derives
-    from the replayed turn content.
+    Official LoCoMo seeding must exercise the same Core Memory turn-finalization
+    authoring path as the demo. Therefore this metadata deliberately does not
+    include demo-authored deterministic ``crawler_updates``. Instead it sets the
+    request-scoped native judge directive for every turn so Core Memory's LLM
+    bead-field judge authors bead type/entities/claims/because/temporal fields.
     """
 
     metadata: dict[str, Any] = {
@@ -111,35 +95,8 @@ def _locomo_replay_metadata(
         return metadata
 
     metadata["replay_source"] = "locomo"
-    if _benchmark_judge_mode_active():
-        # No agent crawler_updates → engine authors the bead via judge_bead_fields.
-        # The per-request directive (Core Memory #182) enables the judge fallback
-        # + LLM field-judge for this turn only, without any process-global env.
-        metadata["bead_judge"] = "llm"
-        metadata["_crawler_updates_source"] = "native_judge"
-        return metadata
-    try:
-        from core_memory.association.crawler_contract import build_crawler_context
-
-        crawler_context = build_crawler_context(root=str(root), session_id=conversation.session_id, limit=200)
-        req = {
-            "session_id": conversation.session_id,
-            "turn_id": turn.turn_id,
-            "turns": [{"speaker": turn.speaker, "role": turn.role, "content": turn.content}],
-            "speakers": [turn.speaker],
-            "user_query": turn.content if str(turn.role or "") == "user" else "",
-            "assistant_final": turn.content if str(turn.role or "") == "assistant" else "",
-            "turn_text": _turn_text(turn),
-            "source_turn_ref": {"turn_id": turn.turn_id, "session_id": conversation.session_id, "speakers": [turn.speaker]},
-            "metadata": metadata,
-        }
-        updates = locomo_crawler_callable({"root": str(root), "request": req, "crawler_context": crawler_context})
-    except Exception as exc:  # noqa: BLE001 - replay result should surface exact failure
-        raise BenchmarkLifecycleError(f"locomo_crawler_prepare_failed:{exc}") from exc
-
-    if isinstance(updates, dict) and updates:
-        metadata["crawler_updates"] = updates
-        metadata["_crawler_updates_source"] = "locomo_lifecycle"
+    metadata["bead_judge"] = "llm"
+    metadata["_crawler_updates_source"] = "native_judge"
     return metadata
 
 
@@ -671,8 +628,6 @@ def _assert_judge_engaged(*, enrich_mode: str, corpus: dict[str, Any], turns_rep
     _assert_semantic_build_ok for embeddings: a 'judge' run that didn't engage is as
     invalid as a 'required' semantic run that fell back to FastEmbed.
     """
-    if str(enrich_mode or "").strip().lower() != "judge":
-        return
     claims_n = int((corpus or {}).get("claims") or 0)
     if int(turns_replayed or 0) > 0 and claims_n == 0:
         raise BenchmarkLifecycleError(
@@ -965,9 +920,28 @@ def run_pre_qa_flush(
     max_compaction: int = 25,
     max_side_effects: int = 25,
 ) -> dict[str, Any]:
-    """Fire the pre-QA session flush boundary and optionally drain queues."""
+    """Drain final crawler/association work, flush, then drain post-flush work.
+
+    This is the benchmark seed-completion boundary. Official LoCoMo QA may only
+    start after every replayed turn has been finalized, outstanding async
+    crawler/association/semantic work has drained once, ``process_flush`` has
+    constructed the rolling window, post-flush work has drained, and graph sync
+    has succeeded.
+    """
 
     process_flush_fn = process_flush_fn or _default_process_flush()
+    pre_flush_drain: dict[str, Any] | None = None
+    run_async_jobs_fn = run_async_jobs_fn or _default_run_async_jobs()
+    if drain_async:
+        pre_flush_drain = dict(
+            run_async_jobs_fn(
+                root=str(root),
+                run_semantic=True,
+                max_compaction=int(max_compaction),
+                max_side_effects=int(max_side_effects),
+            )
+            or {}
+        )
     flush_tx_id = f"bench-preqa:{conversation.conversation_id}"
     t0 = time.perf_counter()
     out = process_flush_fn(
@@ -980,10 +954,9 @@ def run_pre_qa_flush(
         flush_tx_id=flush_tx_id,
     )
     flush_result = dict(out or {})
-    async_result: dict[str, Any] | None = None
+    post_flush_drain: dict[str, Any] | None = None
     if drain_async:
-        run_async_jobs_fn = run_async_jobs_fn or _default_run_async_jobs()
-        async_result = dict(
+        post_flush_drain = dict(
             run_async_jobs_fn(
                 root=str(root),
                 run_semantic=True,
@@ -998,16 +971,24 @@ def run_pre_qa_flush(
     graph_sync = sync_graph_backend(root)
     snapshot = corpus_snapshot(root)
     warnings = lifecycle_corpus_warnings(snapshot, phase="after_pre_qa_flush")
+    drain_ok = all(
+        bool((row or {}).get("ok", True))
+        for row in [pre_flush_drain, post_flush_drain]
+        if row is not None
+    )
+    graph_ok = bool((graph_sync or {}).get("ok", True))
     return {
         "ran": True,
-        "ok": bool(flush_result.get("ok", True)),
+        "ok": bool(flush_result.get("ok", True)) and drain_ok and graph_ok,
         "flush_tx_id": flush_tx_id,
         "source": "benchmark_pre_qa",
         "token_budget": int(token_budget),
         "max_beads": int(max_beads),
         "latency_ms": round((time.perf_counter() - t0) * 1000.0, 3),
         "result": flush_result,
-        "async_drain": async_result,
+        "pre_flush_drain": pre_flush_drain,
+        "post_flush_drain": post_flush_drain,
+        "async_drain": post_flush_drain,
         "graph_sync": graph_sync,
         "warnings": warnings,
         "corpus_after_pre_qa_flush": snapshot,
@@ -1254,6 +1235,27 @@ def run_lifecycle_conversation(*, root: str | Path, **kwargs: Any) -> dict[str, 
         return _run_lifecycle_conversation_impl(root=root, **kwargs)
 
 
+def _seeded_pre_qa_ready(*, root: str | Path) -> dict[str, Any]:
+    """Prepare an already-seeded eligible corpus for QA without replay/flush.
+
+    The official demo route gates LoCoMo QA on a completed seed job that already
+    drained async work and ran the final flush. Benchmark QA must therefore read
+    that eligible corpus, not replay the selected samples into a fresh root. We
+    only sync graph-backend state here so causal traversal sees the existing
+    index associations in hosted Kuzu/Neo4j deployments.
+    """
+    graph_sync = sync_graph_backend(root)
+    snapshot = corpus_snapshot(root)
+    return {
+        "ran": False,
+        "ok": bool((graph_sync or {}).get("ok", True)),
+        "source": "eligible_seed_record",
+        "graph_sync": graph_sync,
+        "warnings": lifecycle_corpus_warnings(snapshot, phase="seeded_corpus"),
+        "corpus_after_pre_qa_flush": snapshot,
+    }
+
+
 def _run_lifecycle_conversation_impl(
     *,
     root: str | Path,
@@ -1272,6 +1274,7 @@ def _run_lifecycle_conversation_impl(
     progress: Any | None = None,
     progress_total: int | None = None,
     progress_completed_offset: int = 0,
+    qa_only_seeded: bool = False,
 ) -> dict[str, Any]:
     flags = shortcut_flags or BenchmarkShortcutFlags()
     assert_lifecycle_faithful_mode(dataset_mode=dataset_mode, shortcut_flags=flags)
@@ -1279,22 +1282,40 @@ def _run_lifecycle_conversation_impl(
     if qa_session_mode_name not in {"shared", "isolated"}:
         raise BenchmarkLifecycleError("qa_session_mode must be shared or isolated")
 
-    replay = replay_conversation_turns(
-        root=root,
-        conversation=conversation,
-        process_turn_finalized_fn=process_turn_finalized_fn,
-        progress=progress,
-        progress_completed=progress_completed_offset,
-        progress_total=progress_total if progress_total is not None else len(conversation.qa_cases),
-        conversation_index=int((conversation.metadata or {}).get("conversation_index") or 1),
-        conversation_total=int((conversation.metadata or {}).get("conversation_total") or 1),
-    )
-    pre_qa_flush = run_pre_qa_flush(
-        root=root,
-        conversation=conversation,
-        process_flush_fn=process_flush_fn,
-        run_async_jobs_fn=run_async_jobs_fn,
-    )
+    if bool(qa_only_seeded):
+        seeded_snapshot = corpus_snapshot(root)
+        replay = {
+            "ok": True,
+            "conversation_id": conversation.conversation_id,
+            "session_id": conversation.session_id,
+            "turns_replayed": 0,
+            "seeded_turns": len(conversation.turns),
+            "capture_hook_calls": 0,
+            "calls": [],
+            "errors": [],
+            "warnings": [],
+            "corpus_after_replay": seeded_snapshot,
+            "skipped_replay": True,
+            "replay_source": "eligible_seed_record",
+        }
+        pre_qa_flush = _seeded_pre_qa_ready(root=root)
+    else:
+        replay = replay_conversation_turns(
+            root=root,
+            conversation=conversation,
+            process_turn_finalized_fn=process_turn_finalized_fn,
+            progress=progress,
+            progress_completed=progress_completed_offset,
+            progress_total=progress_total if progress_total is not None else len(conversation.qa_cases),
+            conversation_index=int((conversation.metadata or {}).get("conversation_index") or 1),
+            conversation_total=int((conversation.metadata or {}).get("conversation_total") or 1),
+        )
+        pre_qa_flush = run_pre_qa_flush(
+            root=root,
+            conversation=conversation,
+            process_flush_fn=process_flush_fn,
+            run_async_jobs_fn=run_async_jobs_fn,
+        )
     semantic_build: dict[str, Any] = {}
     try:
         semantic_build = _build_semantic_index(root)
@@ -1399,15 +1420,14 @@ def _run_lifecycle_conversation_impl(
     scores = aggregate_lifecycle_effort_scores(qa_results)
     corpus_after_qa = corpus_snapshot(root)
 
-    # Record the actual enrich mode this job ran under (thread-local), so the
-    # report is self-describing — a judge run and a deterministic run are
-    # otherwise indistinguishable in the artifacts.
-    enrich_mode = "judge" if _benchmark_judge_mode_active() else "deterministic"
+    # Official LoCoMo always uses the native LLM judge. Keep the field so older
+    # reports/UI can display the authoring mode, but there is no product toggle.
+    enrich_mode = "judge"
 
     extra_warnings: list[str] = []
 
     # FAIL CLOSED if a judge run authored nothing (see _assert_judge_engaged).
-    turns_replayed = int(replay.get("turns_replayed") or 0)
+    turns_replayed = int(replay.get("turns_replayed") or replay.get("seeded_turns") or 0)
     _assert_judge_engaged(
         enrich_mode=enrich_mode,
         corpus=corpus_after_qa,
@@ -1428,10 +1448,8 @@ def _run_lifecycle_conversation_impl(
             conversation.conversation_id,
         )
 
-    # Diagnostic (not fatal): bead type skew. The deterministic crawler authors
-    # type='context'; the engine's causal_crawler then re-types most beads to a
-    # single type (observed: ~all 'reflection'/meta_analysis), which is implausible
-    # for chat and degrades type-aware ranking. Flag when one type dominates.
+    # Diagnostic (not fatal): bead type skew. A production-fidelity LLM judge run
+    # should produce varied types; flag when one type dominates.
     skew = _dominant_bead_type(root)
     if skew is not None:
         dom_type, share = skew
@@ -1439,8 +1457,7 @@ def _run_lifecycle_conversation_impl(
             extra_warnings.append(f"after_qa:bead_type_skew:{dom_type}:{round(share, 2)}")
             logger.warning(
                 "benchmark bead type skew: %.0f%% of beads typed '%s' in conversation=%s "
-                "(engine causal_crawler re-typing); type-aware ranking is degraded. "
-                "Judge mode (Core Memory #182) assigns real per-bead types.",
+                "type-aware ranking is likely degraded.",
                 share * 100.0, dom_type, conversation.conversation_id,
             )
 
@@ -1460,6 +1477,8 @@ def _run_lifecycle_conversation_impl(
             "lifecycle_faithful": dataset_mode == "locomo_native_lifecycle" and not flags.any_enabled(),
             "conversations": 1,
             "turns_replayed": int(replay.get("turns_replayed") or 0),
+            "seeded_turns": int(replay.get("seeded_turns") or 0),
+            "qa_only_seeded": bool(qa_only_seeded),
             "replay_turns_original": int((conversation.metadata or {}).get("replay_turns_original") or len(conversation.turns)),
             "replay_turns_required": int((conversation.metadata or {}).get("replay_turns_required") or len(conversation.turns)),
             "bounded_replay": bool((conversation.metadata or {}).get("bounded_replay")),
@@ -1594,6 +1613,7 @@ def run_locomo_lifecycle_suite(
     answer_mode: str = "none",
     generator_model: str | None = None,
     progress: Any | None = None,
+    qa_only_seeded: bool = False,
 ) -> dict[str, Any]:
     """Run faithful LoCoMo lifecycle benchmark over selected samples.
 
@@ -1622,7 +1642,7 @@ def run_locomo_lifecycle_suite(
     for idx, conversation in enumerate(conversations, start=1):
         conversation.metadata["conversation_index"] = idx
         conversation.metadata["conversation_total"] = len(conversations)
-        _emit_progress(progress, completed_qa, total_qa, None, {"status": "replaying", "phase": "locomo_lifecycle", "conversation_index": idx, "conversations": len(conversations), "conversation_id": conversation.conversation_id})
+        _emit_progress(progress, completed_qa, total_qa, None, {"status": "qa_seeded" if bool(qa_only_seeded) else "replaying", "phase": "locomo_lifecycle", "conversation_index": idx, "conversations": len(conversations), "conversation_id": conversation.conversation_id})
         out = run_lifecycle_conversation(
             root=root,
             conversation=conversation,
@@ -1640,6 +1660,7 @@ def run_locomo_lifecycle_suite(
             progress=progress,
             progress_total=total_qa,
             progress_completed_offset=completed_qa,
+            qa_only_seeded=qa_only_seeded,
         )
         results.append(out)
         completed_qa += int(((out.get("lifecycle") or {}).get("qa_cases") or 0))
@@ -1666,10 +1687,12 @@ def run_locomo_lifecycle_suite(
         "dataset_mode": dataset_mode,
         "lifecycle": {
             "dataset_mode": dataset_mode,
-            "enrich_mode": next((str((r.get("lifecycle") or {}).get("enrich_mode") or "") for r in results if (r.get("lifecycle") or {}).get("enrich_mode")), "deterministic"),
+            "enrich_mode": next((str((r.get("lifecycle") or {}).get("enrich_mode") or "") for r in results if (r.get("lifecycle") or {}).get("enrich_mode")), "judge"),
             "lifecycle_faithful": dataset_mode == "locomo_native_lifecycle" and not flags.any_enabled(),
             "conversations": len(conversations),
             "turns_replayed": sum(int(((r.get("lifecycle") or {}).get("turns_replayed") or 0)) for r in results),
+            "seeded_turns": sum(int(((r.get("lifecycle") or {}).get("seeded_turns") or 0)) for r in results),
+            "qa_only_seeded": bool(qa_only_seeded),
             "replay_turns_original": sum(int(((r.get("lifecycle") or {}).get("replay_turns_original") or 0)) for r in results),
             "replay_turns_required": sum(int(((r.get("lifecycle") or {}).get("replay_turns_required") or 0)) for r in results),
             "bounded_replay": any(bool((r.get("lifecycle") or {}).get("bounded_replay")) for r in results),

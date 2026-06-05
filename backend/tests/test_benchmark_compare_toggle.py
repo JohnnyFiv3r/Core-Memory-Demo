@@ -124,6 +124,22 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         old_mode = demo_routes.settings.benchmark_run_mode
         demo_routes.settings.benchmark_run_mode = 'queue'
         try:
+            demo_routes.SEED_JOBS.clear()
+            demo_routes.SEED_JOBS['seed-1'] = {
+                'job_id': 'seed-1',
+                'status': 'completed',
+                'done': True,
+                'updated_ms': demo_routes._now_ms(),
+                'result': {
+                    'ok': True,
+                    'sample_ids': [],
+                    'seeded_turns': 1,
+                    'requested_turns': 1,
+                    'queue_idle': True,
+                    'final_flush_count': 1,
+                    'final_flush_failed': 0,
+                },
+            }
             with patch.dict(demo_routes.os.environ, {'CORE_MEMORY_VECTOR_BACKEND': 'qdrant', 'CORE_MEMORY_GRAPH_BACKEND': 'kuzu'}), \
                  patch.object(demo_routes, '_prune_benchmark_jobs'), \
                  patch.object(demo_routes.benchmark_store, 'read_active_job', return_value=None), \
@@ -131,6 +147,7 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
                 out = await demo_routes.benchmark_run(req)
         finally:
             demo_routes.settings.benchmark_run_mode = old_mode
+            demo_routes.SEED_JOBS.clear()
         self.assertTrue(out['ok'])
         kwargs = enqueue.call_args.kwargs['kwargs']
         self.assertEqual('clean', kwargs['root_mode'])

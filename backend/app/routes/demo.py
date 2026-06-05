@@ -298,6 +298,7 @@ def _prune_seed_jobs() -> None:
     now = _now_ms()
     ttl_ms = int(SEED_JOB_TTL_SECONDS * 1000)
     stale: list[str] = []
+    stale_unfinished: list[str] = []
     for job_id, row in list(SEED_JOBS.items()):
         updated = int((row or {}).get('updated_ms') or 0)
         done = bool((row or {}).get('done'))
@@ -306,8 +307,30 @@ def _prune_seed_jobs() -> None:
             stale.append(job_id)
         elif not done and age_ms > max(ttl_ms * 2, 10 * 60_000):
             stale.append(job_id)
+            stale_unfinished.append(job_id)
     for job_id in stale:
         SEED_JOBS.pop(job_id, None)
+    if stale_unfinished:
+        _set_seed_status(
+            active=False,
+            kind=str(SEED_STATUS.get('kind') or 'locomo'),
+            status='failed',
+            message=f"Stale seed job pruned: {stale_unfinished[-1]}",
+        )
+    elif bool(SEED_STATUS.get('active')) and not any(not bool((row or {}).get('done')) for row in SEED_JOBS.values()):
+        _set_seed_status(
+            active=False,
+            kind=str(SEED_STATUS.get('kind') or 'locomo'),
+            status='failed',
+            message='Seed status reconciled: no active seed job remains.',
+        )
+
+
+def _active_seed_job() -> dict[str, Any] | None:
+    active = [dict(row or {}) for row in SEED_JOBS.values() if isinstance(row, dict) and not bool(row.get('done'))]
+    if not active:
+        return None
+    return max(active, key=lambda r: int((r or {}).get('updated_ms') or (r or {}).get('started_ms') or 0))
 
 
 def _seed_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> None:
@@ -355,6 +378,51 @@ def _seed_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]
     if bool(row.get('done')) and isinstance(row.get('result'), dict):
         out['result'] = dict(row['result'])
     return out
+
+
+def _locomo_seed_eligibility(*, sample_ids: list[str] | None = None) -> dict[str, Any]:
+    """Return the latest completed LoCoMo seed record eligible for QA-only benchmark.
+
+    Official LoCoMo benchmark runs are no longer allowed to silently seed inside
+    the Run Benchmark action. The route must find an explicit completed seed job
+    with final drain + final flush evidence before queuing QA.
+    """
+    requested = sorted({str(x).strip() for x in list(sample_ids or []) if str(x).strip()})
+    candidates: list[dict[str, Any]] = []
+    for row in list(SEED_JOBS.values()):
+        if not isinstance(row, dict) or str(row.get('status') or '') != 'completed' or not bool(row.get('done')):
+            continue
+        result = row.get('result') if isinstance(row.get('result'), dict) else {}
+        if not bool((result or {}).get('ok')):
+            continue
+        seeded_samples = sorted({str(x).strip() for x in list((result or {}).get('sample_ids') or []) if str(x).strip()})
+        if requested and not set(requested).issubset(set(seeded_samples)):
+            continue
+        candidates.append(row)
+    if not candidates:
+        return {
+            'eligible': False,
+            'error': 'benchmark_requires_seeded_corpus',
+            'sample_ids': requested,
+            'reason': 'No completed LoCoMo seed job matches the requested samples.',
+        }
+    row = max(candidates, key=lambda r: int((r or {}).get('updated_ms') or 0))
+    result = dict(row.get('result') or {})
+    if int(result.get('failed_turns') or 0) > 0 or int(result.get('seeded_turns') or result.get('seeded') or 0) < int(result.get('requested_turns') or 0):
+        return {'eligible': False, 'error': 'benchmark_requires_complete_seed', 'seed_job_id': str(row.get('job_id') or ''), 'seed': result}
+    if bool(result.get('drain_failed')) or bool(result.get('cancelled')) or not bool(result.get('queue_idle', True)):
+        return {'eligible': False, 'error': 'benchmark_requires_drained_corpus', 'seed_job_id': str(row.get('job_id') or ''), 'seed': result}
+    if int(result.get('final_flush_count') or 0) <= 0 or int(result.get('final_flush_failed') or 0) > 0:
+        return {'eligible': False, 'error': 'benchmark_requires_flushed_corpus', 'seed_job_id': str(row.get('job_id') or ''), 'seed': result}
+    return {
+        'eligible': True,
+        'seed_job_id': str(row.get('job_id') or ''),
+        'seed_record_id': str(row.get('job_id') or ''),
+        'sample_ids': sorted({str(x).strip() for x in list(result.get('sample_ids') or []) if str(x).strip()}),
+        'seeded_turns': int(result.get('seeded_turns') or result.get('seeded') or 0),
+        'final_flush_count': int(result.get('final_flush_count') or 0),
+        'seed': result,
+    }
 
 
 def _benchmark_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
@@ -1662,12 +1730,56 @@ async def benchmark_run(request: Request):
     retrieval_pipeline = str((body or {}).get('retrieval_pipeline') or 'execute_trace').strip().lower() or 'execute_trace'
     if retrieval_pipeline not in {'execute_trace', 'execute_trace_hydrate', 'forced_three_phase', 'three_phase'}:
         retrieval_pipeline = 'execute_trace'
-    # enrich_mode='judge' uses Core Memory's native LLM bead-field judge to author
-    # typed/entity/claim-rich beads during replay (one LLM call per turn; requires
-    # the #179 pin + a provider key). Default keeps the deterministic crawler.
-    enrich_mode = str((body or {}).get('enrich_mode') or 'deterministic').strip().lower() or 'deterministic'
-    if enrich_mode not in {'deterministic', 'judge'}:
-        enrich_mode = 'deterministic'
+    # Official LoCoMo always uses Core Memory's native LLM bead-field judge.
+    # Ignore the retired deterministic toggle even if an older frontend sends it.
+    enrich_mode = 'judge'
+
+    _prune_benchmark_jobs()
+    run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
+    if run_mode in {'disabled', 'off'}:
+        return JSONResponse({'ok': False, 'job_id': None, 'status': 'failed', 'error': 'benchmark_run_disabled'}, status_code=503)
+    if suite == 'locomo_native_lifecycle' and run_mode not in {'queue', 'queued', 'cron'}:
+        return JSONResponse(
+            {
+                'ok': False,
+                'job_id': None,
+                'status': 'failed',
+                'error': 'locomo_benchmark_requires_cron_queue',
+                'detail': 'LoCoMo lifecycle benchmarks must be queued for the 8GB cron worker; refusing to run in the 2GB web service.',
+                'configured_run_mode': run_mode,
+            },
+            status_code=503,
+        )
+
+    seed_eligibility: dict[str, Any] | None = None
+    if suite == 'locomo_native_lifecycle':
+        _prune_seed_jobs()
+        active_seed = _active_seed_job()
+        if active_seed or bool(SEED_STATUS.get('active')):
+            active_seed_id = str((active_seed or {}).get('job_id') or '')
+            return JSONResponse(
+                {
+                    'ok': False,
+                    'job_id': None,
+                    'status': 'failed',
+                    'error': 'seed_in_progress',
+                    'active_seed_job_id': active_seed_id,
+                    'seed': dict(SEED_STATUS),
+                },
+                status_code=409,
+            )
+        seed_eligibility = _locomo_seed_eligibility(sample_ids=sample_ids)
+        if not bool(seed_eligibility.get('eligible')):
+            return JSONResponse(
+                {
+                    'ok': False,
+                    'job_id': None,
+                    'status': 'failed',
+                    'error': str(seed_eligibility.get('error') or 'benchmark_requires_seeded_corpus'),
+                    'seed_eligibility': seed_eligibility,
+                },
+                status_code=409,
+            )
 
     kwargs = dict(
         suite=suite,
@@ -1695,26 +1807,11 @@ async def benchmark_run(request: Request):
         retrieval_pipeline=retrieval_pipeline,
         qa_session_mode=qa_session_mode,
         enrich_mode=enrich_mode,
+        seed_record=dict(seed_eligibility or {}) if seed_eligibility else None,
     )
 
-    _prune_benchmark_jobs()
-    run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
     prior_job_id = ACTIVE_BENCHMARK_JOB_ID
     prior_row = BENCHMARK_JOBS.get(prior_job_id or '') if prior_job_id else None
-    if run_mode in {'disabled', 'off'}:
-        return JSONResponse({'ok': False, 'job_id': None, 'status': 'failed', 'error': 'benchmark_run_disabled'}, status_code=503)
-    if suite == 'locomo_native_lifecycle' and run_mode not in {'queue', 'queued', 'cron'}:
-        return JSONResponse(
-            {
-                'ok': False,
-                'job_id': None,
-                'status': 'failed',
-                'error': 'locomo_benchmark_requires_cron_queue',
-                'detail': 'LoCoMo lifecycle benchmarks must be queued for the 8GB cron worker; refusing to run in the 2GB web service.',
-                'configured_run_mode': run_mode,
-            },
-            status_code=503,
-        )
     if run_mode in {'queue', 'queued', 'cron', 'external', 'dispatch'} and isinstance(prior_row, dict) and not bool(prior_row.get('done')):
         prior_row['updated_ms'] = _now_ms()
         return {

@@ -32,8 +32,10 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
             "lifecycle": {
                 "dataset_mode": "locomo_native_lifecycle",
                 "lifecycle_faithful": True,
-                "turns_replayed": 2,
-                "capture_hook_calls": 2,
+                "turns_replayed": 0,
+                "seeded_turns": 2,
+                "qa_only_seeded": True,
+                "capture_hook_calls": 0,
                 "qa_cases": 1,
                 "retrieval_efforts_per_qa": ["low", "medium", "high"],
             },
@@ -80,8 +82,8 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
         }
 
         with tempfile.TemporaryDirectory() as td, \
-            patch.object(runtime_mod.settings, "core_memory_demo_benchmark_root", td), \
-            patch.object(runtime_mod.settings, "core_memory_root", td), \
+            patch.object(runtime_mod.settings, "core_memory_demo_benchmark_root", str(Path(td) / "bench")), \
+            patch.object(runtime_mod.settings, "core_memory_root", str(Path(td) / "seeded-live-root")), \
             patch.object(runtime_mod.settings, "core_memory_demo_artifacts_root", str(Path(td) / "artifacts")), \
             patch.object(runtime_mod, "build_locomo_suite_metadata", return_value=(dataset_meta, selected_cases, selected_samples)), \
             patch.object(runtime_mod, "run_locomo_lifecycle_suite", return_value=lifecycle_report) as lifecycle_mock, \
@@ -95,6 +97,7 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
                 suite="locomo_native_lifecycle",
                 qa_limit=1,
                 qa_session_mode="isolated",
+                seed_record={"seed_record_id": "seed-1", "seeded_turns": 2, "final_flush_count": 1},
             )
 
         self.assertTrue(out["ok"])
@@ -103,8 +106,10 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
         self.assertEqual("isolated", out["report"]["config"]["qa_session_mode"])
         self.assertEqual(["low", "medium", "high"], out["report"]["config"]["retrieval_efforts"])
         self.assertTrue(out["report"]["lifecycle"]["lifecycle_faithful"])
-        self.assertEqual(2, out["report"]["lifecycle"]["turns_replayed"])
-        self.assertEqual(2, out["report"]["lifecycle"]["capture_hook_calls"])
+        self.assertEqual(0, out["report"]["lifecycle"]["turns_replayed"])
+        self.assertEqual(2, out["report"]["lifecycle"]["seeded_turns"])
+        self.assertTrue(out["report"]["lifecycle"]["qa_only_seeded"])
+        self.assertEqual(0, out["report"]["lifecycle"]["capture_hook_calls"])
         self.assertEqual(1, out["report"]["lifecycle"]["qa_cases"])
         self.assertEqual(["low", "medium", "high"], out["report"]["lifecycle"]["retrieval_efforts_per_qa"])
         self.assertFalse(any(bool(v) for v in out["report"]["shortcut_guards"].values()))
@@ -128,6 +133,10 @@ class TestLocomoLifecycleRuntime(unittest.TestCase):
         self.assertEqual(selected_samples, kwargs["samples"])
         self.assertEqual(selected_cases, kwargs["qa_cases"])
         self.assertEqual("isolated", kwargs["qa_session_mode"])
+        self.assertTrue(kwargs["qa_only_seeded"])
+        self.assertEqual(str(Path(td) / "seeded-live-root"), str(kwargs["root"]))
+        self.assertEqual("eligible_seed_record_qa_only", out["report"]["ingestion"]["ingest_path"])
+        self.assertEqual("seed-1", out["report"]["config"]["seed_record_id"])
 
     def test_bounded_replay_parses_whitespace_delimited_evidence_refs(self):
         turns = [

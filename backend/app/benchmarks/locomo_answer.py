@@ -10,6 +10,19 @@ try:
 except Exception:  # pragma: no cover
     Agent = None  # type: ignore
 
+try:
+    from core_memory.integrations.pydanticai.memory_tools import (
+        hydrate_bead_sources_tool,
+        memory_execute_tool,
+        memory_search_tool,
+        memory_trace_tool,
+    )
+except Exception:  # pragma: no cover
+    hydrate_bead_sources_tool = None  # type: ignore
+    memory_execute_tool = None  # type: ignore
+    memory_search_tool = None  # type: ignore
+    memory_trace_tool = None  # type: ignore
+
 
 def _support_strength(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
     # Decide only whether there is *anything* worth asking the LLM about. The
@@ -157,53 +170,123 @@ def _format_retrieved_context(retrieved_context: list[dict[str, Any]], *, limit:
     return "\n\n".join(lines).strip()
 
 
+def _tool_call_name(value: Any) -> str:
+    if isinstance(value, dict):
+        for key in ("tool_name", "name", "function", "tool"):
+            if str(value.get(key) or "").strip():
+                return str(value.get(key) or "").strip()
+    for key in ("tool_name", "name", "function_name"):
+        if str(getattr(value, key, "") or "").strip():
+            return str(getattr(value, key) or "").strip()
+    return ""
+
+
+def extract_tool_transcript(result: Any) -> list[dict[str, Any]]:
+    """Best-effort PydanticAI tool-call transcript extraction.
+
+    Kept permissive for tests and provider/version drift: callers may pass a
+    result object, a dict payload, or a pre-shaped list of tool call rows.
+    """
+    if isinstance(result, list):
+        return [dict(x) for x in result if isinstance(x, dict)]
+    if isinstance(result, dict):
+        rows = result.get("tool_calls") or result.get("tool_transcript") or result.get("tools") or []
+        return [dict(x) for x in rows if isinstance(x, dict)] if isinstance(rows, list) else []
+    rows: list[dict[str, Any]] = []
+    messages_obj = None
+    all_messages = getattr(result, "all_messages", None)
+    if callable(all_messages):
+        try:
+            messages_obj = all_messages()
+        except Exception:
+            messages_obj = None
+    if messages_obj is None:
+        messages_obj = getattr(result, "messages", None) or getattr(result, "_messages", None) or []
+    for msg in list(messages_obj or []):
+        parts = getattr(msg, "parts", None)
+        if parts is None and isinstance(msg, dict):
+            parts = msg.get("parts") or []
+        for part in list(parts or []):
+            name = _tool_call_name(part)
+            if not name:
+                continue
+            args = getattr(part, "args", None)
+            if args is None and isinstance(part, dict):
+                args = part.get("args") or part.get("arguments")
+            rows.append({"tool_name": name, "args": args})
+    return rows
+
+
+def validate_required_tool_phases(tool_transcript: list[dict[str, Any]]) -> dict[str, Any]:
+    names = [str(_tool_call_name(row)).strip() for row in list(tool_transcript or [])]
+    names_l = [n.lower() for n in names if n]
+    phases = {
+        "search": any("search" in n or "execute_memory_request" == n for n in names_l),
+        "trace": any("trace" in n for n in names_l),
+        "hydrate": any("hydrate" in n or "get_turn" in n or "source" in n for n in names_l),
+    }
+    missing = [phase for phase, ok in phases.items() if not ok]
+    if missing:
+        return {"ok": False, "error": "required_tool_phase_missing", "missing": missing, "tool_names": names}
+    phase_positions = {
+        "search": next(i for i, n in enumerate(names_l) if "search" in n or "execute_memory_request" == n),
+        "trace": next(i for i, n in enumerate(names_l) if "trace" in n),
+        "hydrate": next(i for i, n in enumerate(names_l) if "hydrate" in n or "get_turn" in n or "source" in n),
+    }
+    if not (phase_positions["search"] < phase_positions["trace"] < phase_positions["hydrate"]):
+        return {"ok": False, "error": "required_tool_phase_order_invalid", "positions": phase_positions, "tool_names": names}
+    return {"ok": True, "phases": phases, "positions": phase_positions, "tool_names": names}
+
+
 async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_id: str, retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
-    support = _support_strength(retrieved_context)
-    if not bool(support.get("supported")):
-        return {
-            "answer": "No information available",
-            "used_dia_ids": [],
-            "confidence": "low",
-            "unsupported": True,
-        }
-    context_block = _format_retrieved_context(retrieved_context)
     context_prompt = (
-        "Answer the question based on the retrieved conversation context below. "
-        "Use each evidence row's session_date_time to resolve relative dates like yesterday, last week, today, or next month into the absolute date/month/year when possible. "
+        "Answer this LoCoMo benchmark question using Core Memory tools only. "
+        "Before answering, you MUST perform these phases in order: "
+        "(1) semantic memory search/execute, (2) causal trace with max_depth up to 6, "
+        "and (3) hydrate/get source turns for candidate and traced beads. "
+        "Use hydrated source-turn text and dates to resolve relative dates like yesterday, last week, today, or next month into absolute dates when possible. "
         "Answer with the SHORTEST possible span that directly answers the question "
         "— just the fact itself (a date, name, place, number, or short list), with no "
         "preamble, restatement of the question, or full sentence. For example answer "
         "'7 May 2023', not 'She went on 7 May 2023'. If the question asks for several "
         "items, give them as a comma-separated list. "
-        "If the retrieved context does not contain enough information to answer, "
+        "If hydrated memory context does not contain enough information to answer, "
         "respond exactly with 'No information available'.\n\n"
         f"Question: {question}\n\n"
-        f"Retrieved evidence:\n{context_block}\n\n"
         "Return strict JSON with keys: answer, used_dia_ids, confidence, unsupported. "
-        "Only cite dia_ids that appear in the retrieved context."
+        "Only cite dia_ids that appear in hydrated source context."
     )
     if Agent is None:
         raise RuntimeError("pydantic_ai_unavailable")
-    # Important benchmark isolation: answer generation must not run through
-    # run_with_memory()/run_agent_for_root on the benchmark root.  That path
-    # writes the generated answer back into Core Memory, marks the semantic
-    # index dirty between QA cases, and can cause later retrieval to return a
-    # previous answer JSON as evidence.  This answerer is deliberately a plain
-    # no-tools LLM call over the already-retrieved evidence block.
+    if not all(callable(tool) for tool in [memory_execute_tool, memory_search_tool, memory_trace_tool, hydrate_bead_sources_tool]):
+        raise RuntimeError("core_memory_pydanticai_tools_unavailable")
     agent = Agent(
         model_id,
         system_prompt=(
-            "You are a conversational memory benchmark answerer. "
-            "Only answer from the supplied retrieved evidence block. "
-            "Do not use tools, memory, prior answers, or unstated knowledge. "
+            "You are a conversational memory benchmark answerer. Use Core Memory tools before answering. "
+            "Do not use unstated knowledge, prior answers, or benchmark gold labels. "
             "Answer with the shortest exact span (a date, name, place, number, or "
             "comma-separated list) — never a full sentence or a restatement of the "
             "question. If the evidence is insufficient, abstain with 'No information available'."
         ),
+        tools=[
+            memory_execute_tool(root=root),
+            memory_search_tool(root=root),
+            memory_trace_tool(root=root),
+            hydrate_bead_sources_tool(root=root),
+        ],
     )
     result = await agent.run(context_prompt)
     raw = str(getattr(result, "output", None) or getattr(result, "data", None) or result).strip()
-    return _normalize_answer_payload(raw)
+    tool_transcript = extract_tool_transcript(result)
+    phase_validation = validate_required_tool_phases(tool_transcript)
+    if not bool(phase_validation.get("ok")):
+        raise RuntimeError(str(phase_validation.get("error") or "required_tool_phase_missing"))
+    out = _normalize_answer_payload(raw)
+    out["tool_transcript"] = tool_transcript
+    out["tool_phase_validation"] = phase_validation
+    out["agent_model"] = model_id
+    return out
 
 
 def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str | None = None, qa: dict[str, Any], retrieved_context: list[dict[str, Any]], generator_model: str | None = None) -> dict[str, Any]:

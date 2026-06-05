@@ -447,106 +447,19 @@ def _locomo_core_session_id(sample_id: str, session_index: int | str | None = No
     return f"{base}:session:{int(session_index or 0)}"
 
 
-def _locomo_turn_detail(row: dict[str, Any], *, display: str) -> str:
-    session_date = str(row.get("session_date_time") or "").strip()
-    detail = f"Session date: {session_date}\n\n{display}" if session_date else display
-    caption = str(row.get("blip_caption") or "").strip()
-    if caption:
-        detail = f"{detail}\n\nImage caption: {caption}".strip()
-    return detail
-
-
-def _ensure_locomo_evidence_bead(*, root: str, row: dict[str, Any], session_id: str, turn_id: str, dia_id: str, display: str) -> str:
-    """Persist one retrievable Core Memory evidence bead per LoCoMo turn.
-
-    The benchmark must exercise Core Memory retrieval over replayed transcript
-    memory, not over answer-key shortcuts.  Turn finalization + flush may compact
-    ordinary rolling-window beads down to session summaries, so this benchmark
-    adapter also writes a durable promoted evidence bead whose only payload is
-    the observed transcript turn and native `source_turn_ids` provenance.
-    """
-    target_root = str(root or settings.core_memory_root)
-    sample_id = str(row.get("sample_id") or "").strip() or "unknown"
-    speaker = str(row.get("speaker") or "").strip()
-    session_index = int(row.get("session_index") or 0)
-    turn_index = int(row.get("turn_index") or 0)
-    detail = _locomo_turn_detail(row, display=display)
-    store = MemoryStore(target_root)
-
-    # Idempotency for local replays/tests: do not duplicate the same evidence
-    # bead if the turn is replayed in an existing root.
-    try:
-        existing = store._read_json(store.beads_dir / "index.json")
-        for bid, bead in dict((existing.get("beads") or {})).items():
-            source_ids = {str(x).strip() for x in (bead or {}).get("source_turn_ids") or [] if str(x).strip()}
-            # LoCoMo dia_id values (for example D1:1) are reused across
-            # conversations, so idempotency must be scoped to the full
-            # sample-qualified turn_id.
-            if turn_id in source_ids:
-                tags = {str(x) for x in (bead or {}).get("tags") or []}
-                if "locomo_turn_evidence" in tags:
-                    return str(bid)
-    except Exception:
-        pass
-
-    return str(
-        store.add_bead(
-            # CM #175: a raw replay turn is `context`, not `evidence` — evidence now
-            # requires non-empty supports_bead_ids (a bead it backs), which a bare
-            # conversational turn has none of. context only requires entities, always
-            # populated below via the sample anchor. The "locomo_turn_evidence" tag is
-            # kept for idempotency/lookup stability; recall scores on dia_ids, not type.
-            type="context",
-            title=display[:160] or "LoCoMo replay turn",
-            summary=[display[:240] or "LoCoMo replay turn"],
-            detail=detail,
-            session_id=session_id,
-            source_turn_ids=[turn_id, dia_id],
-            tags=["locomo_replay", "locomo_turn_evidence", f"sample:{sample_id}", f"session:{session_index}"],
-            entities=[x for x in [speaker, f"locomo:{sample_id}"] if x],
-            # CM #174: topics/retrieval_eligible/retrieval_title/retrieval_facts/
-            # authority removed. All beads are indexed; supporting_facts carries
-            # the recall facts (was retrieval_facts); title carries the heading.
-            supporting_facts=[detail[:500]],
-            # CM #175: promotion is a boolean flag now, not a status value. Keep the
-            # anchor retrievable and compaction-proof via promoted/promotion_locked
-            # while status stays operational ("open").
-            status="open",
-            promoted=True,
-            promoted_at=_utc_now_iso(),
-            promotion_locked=True,
-            metadata={
-                "sample_id": sample_id,
-                "locomo_sample_id": sample_id,
-                "session_index": session_index,
-                "locomo_session_index": session_index,
-                "turn_index": turn_index,
-                "locomo_turn_index": turn_index,
-                "dia_id": dia_id,
-                "dia_ids": [dia_id],
-                "locomo_dia_id": dia_id,
-                "locomo_dia_ids": [dia_id],
-                "speaker": speaker,
-                "locomo_speaker": speaker,
-                "session_date_time": str(row.get("session_date_time") or ""),
-                "locomo_session_date_time": str(row.get("session_date_time") or ""),
-                "locomo_display_text": display,
-                "locomo_raw_text": str(row.get("text") or ""),
-            },
-        )
-    )
-
-
 def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[str, Any]:
     sample_id = str(row.get("sample_id") or "").strip() or "unknown"
-    dia_id = str(row.get("dia_id") or "").strip() or f"row-{uuid.uuid4().hex[:8]}"
+    dia_id = str(row.get("dia_id") or "").strip()
     speaker = str(row.get("speaker") or "").strip()
     text = str(row.get("text") or "").strip()
+    if not dia_id:
+        raise ValueError("locomo_missing_dia_id")
+    if not text:
+        raise ValueError("locomo_empty_turn_text")
     session_index = int(row.get("session_index") or 0)
     session_id = _locomo_core_session_id(sample_id, session_index)
     turn_id = f"locomo:{sample_id}:{dia_id}"
     display = f"{speaker}: {text}" if speaker else text
-    detail = _locomo_turn_detail(row, display=display)
     metadata = {
         "source": "locomo_replay",
         "replay_source": "locomo",
@@ -555,7 +468,11 @@ def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[
         "adapter_status": "benchmark",
         "benchmark_name": "locomo",
         "replay_mode": "locomo_transcript_row",
-        "_crawler_updates_source": "locomo_lifecycle",
+        # Official production-fidelity seed uses Core Memory's request-scoped
+        # native LLM judge. Do not supply demo-authored deterministic
+        # crawler_updates or direct evidence beads here.
+        "bead_judge": "llm",
+        "_crawler_updates_source": "native_judge",
         "locomo_sample_id": sample_id,
         "locomo_session_index": session_index,
         "locomo_session_date_time": str(row.get("session_date_time") or ""),
@@ -565,31 +482,6 @@ def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[
         "locomo_raw_text": text,
         "locomo_display_text": display,
         "locomo_has_image": bool(row.get("img_url") or row.get("blip_caption")),
-        "crawler_updates": {
-            "beads_create": [
-                {
-                    "type": "context",
-                    "title": display[:160] or "LoCoMo replay turn",
-                    "summary": [display[:240] or "LoCoMo replay turn"],
-                    "detail": detail,
-                    "source_turn_ids": [turn_id, dia_id],
-                    # CM #174: topics folded into entities; retrieval_eligible/
-                    # retrieval_title/retrieval_facts removed (all beads indexed).
-                    "entities": [x for x in [speaker, f"locomo:{sample_id}", "locomo"] if x],
-                    "supporting_facts": [display[:240] or "LoCoMo replay turn"],
-                    "tags": ["crawler_reviewed", "turn_finalized", "locomo_replay", "agent_authored_semantic"],
-                    "metadata": {
-                        "locomo_sample_id": sample_id,
-                        "locomo_session_index": session_index,
-                        "locomo_turn_index": int(row.get("turn_index") or 0),
-                        "locomo_dia_id": dia_id,
-                        "locomo_dia_ids": [dia_id],
-                        "locomo_speaker": speaker,
-                        "locomo_session_date_time": str(row.get("session_date_time") or ""),
-                    },
-                }
-            ]
-        },
     }
     if row.get("img_url") is not None:
         metadata["locomo_img_url"] = row.get("img_url")
@@ -624,15 +516,7 @@ def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[
     )
     if not bool((out or {}).get("ok", False)):
         return {"ok": False, "session_id": session_id, "turn_id": turn_id, "dia_id": dia_id, "result": dict(out or {})}
-    evidence_bead_id = _ensure_locomo_evidence_bead(
-        root=str(root or settings.core_memory_root),
-        row=row,
-        session_id=session_id,
-        turn_id=turn_id,
-        dia_id=dia_id,
-        display=display,
-    )
-    return {"ok": True, "session_id": session_id, "turn_id": turn_id, "dia_id": dia_id, "evidence_bead_id": evidence_bead_id, "result": dict(out or {})}
+    return {"ok": True, "session_id": session_id, "turn_id": turn_id, "dia_id": dia_id, "result": dict(out or {})}
 
 
 def ingest_locomo_samples_through_core_memory(
@@ -885,6 +769,7 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
     seeded_since_flush = 0
     errors: list[dict[str, Any]] = []
     flush_events: list[dict[str, Any]] = []
+    final_flushes: list[dict[str, Any]] = []
     queue_waits: list[dict[str, Any]] = []
     session_ids_seen: list[str] = []
 
@@ -933,26 +818,61 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
                 "error": str(exc or "locomo_replay_row_failed"),
             })
 
+    pre_final_flush_drain: dict[str, Any] = {}
     post_drain: dict[str, Any] = {}
     if drain_after_ingest and seeded > 0 and not cancelled and not (cancel_event is not None and cancel_event.is_set()):
         if callable(heartbeat):
-            heartbeat("draining", f"Processing async jobs for {seeded} ingested turn(s)")
-        post_drain = _drain_async_until_idle(
+            heartbeat("draining", f"Processing final crawler/association jobs for {seeded} ingested turn(s)")
+        pre_final_flush_drain = _drain_async_until_idle(
             timeout_ms=max(60_000, int(drain_timeout_ms)),
             poll_ms=1000,
             max_compaction=max(max_compaction_per_pass, 4),
             max_side_effects=max(max_side_effects_per_pass, 16),
             cancel_event=cancel_event,
         )
+        if not bool(pre_final_flush_drain.get("cancelled")) and bool(pre_final_flush_drain.get("ok", True)):
+            if callable(heartbeat):
+                heartbeat("flushing", f"Constructing rolling window for {len(session_ids_seen)} LoCoMo session(s)")
+            for sid in session_ids_seen:
+                try:
+                    final_flushes.append(
+                        process_flush(
+                            root=settings.core_memory_root,
+                            session_id=sid,
+                            promote=True,
+                            token_budget=128000,
+                            max_beads=200,
+                            source="locomo_replay_final_flush",
+                            flush_tx_id=f"locomo-seed-final:{uuid.uuid4().hex[:10]}",
+                        )
+                    )
+                except Exception as exc:
+                    final_flushes.append({"ok": False, "session_id": sid, "error": str(exc or "process_flush_failed")})
+            if callable(heartbeat):
+                heartbeat("draining", "Processing post-flush async jobs")
+            post_drain = _drain_async_until_idle(
+                timeout_ms=max(60_000, int(drain_timeout_ms)),
+                poll_ms=1000,
+                max_compaction=max(max_compaction_per_pass, 4),
+                max_side_effects=max(max_side_effects_per_pass, 16),
+                cancel_event=cancel_event,
+            )
+        elif pre_final_flush_drain:
+            # Backward-compatible shape for callers/tests that historically read
+            # the single drain result from post_drain. The more precise field is
+            # pre_final_flush_drain; post_drain remains the terminal drain result
+            # when the final flush phase actually runs.
+            post_drain = dict(pre_final_flush_drain)
 
     final_queue = async_jobs_status(root=settings.core_memory_root)
-    drain_cancelled = bool(post_drain) and bool(post_drain.get("cancelled"))
-    drain_semantic_failed = bool(post_drain) and str(post_drain.get("error") or "") == "semantic_drain_failed"
+    drain_cancelled = any(bool(d.get("cancelled")) for d in [pre_final_flush_drain, post_drain] if d)
+    drain_semantic_failed = any(str(d.get("error") or "") == "semantic_drain_failed" for d in [pre_final_flush_drain, post_drain] if d)
     cancelled = bool(cancelled or drain_cancelled)
-    drain_failed = bool(post_drain) and not bool(post_drain.get("ok", True)) and not drain_cancelled and not drain_semantic_failed
+    drain_failed = any(not bool(d.get("ok", True)) for d in [pre_final_flush_drain, post_drain] if d) and not drain_cancelled and not drain_semantic_failed
+    flush_failed = any(not bool((f or {}).get("ok", True)) for f in final_flushes)
     turn_range = {"first": 1 if seeded > 0 else 0, "last": int(seeded)}
     return {
-        "ok": seeded > 0 and not cancelled and not errors and not drain_failed,
+        "ok": seeded > 0 and not cancelled and not errors and not drain_failed and not flush_failed,
         "cancelled": cancelled,
         "seeded": int(seeded),
         "seeded_turns": int(seeded),
@@ -975,11 +895,15 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
         "queue_idle": bool(_queue_idle(final_queue)),
         "queue": final_queue,
         "post_drain": post_drain,
+        "pre_final_flush_drain": pre_final_flush_drain,
         "drain_failed": drain_failed,
         "drain_warning": bool(drain_semantic_failed),
         "auto_flush": bool(auto_flush),
         "flush_count": len(flush_events),
         "flushes": flush_events[-20:],
+        "final_flushes": final_flushes[-100:],
+        "final_flush_count": len(final_flushes),
+        "final_flush_failed": sum(1 for f in final_flushes if not bool((f or {}).get("ok", True))),
         "session": {
             "session_id": str(session_ids_seen[-1] if session_ids_seen else SESSION.session_id),
             "token_usage": SESSION.token_usage,
@@ -3091,31 +3015,16 @@ async def replay_story_pack(
 
 @contextmanager
 def benchmark_enrich_mode(mode: str | None):
-    """Scope LoCoMo benchmark bead-enrichment to this job.
+    """Compatibility context for the retired LoCoMo enrich-mode toggle.
 
-    mode='judge' lets Core Memory's native LLM bead-field judge author each
-    replayed turn's bead (type + entities + claims + because/temporal) instead of
-    the deterministic crawler. It sets the calling thread's enrich mode
-    (thread-local, via set_benchmark_enrich_mode) which the lifecycle runner reads
-    to (a) stop supplying agent crawler_updates and skip the crawler-not-invoked
-    gate, and (b) attach metadata["bead_judge"]="llm" to each turn-authoring
-    request so the engine enables its judge fallback and the LLM field-judge for
-    THAT request only.
-
-    This is fully JOB-scoped: nothing here touches os.environ. The directive
-    rides per-request metadata (Core Memory #182: _judge_fallback_enabled(req) and
-    judge_bead_fields(..., mode=) honor metadata["bead_judge"] before the
-    process-global CORE_MEMORY_BEAD_JUDGE_FALLBACK / CORE_MEMORY_BEAD_FIELD_JUDGE_
-    MODE env), so an orphaned in-flight judge run can no longer leak its mode into
-    a concurrently-starting deterministic run on another thread.
-
-    Requires Core Memory >= #182 and a provider key (OPENAI/ANTHROPIC). Any other
-    mode is a no-op (deterministic crawler).
+    Official LoCoMo benchmark seeding always uses request-scoped
+    ``metadata["bead_judge"]="llm"`` and never supplies deterministic
+    ``crawler_updates``. The ``mode`` argument is ignored so older callers cannot
+    accidentally re-enable the forked deterministic path.
     """
     from app.benchmarks.lifecycle_runner import set_benchmark_enrich_mode
 
-    active = str(mode or "").strip().lower() == "judge"
-    prev_mode = set_benchmark_enrich_mode("judge" if active else "deterministic")
+    prev_mode = set_benchmark_enrich_mode("judge")
     try:
         yield
     finally:
@@ -3598,6 +3507,31 @@ def _assert_benchmark_semantic_ready(provider: str | None, semantic_mode_name: s
             "Set CORE_MEMORY_EMBEDDINGS_PROVIDER (e.g. 'openai') or pass "
             "embeddings_provider explicitly."
         )
+    vector_backend = str(os.environ.get("CORE_MEMORY_VECTOR_BACKEND") or "").strip().lower()
+    if vector_backend != "qdrant":
+        raise BenchmarkSemanticUnavailable(
+            "benchmark_semantic_required_wrong_vector_backend: official LoCoMo "
+            f"requires CORE_MEMORY_VECTOR_BACKEND=qdrant, got {vector_backend or 'unset'!r}."
+        )
+    external_embeddings = str(os.environ.get("CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS") or "").strip().lower()
+    if external_embeddings not in {"1", "true", "yes", "on"}:
+        raise BenchmarkSemanticUnavailable(
+            "benchmark_semantic_required_external_embeddings_disabled: official "
+            "LoCoMo requires CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS=1."
+        )
+    embeddings_model = str(os.environ.get("CORE_MEMORY_EMBEDDINGS_MODEL") or "").strip()
+    if embeddings_model != "text-embedding-3-large":
+        raise BenchmarkSemanticUnavailable(
+            "benchmark_semantic_required_wrong_embedding_model: official LoCoMo "
+            "requires CORE_MEMORY_EMBEDDINGS_MODEL=text-embedding-3-large, got "
+            f"{embeddings_model or 'unset'!r}."
+        )
+    env_provider = str(os.environ.get("CORE_MEMORY_EMBEDDINGS_PROVIDER") or "").strip().lower()
+    if env_provider and env_provider != resolved:
+        raise BenchmarkSemanticUnavailable(
+            "benchmark_semantic_required_provider_mismatch: resolved provider "
+            f"{resolved!r} disagrees with CORE_MEMORY_EMBEDDINGS_PROVIDER={env_provider!r}."
+        )
     if resolved == "openai":
         import importlib.util
 
@@ -3637,7 +3571,7 @@ def _assert_no_degraded_semantic(report: Any, semantic_mode_name: str) -> None:
         )
 
 
-def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", qa_session_mode: str = "isolated", enrich_mode: str = "deterministic", progress: Any | None = None, ingest_progress: Any | None = None, cancel_event: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
+def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", qa_session_mode: str = "isolated", enrich_mode: str = "judge", seed_record: dict[str, Any] | None = None, progress: Any | None = None, ingest_progress: Any | None = None, cancel_event: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini", "locomo_native_lifecycle"}:
         try:
@@ -3691,12 +3625,17 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             resolved_generator_model = str(generator_model or "").strip()
             if resolved_answer_mode == "llm" and not resolved_generator_model:
                 resolved_generator_model = detect_model()
-            # enrich_mode='judge' lets Core Memory's native LLM bead-field judge
-            # author typed/entity/claim-rich beads during replay (requires #179).
-            resolved_enrich_mode = str(enrich_mode or "deterministic").strip().lower() or "deterministic"
+            # Official LoCoMo always uses Core Memory's native LLM bead-field
+            # judge during replay. Ignore the legacy deterministic toggle.
+            resolved_enrich_mode = "judge"
+            # Official lifecycle benchmark Run is QA-only. The route already
+            # requires a completed seed job with drain + final flush evidence;
+            # measure that eligible live corpus instead of replaying selected
+            # samples into this run's clean artifact root.
+            seeded_corpus_root = str(settings.core_memory_root)
             with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider), benchmark_enrich_mode(resolved_enrich_mode):
                 lifecycle_report = run_locomo_lifecycle_suite(
-                    root=str(base_root),
+                    root=seeded_corpus_root,
                     samples=selected_samples,
                     qa_cases=selected_cases,
                     qa_session_mode=qa_session_mode,
@@ -3704,6 +3643,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     answer_mode=resolved_answer_mode,
                     generator_model=resolved_generator_model,
                     progress=progress,
+                    qa_only_seeded=True,
                 )
             # Defense in depth: reject a report that degraded mid-run even though
             # the embeddings preflight passed.
@@ -3766,6 +3706,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "qa_cases": selected_qa_total,
                 "qa_completed": int(lifecycle_report.get("completed") or 0),
                 "turns_ingested": int((lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
+                "seeded_turns": int((lifecycle_report.get("lifecycle") or {}).get("seeded_turns") or 0),
                 "answer_f1_mean": float(lifecycle_overall.get("answer_f1_mean") or 0.0),
                 "evidence_recall_at_5": float(lifecycle_overall.get("evidence_recall@5") or 0.0),
                 "semantic_mode": semantic_mode_name,
@@ -3778,6 +3719,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "locomo_repo_commit": str((dataset_meta.get("dataset") or {}).get("repo_commit") or ""),
                 "subset": str(subset or "local"),
                 "legacy_request": bool(legacy_mode),
+                "seed_record_id": str((seed_record or {}).get("seed_record_id") or (seed_record or {}).get("seed_job_id") or ""),
             }
             report = {
                 "config": {
@@ -3810,6 +3752,9 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     # if a 'judge' request authored no claims).
                     "enrich_mode": resolved_enrich_mode,
                     "enrich_mode_engaged": str((lifecycle_report.get("lifecycle") or {}).get("enrich_mode") or ""),
+                    "seed_record_id": str((seed_record or {}).get("seed_record_id") or (seed_record or {}).get("seed_job_id") or ""),
+                    "qa_only_seeded": True,
+                    "seeded_corpus_root": seeded_corpus_root,
                 },
                 "dataset": dict((dataset_meta.get("dataset") or {})),
                 "lifecycle": dict(lifecycle_report.get("lifecycle") or {}),
@@ -3829,8 +3774,10 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 },
                 "ingestion": {
                     "mode": "locomo_native_lifecycle",
-                    "ingest_path": "lifecycle_replay",
-                    "turns_total": int((lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
+                    "ingest_path": "eligible_seed_record_qa_only",
+                    "seed_record": dict(seed_record or {}),
+                    "seeded_corpus_root": seeded_corpus_root,
+                    "turns_total": int((lifecycle_report.get("lifecycle") or {}).get("seeded_turns") or (lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
                     "ingested_turns": int((lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
                     "snapshot_sanitize": dict(snapshot_sanitize_meta or {}),
                 },

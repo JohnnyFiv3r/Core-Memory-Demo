@@ -9,65 +9,12 @@ pydantic-ai-slim[anthropic,google,openai]==1.80.0
 # Benchmark queue persistence for hosted queued/cron benchmark mode.
 psycopg[binary]==3.3.2
 # Pinned to explicit Core-Memory commit for deploy stability.
-# PR #185 (feat): score effort-hop items competitively instead of pinning them to
-# a flat sub-floor. hop_score = seed_score x rel_weight x confidence x HOP_DECAY,
-# with a relationship-weight table (causal/semantic edges 0.82-0.90 > associative
-# 0.55-0.60 > temporal follows/precedes 0.35) and 0.80 decay per hop. Strong causal
-# 1-hop neighbours can now rank above weak vector matches (and the final evidence
-# list is re-sorted post-expansion), so multi-hop gold reaches top-k instead of
-# being buried at ranks 9-24. Pairs with the demo's MULTI_HOP_RETRIEVAL_K=12 floor.
-# PR #184 (fix): extend demo ingest job polling timeout 3s->20s.
-# PR #183 (fix): engine recall quality. (1) Removes the causal_crawler
-# context->reflection auto-retype that mis-typed 91/92 conv-26 beads as
-# reflection/meta_analysis on any causal edge — beads now keep their authored/
-# judge-assigned type. (2) Effort-tier association-hop expansion so low/medium/high
-# stop returning identical candidates: low=0 hops, medium=1 hop, high=2 hops
-# (co-retrieves multi-hop chains); hop items score just below the min vector score
-# so they never displace grounded results. Directly addresses the demo's
-# retrieval_identical_across_efforts + bead_type_skew diagnostics and the cat-1
-# multi-hop recall gap.
-# PR #182 (feat): per-request bead-judge directive. Adds metadata["bead_judge"]
-# / req["_bead_judge"] ("llm"|"heuristic"|"off") as a request-scoped override for
-# CORE_MEMORY_BEAD_JUDGE_FALLBACK + CORE_MEMORY_BEAD_FIELD_JUDGE_MODE, falling
-# back to env when absent. _judge_fallback_enabled(req) and judge_bead_fields(
-# ..., mode=) both honor it (and _judged_turn_bead forwards mode=). Lets the demo
-# enable the native judge per replay turn instead of mutating process-global env,
-# eliminating the cross-job leak in concurrent inline benchmark runs.
-# PR #181 (fix): pass dimension=0 sentinel through to QdrantVectorBackend so
-# FastEmbed mode skips VectorParams instead of clamping to size=1.
-# PR #180 (fix): default retrieval_eligible to True in the LLM-judge normalize
-# path. Follow-up to #179 — when the judge omits retrieval_eligible, beads must
-# default to eligible (records are eligible by default; False is only for
-# forced-context/retrieval turns). Without this, judge-authored beads that omit
-# the field are dropped from retrieval. Required for enrich_mode=judge.
-# PR #179 (feat): LLM-judged claims + LLM-judged entities + retire
-# retrieval_title/facts + eligibility-gate fix. The bead-field judge
-# (policy/bead_judge.judge_bead_fields) now authors type/entities/because/
-# claims/temporal fields via one LLM call (CORE_MEMORY_BEAD_FIELD_JUDGE_MODE
-# auto/llm), used as the default turn-bead author when CORE_MEMORY_BEAD_JUDGE_
-# FALLBACK=1 and no agent crawler_updates are supplied. Includes #178's Qdrant
-# live-mirror external-embeddings fix (ends the size=1536/3072 upsert spam).
-# PR #177 (retrieval): retrieval_eligible derives from typeability, not richness.
-# Note this partially reverses #174's "no eligibility gate" stance below: a
-# retrieval_eligible flag exists again, but it is set at the write chokepoint
-# purely from type canonicality (eligible unless the bead type is unrecognized);
-# write-richness is demoted to advisory ranking metadata. Fixes the recall
-# regression where thin-but-typed beads were dropped from retrieval.
-# PR #175 (schema): type-vocabulary revision + bead dataclass completeness. Retires
-# 7 primary types (failed_hypothesis/reversal/correction/misjudgment/overfitted_pattern/
-# abandoned_path/proposed_theme) in favor of modifier fields (revises_bead_id/
-# revision_type, hypothesis_status, reflection_type); adds hypothesis/blocked/incident
-# types; tightens per-type required fields (warn-first); replaces promoted/candidate
-# status values with boolean flags (promoted/promotion_candidate); adds next_bead_id
-# forward chaining and unknown-type→context coercion.
-# PR #174 (phases 1-12): remove the legacy retrieval-gate fields. Beads are event
-# normalization, not retrieval candidates — every bead is indexed unconditionally
-# and quality is handled at ranking time. Drops retrieval_eligible/retrieval_title/
-# retrieval_facts/topics/authority/*_keys/cause_candidates/effect_candidates/etc.;
-# adds prev_bead_id temporal auto-linking.
-# Carries forward #173 (OpenAI/external Qdrant embeddings), #170/#171 (recall
-# traversal seed/merge + structural hints), #169 (unified bead projection).
-core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@11b706cf0246e52c115068e7db4fdbe35cb3aca7
+# PR #186 branch dependency (not merged yet): exposes adaptive causal trace depth
+# through canonical retrieval, public memory trace, and the PydanticAI trace tool;
+# default official trace depth is 6 and diagnostics report requested/effective caps.
+# Keep this SHA until the end-to-end benchmark-production-fidelity PRD is complete,
+# then update to the merged Core-Memory commit before final release if needed.
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@5f7c15f6be692c9af7c7d0af82741e012a53c5df
 # Keep Qdrant explicit so deployment logs fail loudly if the semantic backend
 # dependency is skipped instead of silently falling back to lexical mode.
 qdrant-client[fastembed]>=1.9

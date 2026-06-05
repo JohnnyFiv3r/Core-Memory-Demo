@@ -1,4 +1,5 @@
 import os
+import json
 import sys
 import tempfile
 import unittest
@@ -58,6 +59,27 @@ def _conversation() -> BenchmarkConversation:
     )
 
 
+def _write_judged_bead(root: str | Path, *, bead_id: str = "bead-judge-1", session_id: str = "bench:locomo:conv-1:replay", turn_id: str = "locomo:conv-1:D1:1:1", dia_id: str = "D1:1") -> None:
+    """Seed a minimal judge-authored bead in tests that mock Core Memory.
+
+    Production code now fails closed when judge mode produces zero claims. Unit
+    tests that replace process_turn_finalized with a no-op must still model the
+    native judge's observable artifact instead of accidentally testing a silent
+    fallback path.
+    """
+    beads_dir = Path(root) / ".beads"
+    beads_dir.mkdir(parents=True, exist_ok=True)
+    idx_path = beads_dir / "index.json"
+    idx = json.loads(idx_path.read_text()) if idx_path.exists() else {"beads": {}, "associations": []}
+    idx.setdefault("beads", {})[bead_id] = {
+        "id": bead_id,
+        "session_id": session_id,
+        "source_turn_ids": [turn_id, dia_id],
+        "claims": [{"text": "A said hi.", "confidence": 1.0}],
+    }
+    idx_path.write_text(json.dumps(idx), encoding="utf-8")
+
+
 class TestLifecycleRunner(unittest.TestCase):
     def test_lifecycle_corpus_warnings_report_missing_runtime_products(self):
         warnings = lifecycle_corpus_warnings(
@@ -102,8 +124,9 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual("conversation_replay", calls[0]["metadata"]["benchmark_phase"])
         self.assertEqual("locomo", calls[0]["metadata"]["replay_source"])
         self.assertEqual("locomo:conv-1:D1:1:1", calls[0]["metadata"]["source_turn_id"])
-        self.assertIn("crawler_updates", calls[0]["metadata"])
-        self.assertEqual("locomo_lifecycle", calls[0]["metadata"]["_crawler_updates_source"])
+        self.assertNotIn("crawler_updates", calls[0]["metadata"])
+        self.assertEqual("llm", calls[0]["metadata"]["bead_judge"])
+        self.assertEqual("native_judge", calls[0]["metadata"]["_crawler_updates_source"])
         self.assertEqual(before_env, {
             "CORE_MEMORY_AGENT_CRAWLER_INVOKE": os.environ.get("CORE_MEMORY_AGENT_CRAWLER_INVOKE"),
             "CORE_MEMORY_AGENT_CRAWLER_CALLABLE": os.environ.get("CORE_MEMORY_AGENT_CRAWLER_CALLABLE"),
@@ -120,7 +143,7 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual("locomo:conv-1:D1:1:1", progress_events[0][3]["turn_id"])
         self.assertEqual(2, progress_events[-1][3]["replay_turn_completed"])
 
-    def test_replay_fails_if_crawler_invocation_is_disabled(self):
+    def test_replay_accepts_missing_agent_updates_because_native_judge_authors_beads(self):
         def fake_process_turn_finalized(**kwargs):
             return {
                 "ok": True,
@@ -139,8 +162,8 @@ class TestLifecycleRunner(unittest.TestCase):
                 process_turn_finalized_fn=fake_process_turn_finalized,
             )
 
-        self.assertFalse(out["ok"])
-        self.assertEqual("locomo_crawler_not_invoked", out["errors"][0]["error"])
+        self.assertTrue(out["ok"])
+        self.assertEqual([], out["errors"])
 
     def test_pre_qa_flush_runs_after_replay_boundary_shape(self):
         flush_calls = []
@@ -165,8 +188,11 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertTrue(out["ran"])
         self.assertEqual("benchmark_pre_qa", flush_calls[0]["source"])
         self.assertEqual("bench-preqa:locomo:conv-1", flush_calls[0]["flush_tx_id"])
-        self.assertTrue(async_calls)
+        self.assertEqual(2, len(async_calls))
         self.assertTrue(async_calls[0]["run_semantic"])
+        self.assertTrue(async_calls[1]["run_semantic"])
+        self.assertEqual({"ok": True}, out["pre_flush_drain"])
+        self.assertEqual({"ok": True}, out["post_flush_drain"])
 
     def test_qa_efforts_run_low_medium_high_in_order(self):
         order = []
@@ -376,6 +402,7 @@ class TestLifecycleRunner(unittest.TestCase):
 
         def fake_process_turn_finalized(**kwargs):
             events.append((kwargs["origin"], kwargs["turn_id"]))
+            _write_judged_bead(kwargs["root"], session_id=kwargs["session_id"], turn_id=kwargs["turn_id"], dia_id=str((kwargs.get("metadata") or {}).get("locomo_dia_id") or "D1:1"))
             return {"ok": True}
 
         def fake_flush(**kwargs):
@@ -412,6 +439,7 @@ class TestLifecycleRunner(unittest.TestCase):
             [
                 ("BENCHMARK_REPLAY", "locomo:conv-1:D1:1:1"),
                 ("BENCHMARK_REPLAY", "locomo:conv-1:D1:2:2"),
+                ("async", "drain"),
                 ("flush", "bench-preqa:locomo:conv-1"),
                 ("async", "drain"),
                 ("recall", "low"),
@@ -421,6 +449,37 @@ class TestLifecycleRunner(unittest.TestCase):
             ],
             events,
         )
+
+    def test_qa_only_seeded_conversation_does_not_replay_or_flush_seeded_corpus(self):
+        def fail_process_turn_finalized(**kwargs):
+            raise AssertionError("QA-only seeded benchmark must not replay turns or write QA beads in this test")
+
+        def fail_flush(**kwargs):
+            raise AssertionError("QA-only seeded benchmark must not run pre-QA flush")
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            return {"answer": "A", "warnings": [], "raw": {"results": []}}
+
+        with tempfile.TemporaryDirectory() as td:
+            _write_judged_bead(td)
+            out = run_lifecycle_conversation(
+                root=td,
+                conversation=_conversation(),
+                qa_only_seeded=True,
+                process_turn_finalized_fn=fail_process_turn_finalized,
+                process_flush_fn=fail_flush,
+                recall_fn=fake_recall,
+                write_qa_beads=False,
+            )
+
+        self.assertTrue(out["ok"])
+        self.assertTrue(out["replay"]["skipped_replay"])
+        self.assertEqual("eligible_seed_record", out["replay"]["replay_source"])
+        self.assertFalse(out["pre_qa_flush"]["ran"])
+        self.assertEqual("eligible_seed_record", out["pre_qa_flush"]["source"])
+        self.assertTrue(out["lifecycle"]["qa_only_seeded"])
+        self.assertEqual(0, out["lifecycle"]["turns_replayed"])
+        self.assertEqual(2, out["lifecycle"]["seeded_turns"])
 
     def test_lifecycle_conversation_recovers_recall_from_bead_dia_map(self):
         # Regression: retrieval rows that carry only a bead_id (no surfaced
@@ -442,6 +501,7 @@ class TestLifecycleRunner(unittest.TestCase):
                 "session_id": kwargs["session_id"],
                 # Demo convention: source_turn_ids carries [turn_id, dia_id].
                 "source_turn_ids": [turn_id, dia],
+                "claims": [{"text": "A said hi.", "confidence": 1.0}],
             }
             idx_path.write_text(json.dumps(idx), encoding="utf-8")
             return {"ok": True}
@@ -473,7 +533,7 @@ class TestLifecycleRunner(unittest.TestCase):
             events.append((kwargs["origin"], kwargs["turn_id"], Path(kwargs["root"]).name))
             marker = Path(kwargs["root"]) / ".beads"
             marker.mkdir(parents=True, exist_ok=True)
-            (marker / "index.json").write_text('{"beads":{},"associations":[]}', encoding="utf-8")
+            _write_judged_bead(kwargs["root"], session_id=kwargs["session_id"], turn_id=kwargs["turn_id"], dia_id=str((kwargs.get("metadata") or {}).get("locomo_dia_id") or "D1:1"))
             return {"ok": True}
 
         def fake_recall(request, *, effort, root, explain, include_raw):
@@ -538,12 +598,16 @@ class TestLifecycleRunner(unittest.TestCase):
             events.append(("recall", effort, request["constraints"]["qa_id"]))
             return {"answer": f"answer-{effort}", "warnings": []}
 
+        def fake_process_turn_finalized(**kwargs):
+            _write_judged_bead(kwargs["root"], session_id=kwargs["session_id"], turn_id=kwargs["turn_id"], dia_id=str((kwargs.get("metadata") or {}).get("locomo_dia_id") or "D1:1"))
+            return {"ok": True}
+
         with tempfile.TemporaryDirectory() as td:
             out = run_locomo_lifecycle_suite(
                 root=td,
                 samples=[sample],
                 qa_cases=[{"qa_id": "conv-1:q0001"}],
-                process_turn_finalized_fn=lambda **kwargs: {"ok": True},
+                process_turn_finalized_fn=fake_process_turn_finalized,
                 process_flush_fn=lambda **kwargs: {"ok": True},
                 run_async_jobs_fn=lambda **kwargs: {"ok": True},
                 recall_fn=fake_recall,
@@ -625,6 +689,29 @@ class TestLifecycleAggregateVacuousExclusion(unittest.TestCase):
         high = aggregate_lifecycle_effort_scores(cases)["by_effort"]["high"]
         self.assertEqual(0.0, high["answer_f1_mean"])  # excluded row dropped, not 0.5
         self.assertTrue(high["answer_generated"])
+
+    def test_retrieval_only_effort_answer_accuracy_is_not_reported_as_zero(self):
+        from app.benchmarks.lifecycle_runner import aggregate_lifecycle_effort_scores
+
+        scores = aggregate_lifecycle_effort_scores([
+            {"efforts": {
+                "low": {
+                    "answer_f1": 0.0,
+                    "prediction": "",
+                    "evidence_recall": {"recall@5": 1.0, "hit_any": True, "vacuous": False},
+                },
+                "high": {
+                    "answer_f1": 1.0,
+                    "prediction": "7 May 2023",
+                    "evidence_recall": {"recall@5": 1.0, "hit_any": True, "vacuous": False},
+                },
+            }}
+        ])
+
+        self.assertFalse(scores["by_effort"]["low"]["answer_generated"])
+        self.assertIsNone(scores["by_effort"]["low"]["answer_f1_mean"])
+        self.assertIsNone(scores["accuracy_by_effort"]["low"])
+        self.assertEqual(1.0, scores["accuracy_by_effort"]["high"])
 
 
 if __name__ == "__main__":

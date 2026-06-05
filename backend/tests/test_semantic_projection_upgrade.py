@@ -13,11 +13,10 @@ class TestSemanticProjectionUpgrade(unittest.TestCase):
     def test_requirements_pin_core_memory_reconcile_fix_and_explicit_qdrant(self):
         requirements = (Path(__file__).resolve().parents[1] / "requirements.txt").read_text(encoding="utf-8")
 
-        # PR #185 pin (master tip): competitive effort-hop scoring (edge strength x
-        # seed x decay), on top of #183 recall quality (drop causal->reflection
-        # over-typing + effort-tier hops), #184 ingest poll timeout, #182 per-request
-        # bead-judge directive, and #181 Qdrant dim sentinel.
-        self.assertIn("11b706cf0246e52c115068e7db4fdbe35cb3aca7", requirements)
+        # PR #186 branch pin: adaptive causal trace depth is exposed through
+        # canonical retrieval, public memory trace, and the PydanticAI trace tool;
+        # it builds on the prior #181-#185 LoCoMo/Qdrant/retrieval fixes.
+        self.assertIn("5f7c15f6be692c9af7c7d0af82741e012a53c5df", requirements)
         self.assertIn("core-memory[qdrant,kuzu,mcp]", requirements)
         self.assertIn("qdrant-client[fastembed]>=1.9", requirements)
         self.assertIn("psycopg[binary]==3.3.2", requirements)

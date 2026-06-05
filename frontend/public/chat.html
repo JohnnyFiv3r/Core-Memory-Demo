@@ -1012,11 +1012,6 @@
           </select>
           <input id="bench-generator-model" class="control-input" placeholder="model (auto)" style="width:130px" title="Generator model for LLM answer mode — leave blank to auto-detect from current session" data-dataset="locomo">
 
-          <span class="control-label" data-dataset="locomo">enrich</span>
-          <select id="bench-enrich-mode" class="control-select" title="deterministic = LoCoMo crawler authors beads; judge = Core Memory's native LLM bead-field judge authors type/entities/claims/temporal (requires a provider key)" data-dataset="locomo">
-            <option value="deterministic" selected>deterministic</option>
-            <option value="judge">judge (native LLM)</option>
-          </select>
           <button class="btn" id="btn-seed">Seed</button>
           <button class="btn" id="btn-benchmark" data-dataset="locomo">Run LoCoMo Benchmark</button>
         </div>
