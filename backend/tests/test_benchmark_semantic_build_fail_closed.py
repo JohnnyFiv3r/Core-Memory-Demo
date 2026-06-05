@@ -86,6 +86,29 @@ class TestExternalEmbeddingsActuallyUsed(unittest.TestCase):
             # Should not raise.
             _assert_semantic_build_ok(build, manifest=manifest)
 
+    def test_passes_when_openai_qdrant_manifest_has_stale_ready_false(self):
+        build = {"ok": True, "backend": "qdrant", "entries": 432, "manifest": "/tmp/ignored"}
+        manifest = {
+            "provider": "openai",
+            "model": "text-embedding-3-large",
+            "backend": "qdrant",
+            "vector_backend": "qdrant",
+            "semantic_ready": False,
+            "dimension": 3072,
+            "row_count": 432,
+        }
+        with self._required_openai():
+            # An ok external-Qdrant/OpenAI build should not fail solely because a
+            # deployed manifest carried a stale semantic_ready flag.
+            _assert_semantic_build_ok(build, manifest=manifest)
+
+    def test_raises_when_openai_qdrant_manifest_has_no_vector_dimension(self):
+        build = {"ok": True, "backend": "qdrant", "entries": 432, "manifest": "/tmp/ignored"}
+        manifest = {"provider": "openai", "backend": "qdrant", "vector_backend": "qdrant", "semantic_ready": False, "dimension": 0}
+        with self._required_openai():
+            with self.assertRaises(BenchmarkLifecycleError):
+                _assert_semantic_build_ok(build, manifest=manifest)
+
     def test_no_provider_check_for_local_hash_provider(self):
         build = {"ok": True, "manifest": "/tmp/ignored"}
         manifest = {"provider": "fastembed", "backend": "qdrant", "semantic_ready": True}

@@ -184,12 +184,31 @@ def _assert_semantic_build_ok(semantic_build: dict[str, Any], *, manifest: dict[
         return
     man_provider = str(manifest.get("provider") or "").strip().lower()
     backend = str(manifest.get("backend") or "").strip().lower()
+    vector_backend = str(manifest.get("vector_backend") or backend or "").strip().lower()
     semantic_ready = bool(manifest.get("semantic_ready", False))
-    if (not semantic_ready) or backend == "lexical" or man_provider in {"", "hash", "fastembed"}:
+    try:
+        dimension = int(manifest.get("dimension") or 0)
+    except Exception:
+        dimension = 0
+    # Some deployed Core Memory builds can leave a stale semantic_ready=False in
+    # the manifest even after an ok=True external-Qdrant build. Do not fail a
+    # benchmark solely on that flag when the manifest proves the requested
+    # provider + Qdrant external-vector path and a real vector dimension. Keep
+    # failing closed for lexical/hash/FastEmbed or dimensionless builds.
+    external_provider_used = (
+        man_provider == requested
+        and man_provider not in {"", "hash", "fastembed"}
+        and backend != "lexical"
+        and vector_backend == "qdrant"
+        and dimension > 0
+    )
+    if backend == "lexical" or man_provider in {"", "hash", "fastembed"} or not external_provider_used:
         raise BenchmarkLifecycleError(
             "benchmark_semantic_external_not_used: requested embeddings provider "
             f"'{requested}' but the corpus index was built with "
-            f"'{man_provider or backend or 'unknown'}' (semantic_ready={semantic_ready}). "
+            f"'{man_provider or backend or 'unknown'}' (semantic_ready={semantic_ready}, "
+            f"backend={backend or 'unknown'}, vector_backend={vector_backend or 'unknown'}, "
+            f"dimension={dimension}). "
             "The external-embeddings path was not taken, so the provider API was "
             "never called. Verify the pinned core-memory build implements external "
             "Qdrant embeddings (PR #173) and that CORE_MEMORY_QDRANT_EXTERNAL_"

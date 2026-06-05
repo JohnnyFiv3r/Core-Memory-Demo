@@ -1925,9 +1925,11 @@ async def benchmark_run(request: Request):
     if qa_session_mode not in {'shared', 'isolated'}:
         qa_session_mode = 'isolated'
     if suite == 'locomo_native_lifecycle':
-        # Keep QA turns from contaminating the replay corpus and from changing
-        # subsequent QA retrieval state.
-        qa_session_mode = 'isolated'
+        # Official LoCoMo Run is QA-only against the already-seeded application
+        # corpus. Do not clone/rebuild per-QA roots here: cloned embedded Qdrant
+        # roots get a new collection name and can fail closed before QA #1 even
+        # though the live seeded corpus is semantically ready.
+        qa_session_mode = 'shared'
     retrieval_pipeline = str((body or {}).get('retrieval_pipeline') or 'execute_trace').strip().lower() or 'execute_trace'
     if retrieval_pipeline not in {'execute_trace', 'execute_trace_hydrate', 'forced_three_phase', 'three_phase'}:
         retrieval_pipeline = 'execute_trace'
