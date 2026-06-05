@@ -57,6 +57,7 @@ class TestExternalEmbeddingsActuallyUsed(unittest.TestCase):
             {
                 "CORE_MEMORY_CANONICAL_SEMANTIC_MODE": "required",
                 "CORE_MEMORY_EMBEDDINGS_PROVIDER": "openai",
+                "CORE_MEMORY_EMBEDDINGS_MODEL": "text-embedding-3-large",
             },
             clear=False,
         )
@@ -108,6 +109,23 @@ class TestExternalEmbeddingsActuallyUsed(unittest.TestCase):
         with self._required_openai():
             with self.assertRaises(BenchmarkLifecycleError):
                 _assert_semantic_build_ok(build, manifest=manifest)
+
+    def test_raises_when_openai_qdrant_manifest_has_wrong_vector_dimension(self):
+        build = {"ok": True, "backend": "qdrant", "entries": 432, "manifest": "/tmp/ignored"}
+        manifest = {
+            "provider": "openai",
+            "model": "text-embedding-3-small",
+            "backend": "qdrant",
+            "vector_backend": "qdrant",
+            "semantic_ready": False,
+            "dimension": 1536,
+        }
+        with self._required_openai():
+            with self.assertRaises(BenchmarkLifecycleError) as ctx:
+                _assert_semantic_build_ok(build, manifest=manifest)
+        msg = str(ctx.exception)
+        self.assertIn("dimension=1536", msg)
+        self.assertIn("expected_dimension=3072", msg)
 
     def test_no_provider_check_for_local_hash_provider(self):
         build = {"ok": True, "manifest": "/tmp/ignored"}

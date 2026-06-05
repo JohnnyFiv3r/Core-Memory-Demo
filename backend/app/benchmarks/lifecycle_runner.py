@@ -190,29 +190,45 @@ def _assert_semantic_build_ok(semantic_build: dict[str, Any], *, manifest: dict[
         dimension = int(manifest.get("dimension") or 0)
     except Exception:
         dimension = 0
+    embeddings_model = str(os.environ.get("CORE_MEMORY_EMBEDDINGS_MODEL") or "").strip()
+    required_dimension_by_model = {
+        "text-embedding-3-large": 3072,
+        "text-embedding-3-small": 1536,
+        "text-embedding-ada-002": 1536,
+    }
+    required_dimension = required_dimension_by_model.get(embeddings_model)
+    dimension_matches_required_model = dimension > 0 and (
+        required_dimension is None or dimension == required_dimension
+    )
     # Some deployed Core Memory builds can leave a stale semantic_ready=False in
     # the manifest even after an ok=True external-Qdrant build. Do not fail a
     # benchmark solely on that flag when the manifest proves the requested
-    # provider + Qdrant external-vector path and a real vector dimension. Keep
-    # failing closed for lexical/hash/FastEmbed or dimensionless builds.
+    # provider + Qdrant external-vector path and the vector dimension for the
+    # configured embedding model. Keep failing closed for lexical/hash/FastEmbed,
+    # dimensionless builds, or stale corpora built with the wrong embedding size
+    # (e.g. text-embedding-3-small/1536 when required LoCoMo preflight selected
+    # text-embedding-3-large/3072).
     external_provider_used = (
         man_provider == requested
         and man_provider not in {"", "hash", "fastembed"}
         and backend != "lexical"
         and vector_backend == "qdrant"
-        and dimension > 0
+        and dimension_matches_required_model
     )
     if backend == "lexical" or man_provider in {"", "hash", "fastembed"} or not external_provider_used:
+        expected_dimension = required_dimension if required_dimension is not None else ">0"
         raise BenchmarkLifecycleError(
             "benchmark_semantic_external_not_used: requested embeddings provider "
             f"'{requested}' but the corpus index was built with "
             f"'{man_provider or backend or 'unknown'}' (semantic_ready={semantic_ready}, "
             f"backend={backend or 'unknown'}, vector_backend={vector_backend or 'unknown'}, "
-            f"dimension={dimension}). "
-            "The external-embeddings path was not taken, so the provider API was "
-            "never called. Verify the pinned core-memory build implements external "
-            "Qdrant embeddings (PR #173) and that CORE_MEMORY_QDRANT_EXTERNAL_"
-            "EMBEDDINGS=1 is effective in the benchmark worker process."
+            f"dimension={dimension}, expected_dimension={expected_dimension}). "
+            "The external-embeddings path was not taken with the configured "
+            "embedding model, so the benchmark corpus may be stale or the provider "
+            "API was never called. Verify the pinned core-memory build implements "
+            "external Qdrant embeddings (PR #173), CORE_MEMORY_QDRANT_EXTERNAL_"
+            "EMBEDDINGS=1 is effective in the benchmark worker process, and stale "
+            "semantic manifests are rebuilt."
         )
 
 
