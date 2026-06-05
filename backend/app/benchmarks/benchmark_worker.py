@@ -166,30 +166,36 @@ def run_once() -> int:
             benchmark_store.update_job_progress(job_id, status='running', stage='starting', message='LoCoMo seed worker started')
             out = replay_locomo_corpus(progress=cb['seed_progress'], heartbeat=cb['seed_heartbeat'], **kwargs)
         elif kind == 'locomo_full':
-            # Option A: seed AND run QA in ONE worker invocation, so the seeded
-            # corpus lives in this process's filesystem for the whole run (no
-            # cross-service / cross-cron handoff). Both phases stream to the UI.
+            # Product LoCoMo benchmark: replay/seed + QA + report in one worker.
+            # When benchmark kwargs request qa_only_seeded=False, run the official
+            # lifecycle inside the benchmark-owned clean root instead of touching
+            # the live app Qdrant path, which is not multi-worker safe on hosted.
             seed_kwargs = dict(kwargs.get('seed') or {})
             benchmark_kwargs = dict(kwargs.get('benchmark') or {})
-            benchmark_store.update_job_progress(job_id, status='running', stage='starting', message='LoCoMo full run: seeding corpus')
-            seed_out = replay_locomo_corpus(progress=cb['seed_progress'], heartbeat=cb['seed_heartbeat'], **seed_kwargs)
-            if not bool((seed_out or {}).get('ok', True)) or bool((seed_out or {}).get('cancelled')):
-                detail = str((seed_out or {}).get('error') or ('cancelled' if (seed_out or {}).get('cancelled') else 'unknown'))
-                benchmark_store.finish_job(job_id, error=f'locomo_seed_failed:{detail}')
-                print(f'benchmark_worker: seed phase failed {job_id}: {detail}', file=sys.stderr)
-                return 1
-            benchmark_store.update_job_progress(
-                job_id,
-                status='running',
-                stage='seeded',
-                message=f"Seed complete ({int((seed_out or {}).get('seeded') or 0)} turns); starting QA",
-                event={'stage': 'seeded', 'message': 'Seed complete; starting QA', 'seeded': int((seed_out or {}).get('seeded') or 0)},
-            )
-            # Record what was just seeded so the report's seed metadata is populated
-            # (the route no longer pre-seeds for this path).
-            benchmark_kwargs.setdefault('seed_record', dict(seed_out or {}))
-            out = run_benchmark(**benchmark_kwargs, progress=cb['progress'], ingest_progress=cb['ingest_progress'], heartbeat=cb['heartbeat'])
-            out = {**dict(out or {}), 'seed': dict(seed_out or {})}
+            # Back-compat: pre-existing/external locomo_full rows may omit
+            # qa_only_seeded. Only an explicit False selects the new product
+            # clean-root lifecycle; missing/True preserves legacy seed-then-QA.
+            if benchmark_kwargs.get('qa_only_seeded') is not False:
+                benchmark_store.update_job_progress(job_id, status='running', stage='starting', message='LoCoMo full run: seeding corpus')
+                seed_out = replay_locomo_corpus(progress=cb['seed_progress'], heartbeat=cb['seed_heartbeat'], **seed_kwargs)
+                if not bool((seed_out or {}).get('ok', True)) or bool((seed_out or {}).get('cancelled')):
+                    detail = str((seed_out or {}).get('error') or ('cancelled' if (seed_out or {}).get('cancelled') else 'unknown'))
+                    benchmark_store.finish_job(job_id, error=f'locomo_seed_failed:{detail}')
+                    print(f'benchmark_worker: seed phase failed {job_id}: {detail}', file=sys.stderr)
+                    return 1
+                benchmark_store.update_job_progress(
+                    job_id,
+                    status='running',
+                    stage='seeded',
+                    message=f"Seed complete ({int((seed_out or {}).get('seeded') or 0)} turns); starting QA",
+                    event={'stage': 'seeded', 'message': 'Seed complete; starting QA', 'seeded': int((seed_out or {}).get('seeded') or 0)},
+                )
+                benchmark_kwargs.setdefault('seed_record', dict(seed_out or {}))
+                out = run_benchmark(**benchmark_kwargs, progress=cb['progress'], ingest_progress=cb['ingest_progress'], heartbeat=cb['heartbeat'])
+                out = {**dict(out or {}), 'seed': dict(seed_out or {})}
+            else:
+                benchmark_store.update_job_progress(job_id, status='running', stage='starting', message='LoCoMo full run: replaying corpus and building report')
+                out = run_benchmark(**benchmark_kwargs, progress=cb['progress'], ingest_progress=cb['ingest_progress'], heartbeat=cb['heartbeat'])
         else:
             benchmark_store.update_job_progress(job_id, status='running', stage='starting', message='Benchmark started')
             out = run_benchmark(**kwargs, progress=cb['progress'], ingest_progress=cb['ingest_progress'], heartbeat=cb['heartbeat'])

@@ -792,16 +792,69 @@ def _stored_active_benchmark_state(stored: dict[str, Any]) -> tuple[dict[str, An
         'warnings': [],
         'active': True,
     }
+    active = str(job.get('status') or '').strip().lower() in {'queued', 'running', 'waiting_for_slot'}
+    summary['active'] = active
+    if job.get('error'):
+        summary['error'] = str(job.get('error') or '')
+    if job.get('finished_at'):
+        summary['finished_at'] = str(job.get('finished_at') or '')
     report = {
-        'live': True,
+        'live': active,
         'run_id': '',
         'status': str(job.get('status') or 'running'),
         'phase': stage,
-        'active_job_id': job_id,
-        'active': True,
+        'active_job_id': job_id if active else '',
+        'job_id': job_id,
+        'active': active,
         'config': request,
     }
+    if job.get('error'):
+        report['error'] = str(job.get('error') or '')
     return summary, report, job
+
+
+def _parse_benchmark_time(value: Any) -> datetime | None:
+    raw = str(value or '').strip()
+    if not raw:
+        return None
+    try:
+        dt = datetime.fromisoformat(raw.replace('Z', '+00:00'))
+        return dt if dt.tzinfo else dt.replace(tzinfo=timezone.utc)
+    except Exception:
+        return None
+
+
+def _benchmark_row_time(row: dict[str, Any]) -> datetime | None:
+    for key in ('finished_at', 'updated_at', 'started_at', 'created_at'):
+        dt = _parse_benchmark_time((row or {}).get(key))
+        if dt is not None:
+            return dt
+    return None
+
+
+def _benchmark_summary_time(summary: dict[str, Any]) -> datetime | None:
+    for key in ('finished_at', 'updated_at', 'started_at', 'created_at'):
+        dt = _parse_benchmark_time((summary or {}).get(key))
+        if dt is not None:
+            return dt
+    return None
+
+
+def _latest_terminal_benchmark_job_after(summary: dict[str, Any]) -> dict[str, Any] | None:
+    try:
+        row = benchmark_store.read_latest_job_by_kind(['benchmark', 'locomo_full'])
+    except Exception:
+        return None
+    if not isinstance(row, dict):
+        return None
+    status = str(row.get('status') or '').strip().lower()
+    if status not in {'failed', 'cancelled'}:
+        return None
+    row_dt = _benchmark_row_time(row)
+    summary_dt = _benchmark_summary_time(summary)
+    if row_dt is not None and summary_dt is not None and row_dt < summary_dt:
+        return None
+    return row
 
 
 def _benchmark_event(row: dict[str, Any], stage: str, message: str, **extra: Any) -> None:
@@ -2041,11 +2094,9 @@ async def benchmark_run(request: Request):
     qa_session_mode = str((body or {}).get('qa_session_mode') or 'isolated').strip().lower() or 'isolated'
     if qa_session_mode not in {'shared', 'isolated'}:
         qa_session_mode = 'isolated'
-    if suite == 'locomo_native_lifecycle':
-        # Official LoCoMo Run is QA-only against the already-seeded application
-        # corpus. Do not clone/rebuild per-QA roots here: cloned embedded Qdrant
-        # roots get a new collection name and can fail closed before QA #1 even
-        # though the live seeded corpus is semantically ready.
+    if suite == 'locomo_native_lifecycle' and str(settings.benchmark_run_mode or 'inline').strip().lower() not in {'queue', 'queued', 'cron'}:
+        # Split/dev paths are QA-only against an already-seeded application corpus.
+        # Queued product runs replay into a worker-owned clean benchmark root.
         qa_session_mode = 'shared'
     retrieval_pipeline = str((body or {}).get('retrieval_pipeline') or 'execute_trace').strip().lower() or 'execute_trace'
     if retrieval_pipeline not in {'execute_trace', 'execute_trace_hydrate', 'forced_three_phase', 'three_phase'}:
@@ -2135,6 +2186,7 @@ async def benchmark_run(request: Request):
         qa_session_mode=qa_session_mode,
         enrich_mode=enrich_mode,
         seed_record=dict(seed_eligibility or {}) if seed_eligibility else None,
+        qa_only_seeded=(False if use_locomo_full else True) if suite == 'locomo_native_lifecycle' else None,
     )
 
     prior_job_id = ACTIVE_BENCHMARK_JOB_ID
@@ -2398,6 +2450,21 @@ def benchmark_last():
     summary = dict(snapshot.get('summary') or {})
     report = dict(snapshot.get('report') or {})
     ok = bool(snapshot.get('ok'))
+
+    # Durable worker failures are terminal jobs, not completed benchmark runs, so
+    # they are not written to benchmark history/artifacts. If a failed/cancelled
+    # job is newer than the latest successful run, surface that failure instead
+    # of falling through to the stale last-success report.
+    terminal_job = _latest_terminal_benchmark_job_after(summary)
+    if isinstance(terminal_job, dict):
+        terminal_summary, terminal_report, _job = _stored_active_benchmark_state(terminal_job)
+        return {
+            'ok': True,
+            'summary': terminal_summary,
+            'report': terminal_report,
+            'history': _slim_benchmark_history(history),
+            'latest_compare': None,
+        }
 
     if len(history) >= 2:
         left = str((history[1].get('summary') or {}).get('run_id') or history[1].get('run_id') or '')

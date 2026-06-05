@@ -145,7 +145,8 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertIn('benchmark', captured['kwargs'])
         self.assertEqual(['conv-1'], captured['kwargs']['seed']['sample_ids'])
         self.assertEqual('single', captured['kwargs']['seed']['sample_mode'])
-        self.assertEqual('shared', captured['kwargs']['benchmark']['qa_session_mode'])
+        self.assertEqual('isolated', captured['kwargs']['benchmark']['qa_session_mode'])
+        self.assertFalse(captured['kwargs']['benchmark']['qa_only_seeded'])
         self.assertFalse(create_task.called)  # durable worker job, not web background
 
     async def test_locomo_lifecycle_queue_seeds_all_requested_samples(self):
@@ -181,6 +182,7 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(captured['kwargs']['seed']['sample_id'])
         self.assertIsNone(captured['kwargs']['seed']['max_turns'])
         self.assertEqual(['conv-1', 'conv-2'], captured['kwargs']['benchmark']['sample_ids'])
+        self.assertFalse(captured['kwargs']['benchmark']['qa_only_seeded'])
 
     async def test_locomo_lifecycle_queue_durably_enqueues_locomo_full_with_clean_shared_llm(self):
         if demo_routes is None:
@@ -221,6 +223,7 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         bench = captured['kwargs']['benchmark']
         self.assertEqual('clean', bench['root_mode'])
         self.assertEqual('shared', bench['qa_session_mode'])
+        self.assertFalse(bench['qa_only_seeded'])
         self.assertEqual('llm', bench['answer_mode'])
 
     def test_benchmark_request_for_store_uses_runtime_backends(self):
@@ -251,6 +254,80 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(out['ok'])
         self.assertEqual('running', out['summary']['status'])
         self.assertEqual('qdrant', out['report']['config']['vector_backend'])
+
+
+    def test_benchmark_last_prefers_newer_failed_durable_job_over_stale_success(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        stale_snapshot = {
+            'ok': True,
+            'summary': {
+                'run_id': 'bench-old-success',
+                'status': 'completed',
+                'finished_at': '2026-06-04T17:05:31+00:00',
+            },
+            'report': {'run_id': 'bench-old-success', 'status': 'completed'},
+            'history': [{'run_id': 'bench-old-success', 'summary': {'run_id': 'bench-old-success'}}],
+        }
+        failed_job = {
+            'job_id': 'job-new-failed',
+            'status': 'failed',
+            'request': {'kind': 'locomo_full', 'suite': 'locomo_native_lifecycle'},
+            'kwargs': {'suite': 'locomo_native_lifecycle', 'semantic_mode_name': 'required', 'root_mode': 'clean'},
+            'progress': {'stage': 'failed', 'stage_message': 'semantic build failed'},
+            'events': [{'seq': 1, 'stage': 'failed', 'message': 'semantic build failed'}],
+            'error': 'benchmark_semantic_build_failed_required: runtimeerror',
+            'created_at': '2026-06-05T15:33:18+00:00',
+            'updated_at': '2026-06-05T16:10:55+00:00',
+            'finished_at': '2026-06-05T16:10:55+00:00',
+        }
+        with patch.object(demo_routes, '_prune_benchmark_jobs'), \
+             patch.object(demo_routes.benchmark_store, 'read_active_job', return_value=None), \
+             patch.object(demo_routes, 'get_last_benchmark_snapshot', return_value=stale_snapshot), \
+             patch.object(demo_routes.benchmark_store, 'read_latest_job_by_kind', return_value=failed_job):
+            out = demo_routes.benchmark_last()
+        self.assertTrue(out['ok'])
+        self.assertEqual('failed', out['summary']['status'])
+        self.assertEqual('job-new-failed', out['summary']['job_id'])
+        self.assertFalse(out['summary']['active'])
+        self.assertIn('benchmark_semantic_build_failed_required', out['summary']['error'])
+        self.assertEqual('', out['summary']['run_id'])
+        self.assertNotEqual('bench-old-success', out['report'].get('run_id'))
+        self.assertFalse(out['report']['active'])
+
+    def test_benchmark_last_ignores_older_failed_durable_job_than_success(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        fresh_snapshot = {
+            'ok': True,
+            'summary': {
+                'run_id': 'bench-new-success',
+                'status': 'completed',
+                'finished_at': '2026-06-05T17:05:31+00:00',
+            },
+            'report': {'run_id': 'bench-new-success', 'status': 'completed'},
+            'history': [],
+        }
+        older_failed_job = {
+            'job_id': 'job-old-failed',
+            'status': 'failed',
+            'request': {'kind': 'locomo_full'},
+            'kwargs': {},
+            'progress': {'stage': 'failed'},
+            'events': [],
+            'error': 'old failure',
+            'created_at': '2026-06-05T15:33:18+00:00',
+            'updated_at': '2026-06-05T16:10:55+00:00',
+            'finished_at': '2026-06-05T16:10:55+00:00',
+        }
+        with patch.object(demo_routes, '_prune_benchmark_jobs'), \
+             patch.object(demo_routes.benchmark_store, 'read_active_job', return_value=None), \
+             patch.object(demo_routes, 'get_last_benchmark_snapshot', return_value=fresh_snapshot), \
+             patch.object(demo_routes.benchmark_store, 'read_latest_job_by_kind', return_value=older_failed_job):
+            out = demo_routes.benchmark_last()
+        self.assertTrue(out['ok'])
+        self.assertEqual('completed', out['summary']['status'])
+        self.assertEqual('bench-new-success', out['summary']['run_id'])
 
     def test_benchmark_run_state_skips_filesystem_when_queue_active(self):
         if demo_routes is None:
