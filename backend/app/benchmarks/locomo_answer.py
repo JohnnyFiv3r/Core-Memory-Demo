@@ -24,6 +24,19 @@ except Exception:  # pragma: no cover
     memory_trace_tool = None  # type: ignore
 
 
+class RequiredToolPhaseError(RuntimeError):
+    """Raised when official LoCoMo QA does not execute required memory tools.
+
+    The lifecycle runner treats this as fatal, not as an answer-generation
+    warning, because official production-fidelity benchmarks must fail closed
+    if the PydanticAI agent skips search → trace → hydrate.
+    """
+
+    def __init__(self, validation: dict[str, Any]):
+        self.validation = dict(validation or {})
+        super().__init__(str(self.validation.get("error") or "required_tool_phase_missing"))
+
+
 def _support_strength(retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
     # Decide only whether there is *anything* worth asking the LLM about. The
     # gate is intentionally permissive: any retrieved row carrying text is enough
@@ -281,7 +294,7 @@ async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_i
     tool_transcript = extract_tool_transcript(result)
     phase_validation = validate_required_tool_phases(tool_transcript)
     if not bool(phase_validation.get("ok")):
-        raise RuntimeError(str(phase_validation.get("error") or "required_tool_phase_missing"))
+        raise RequiredToolPhaseError(phase_validation)
     out = _normalize_answer_payload(raw)
     out["tool_transcript"] = tool_transcript
     out["tool_phase_validation"] = phase_validation

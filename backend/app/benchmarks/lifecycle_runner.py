@@ -18,7 +18,7 @@ from app.benchmarks.contracts import (
     assert_faithful_shortcuts,
     assert_lifecycle_faithful_mode,
 )
-from app.benchmarks.locomo_answer import generate_locomo_answer
+from app.benchmarks.locomo_answer import RequiredToolPhaseError, generate_locomo_answer
 from app.benchmarks.locomo_loader import locomo_samples_to_benchmark_conversations
 from app.benchmarks.locomo_scoring import compute_evidence_recall
 from app.benchmarks import locomo_faithful
@@ -1083,6 +1083,8 @@ def run_qa_efforts(
                 score_meta["prediction"] = prediction
                 score_meta["answer_f1"] = float(locomo_faithful.score_answer(category=category, prediction=prediction, answer=str(qa.expected_answer or ""))) if qa.expected_answer is not None else 0.0
                 payload = {**payload, "answer": prediction, "answer_payload": answer_payload}
+            except RequiredToolPhaseError:
+                raise
             except Exception as exc:
                 warnings.append(f"answer_generation_failed:{type(exc).__name__}:{exc}")
         results[effort] = {
