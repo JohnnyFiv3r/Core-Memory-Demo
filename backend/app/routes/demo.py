@@ -28,6 +28,7 @@ from app.core.auth import auth_meta_payload, require_admin
 from app.core.config import settings
 from app.core.state_fallback import safe_state_fallback
 from app.core.runtime import (
+    _resolve_benchmark_embeddings_provider,
     compare_benchmark_runs,
     decide_entity_merge,
     detect_model,
@@ -105,6 +106,85 @@ def _benchmark_request_for_store(body: dict[str, Any] | None) -> dict[str, Any]:
     else:
         out.pop('graph_backend', None)
     return out
+
+
+def _locomo_evidence_refs(raw: Any) -> list[str]:
+    refs: list[str] = []
+    normalized = str(raw or '').replace(',', ' ').replace(';', ' ')
+    for chunk in normalized.split():
+        ref = chunk.strip()
+        if ref:
+            refs.append(ref)
+    return refs
+
+
+def _locomo_seed_turn_bound_from_selection(samples: list[dict[str, Any]], selected_cases: list[dict[str, Any]]) -> tuple[int | None, dict[str, Any]]:
+    """Return the flat replay prefix needed for the selected QA evidence.
+
+    The UI's LoCoMo numeric field selects QA count for the official benchmark.
+    Seeding must therefore replay the chronological prefix needed by those QAs,
+    not the literal numeric value as a turn count. For example, 20 QAs in conv-26
+    may need ~175 transcript turns because their latest gold evidence occurs
+    around that point.
+    """
+
+    cases_by_sample: dict[str, list[dict[str, Any]]] = {}
+    for case in list(selected_cases or []):
+        sid = str((case or {}).get('sample_id') or '').strip()
+        if sid:
+            cases_by_sample.setdefault(sid, []).append(dict(case or {}))
+
+    flat_offset = 0
+    max_global_required = 0
+    sample_bounds: list[dict[str, Any]] = []
+    missing_refs: list[str] = []
+    evidence_refs = 0
+    for sample in list(samples or []):
+        sample_d = dict(sample or {})
+        sample_id = str(sample_d.get('sample_id') or '').strip()
+        turn_index_by_ref: dict[str, int] = {}
+        local_turn_count = 0
+        for session in sorted(list(sample_d.get('sessions') or []), key=lambda s: int((s or {}).get('session_index') or 0)):
+            for turn in sorted(list((session or {}).get('turns') or []), key=lambda t: int((t or {}).get('turn_index') or 0)):
+                if not isinstance(turn, dict):
+                    continue
+                local_turn_count += 1
+                dia_id = str(turn.get('dia_id') or '').strip()
+                if dia_id:
+                    turn_index_by_ref[dia_id] = local_turn_count
+                    turn_index_by_ref[f'locomo:{sample_id}:{dia_id}'] = local_turn_count
+
+        required_local = 0
+        selected_for_sample = list(cases_by_sample.get(sample_id) or [])
+        for qa in selected_for_sample:
+            for raw_ref in list((qa or {}).get('evidence') or []):
+                for ref in _locomo_evidence_refs(raw_ref):
+                    evidence_refs += 1
+                    idx = turn_index_by_ref.get(ref)
+                    if idx is None:
+                        missing_refs.append(ref)
+                        continue
+                    required_local = max(required_local, idx)
+
+        if required_local > 0:
+            max_global_required = max(max_global_required, flat_offset + required_local)
+        sample_bounds.append({
+            'sample_id': sample_id,
+            'selected_qa_cases': len(selected_for_sample),
+            'turns_available': local_turn_count,
+            'turns_required': required_local,
+        })
+        flat_offset += local_turn_count
+
+    meta = {
+        'bounded_by_selected_qa': max_global_required > 0,
+        'selected_qa_cases': len(list(selected_cases or [])),
+        'selected_evidence_refs': evidence_refs,
+        'missing_evidence_refs': missing_refs[:20],
+        'sample_bounds': sample_bounds,
+        'turns_required': max_global_required,
+    }
+    return (max_global_required if max_global_required > 0 else None), meta
 
 SEED_JOB_TTL_SECONDS = 30 * 60
 SEED_JOB_POLL_MS = 3000
@@ -1416,6 +1496,7 @@ async def locomo_replay(request: Request):
     sample_id = (body or {}).get('sample_id')
     replay_mode = str((body or {}).get('replay_mode') or 'transcript_only').strip() or 'transcript_only'
     max_turns_raw = (body or {}).get('max_turns')
+    qa_limit_raw = (body or {}).get('qa_limit')
     start_session_raw = (body or {}).get('start_session')
     max_sessions_raw = (body or {}).get('max_sessions')
     auto_flush = bool((body or {}).get('auto_flush', True))
@@ -1427,8 +1508,27 @@ async def locomo_replay(request: Request):
     drain_timeout_ms = int((body or {}).get('drain_timeout_ms') or 600_000)
 
     max_turns = int(max_turns_raw) if isinstance(max_turns_raw, (int, float)) and int(max_turns_raw) > 0 else None
+    qa_limit = int(qa_limit_raw) if isinstance(qa_limit_raw, (int, float)) and int(qa_limit_raw) > 0 else None
     start_session = int(start_session_raw) if isinstance(start_session_raw, (int, float)) and int(start_session_raw) > 0 else None
     max_sessions = int(max_sessions_raw) if isinstance(max_sessions_raw, (int, float)) and int(max_sessions_raw) > 0 else None
+
+    seed_selection: dict[str, Any] = {}
+    if qa_limit is not None and start_session is None and max_sessions is None:
+        sample_ids = [str(sample_id).strip()] if sample_mode == 'single' and sample_id is not None else None
+        dataset_meta, selected_cases, selected_samples, _unused = build_locomo_suite_metadata(
+            suite='locomo_native_lifecycle',
+            sample_ids=sample_ids,
+            qa_limit=qa_limit,
+        )
+        derived_max_turns, seed_selection = _locomo_seed_turn_bound_from_selection(selected_samples, selected_cases)
+        if derived_max_turns is not None:
+            max_turns = int(derived_max_turns)
+        seed_selection.update({
+            'qa_limit': qa_limit,
+            'selected_sample_ids': list((dataset_meta.get('dataset') or {}).get('selected_sample_ids') or []),
+            'requested_max_turns': int(max_turns_raw) if isinstance(max_turns_raw, (int, float)) and int(max_turns_raw) > 0 else None,
+            'effective_max_turns': max_turns,
+        })
 
     kwargs = {
         'sample_mode': sample_mode,
@@ -1462,7 +1562,9 @@ async def locomo_replay(request: Request):
         'cancel_event': threading.Event(),
     }
     SEED_JOBS[job_id] = row
-    _seed_event(row, 'queued', 'Seed request accepted')
+    if seed_selection:
+        row['seed_selection'] = seed_selection
+    _seed_event(row, 'queued', 'Seed request accepted', **({'seed_selection': seed_selection} if seed_selection else {}))
     asyncio.create_task(_run_seed_job(job_id, kwargs))
     return {'ok': True, 'job_id': job_id, 'status': 'queued'}
 
@@ -1578,6 +1680,7 @@ def benchmark_preflight(
     semantic_mode: str = 'required',
     answer_mode: str = 'none',
     generator_model: str = '',
+    embeddings_provider: str = '',
 ):
     import importlib.util
     import os
@@ -1590,8 +1693,11 @@ def benchmark_preflight(
     generator_model_name = str(generator_model or '').strip()
     if answer_mode_name == 'llm' and not generator_model_name:
         generator_model_name = detect_model()
-    embeddings_provider = str(os.environ.get('CORE_MEMORY_EMBEDDINGS_PROVIDER') or '').strip() or 'hash'
+    explicit_embeddings_provider = str(embeddings_provider or '').strip() or None
+    embeddings_provider = _resolve_benchmark_embeddings_provider(explicit_embeddings_provider)
     embeddings_model = str(os.environ.get('CORE_MEMORY_EMBEDDINGS_MODEL') or '').strip()
+    vector_backend = str(os.environ.get('CORE_MEMORY_VECTOR_BACKEND') or '').strip().lower()
+    qdrant_external_embeddings = str(os.environ.get('CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS') or '').strip().lower()
 
     dataset_ok = True
     dataset_error: dict[str, Any] | None = None
@@ -1602,11 +1708,27 @@ def benchmark_preflight(
         dataset_error = {'type': exc.__class__.__name__, 'message': str(exc)}
 
     provider_dependencies: list[dict[str, Any]] = []
+    semantic_config_errors: list[str] = []
+    lifecycle_required = suite_name == 'locomo_native_lifecycle' and semantic_mode_name == 'required'
+    if lifecycle_required:
+        if vector_backend != 'qdrant':
+            semantic_config_errors.append(f"CORE_MEMORY_VECTOR_BACKEND must be qdrant, got {vector_backend or 'unset'}")
+        if qdrant_external_embeddings not in {'1', 'true', 'yes', 'on'}:
+            semantic_config_errors.append('CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS must be 1')
+        if embeddings_provider != 'openai':
+            semantic_config_errors.append(f"CORE_MEMORY_EMBEDDINGS_PROVIDER must be openai, got {embeddings_provider or 'unset'}")
+        if embeddings_model != 'text-embedding-3-large':
+            semantic_config_errors.append(f"CORE_MEMORY_EMBEDDINGS_MODEL must be text-embedding-3-large, got {embeddings_model or 'unset'}")
+        if embeddings_provider == 'openai' and not str(os.environ.get('OPENAI_API_KEY') or '').strip():
+            semantic_config_errors.append('OPENAI_API_KEY is required for OpenAI embeddings')
+    if vector_backend == 'qdrant':
+        provider_dependencies.append({'name': 'qdrant_client', 'installed': importlib.util.find_spec('qdrant_client') is not None, 'required_for': 'semantic_index'})
+    elif vector_backend in {'faiss', 'local-faiss', 'local_faiss'}:
+        provider_dependencies.append({'name': 'faiss', 'installed': importlib.util.find_spec('faiss') is not None, 'required_for': 'semantic_index'})
     if embeddings_provider == 'openai':
         provider_dependencies.append({'name': 'openai', 'installed': importlib.util.find_spec('openai') is not None, 'required_for': 'provider_embeddings'})
     if embeddings_provider not in {'hash', ''}:
         provider_dependencies.append({'name': 'numpy', 'installed': importlib.util.find_spec('numpy') is not None, 'required_for': 'semantic_vectors'})
-        provider_dependencies.append({'name': 'faiss', 'installed': importlib.util.find_spec('faiss') is not None, 'required_for': 'semantic_index'})
 
     answer_dependencies: list[dict[str, Any]] = []
     llm_answer_ready = True
@@ -1620,7 +1742,7 @@ def benchmark_preflight(
             llm_answer_ready = False
             llm_answer_error = 'missing_openai_client'
 
-    semantic_required_ready = all(bool(row.get('installed')) for row in provider_dependencies)
+    semantic_required_ready = all(bool(row.get('installed')) for row in provider_dependencies) and not semantic_config_errors
     overall_ok = bool(dataset_ok)
     if semantic_mode_name == 'required':
         overall_ok = overall_ok and semantic_required_ready
@@ -1638,10 +1760,13 @@ def benchmark_preflight(
             'error': dataset_error,
         },
         'semantic': {
+            'vector_backend': vector_backend,
             'provider': embeddings_provider,
             'model': embeddings_model,
+            'qdrant_external_embeddings': qdrant_external_embeddings,
             'required_ready': semantic_required_ready,
             'dependencies': provider_dependencies,
+            'config_errors': semantic_config_errors,
         },
         'answering': {
             'ready': llm_answer_ready if answer_mode_name == 'llm' else True,
