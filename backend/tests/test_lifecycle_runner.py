@@ -505,6 +505,7 @@ class TestLifecycleRunner(unittest.TestCase):
             )
         high = out["efforts"]["high"]
         self.assertTrue(high.get("tool_phase_failed"))
+        self.assertTrue(high.get("answer_scored"))
         self.assertEqual("", high.get("prediction"))
         self.assertEqual(["hydrate"], (high.get("tool_phase_validation") or {}).get("missing"))
 
@@ -716,6 +717,31 @@ class TestLifecycleAggregateVacuousExclusion(unittest.TestCase):
         high = aggregate_lifecycle_effort_scores(cases)["by_effort"]["high"]
         self.assertEqual(0.0, high["answer_f1_mean"])  # excluded row dropped, not 0.5
         self.assertTrue(high["answer_generated"])
+
+    def test_tool_phase_failure_counts_as_zero_answer_score(self):
+        from app.benchmarks.lifecycle_runner import aggregate_lifecycle_effort_scores
+
+        scores = aggregate_lifecycle_effort_scores([
+            {"efforts": {"high": {
+                "answer_f1": 1.0,
+                "prediction": "A",
+                "excluded": False,
+                "evidence_recall": {"recall@5": 1.0, "hit_any": True, "vacuous": False},
+            }}},
+            {"efforts": {"high": {
+                "answer_f1": 0.0,
+                "prediction": "",
+                "answer_scored": True,
+                "tool_phase_failed": True,
+                "excluded": False,
+                "evidence_recall": {"recall@5": 0.0, "hit_any": False, "vacuous": False},
+            }}},
+        ])
+
+        high = scores["by_effort"]["high"]
+        self.assertTrue(high["answer_generated"])
+        self.assertEqual(0.5, high["answer_f1_mean"])
+        self.assertEqual(0.5, scores["accuracy_by_effort"]["high"])
 
     def test_retrieval_only_effort_answer_accuracy_is_not_reported_as_zero(self):
         from app.benchmarks.lifecycle_runner import aggregate_lifecycle_effort_scores

@@ -585,8 +585,16 @@ def aggregate_lifecycle_effort_scores(cases: list[dict[str, Any]]) -> dict[str, 
         ev_rows = [row for row in rows if not (row.get("evidence_recall") or {}).get("vacuous")]
         # Only 'high' synthesizes an answer (see run_qa_efforts); low/medium are
         # retrieval-only. Report their answer_f1 as None ("not generated") instead
-        # of 0.0, which otherwise reads as a real accuracy of zero.
-        answered_rows = [row for row in scored_rows if str(row.get("prediction") or "").strip()]
+        # of 0.0, which otherwise reads as a real accuracy of zero. A high-effort
+        # tool-phase failure is still an official answer attempt and must remain
+        # in the denominator with its fail-closed 0.0 score even though the stored
+        # prediction is intentionally blank.
+        answered_rows = [
+            row for row in scored_rows
+            if str(row.get("prediction") or "").strip()
+            or bool(row.get("answer_scored"))
+            or bool(row.get("tool_phase_failed"))
+        ]
         answer_generated = bool(answered_rows)
         answer_scores = [float(row.get("answer_f1") or 0.0) for row in answered_rows]
         recall5 = [float((row.get("evidence_recall") or {}).get("recall@5") or 0.0) for row in ev_rows]
@@ -1117,6 +1125,7 @@ def run_qa_efforts(
                     category = 0
                 score_meta["prediction"] = prediction
                 score_meta["answer_f1"] = float(locomo_faithful.score_answer(category=category, prediction=prediction, answer=str(qa.expected_answer or ""))) if qa.expected_answer is not None else 0.0
+                score_meta["answer_scored"] = True
                 payload = {**payload, "answer": prediction, "answer_payload": answer_payload}
             except RequiredToolPhaseError as exc:
                 # Fail closed at the QA level, NOT the run level. A single agent
@@ -1128,6 +1137,7 @@ def run_qa_efforts(
                 detail = dict(getattr(exc, "validation", None) or {})
                 score_meta["prediction"] = ""
                 score_meta["answer_f1"] = 0.0
+                score_meta["answer_scored"] = True
                 score_meta["tool_phase_failed"] = True
                 score_meta["tool_phase_validation"] = detail or {"error": str(exc)}
                 warnings.append(f"required_tool_phase_failed:{qa.qa_id}:{detail.get('error') or exc}")
