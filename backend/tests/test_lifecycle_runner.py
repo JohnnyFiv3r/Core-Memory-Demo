@@ -450,6 +450,37 @@ class TestLifecycleRunner(unittest.TestCase):
             events,
         )
 
+    def test_qa_only_seeded_conversation_does_not_replay_or_flush_seeded_corpus(self):
+        def fail_process_turn_finalized(**kwargs):
+            raise AssertionError("QA-only seeded benchmark must not replay turns or write QA beads in this test")
+
+        def fail_flush(**kwargs):
+            raise AssertionError("QA-only seeded benchmark must not run pre-QA flush")
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            return {"answer": "A", "warnings": [], "raw": {"results": []}}
+
+        with tempfile.TemporaryDirectory() as td:
+            _write_judged_bead(td)
+            out = run_lifecycle_conversation(
+                root=td,
+                conversation=_conversation(),
+                qa_only_seeded=True,
+                process_turn_finalized_fn=fail_process_turn_finalized,
+                process_flush_fn=fail_flush,
+                recall_fn=fake_recall,
+                write_qa_beads=False,
+            )
+
+        self.assertTrue(out["ok"])
+        self.assertTrue(out["replay"]["skipped_replay"])
+        self.assertEqual("eligible_seed_record", out["replay"]["replay_source"])
+        self.assertFalse(out["pre_qa_flush"]["ran"])
+        self.assertEqual("eligible_seed_record", out["pre_qa_flush"]["source"])
+        self.assertTrue(out["lifecycle"]["qa_only_seeded"])
+        self.assertEqual(0, out["lifecycle"]["turns_replayed"])
+        self.assertEqual(2, out["lifecycle"]["seeded_turns"])
+
     def test_lifecycle_conversation_recovers_recall_from_bead_dia_map(self):
         # Regression: retrieval rows that carry only a bead_id (no surfaced
         # dia_id) used to score evidence recall as zero. The bead_id -> dia_id

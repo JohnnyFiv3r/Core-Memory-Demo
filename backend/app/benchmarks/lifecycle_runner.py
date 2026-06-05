@@ -1235,6 +1235,27 @@ def run_lifecycle_conversation(*, root: str | Path, **kwargs: Any) -> dict[str, 
         return _run_lifecycle_conversation_impl(root=root, **kwargs)
 
 
+def _seeded_pre_qa_ready(*, root: str | Path) -> dict[str, Any]:
+    """Prepare an already-seeded eligible corpus for QA without replay/flush.
+
+    The official demo route gates LoCoMo QA on a completed seed job that already
+    drained async work and ran the final flush. Benchmark QA must therefore read
+    that eligible corpus, not replay the selected samples into a fresh root. We
+    only sync graph-backend state here so causal traversal sees the existing
+    index associations in hosted Kuzu/Neo4j deployments.
+    """
+    graph_sync = sync_graph_backend(root)
+    snapshot = corpus_snapshot(root)
+    return {
+        "ran": False,
+        "ok": bool((graph_sync or {}).get("ok", True)),
+        "source": "eligible_seed_record",
+        "graph_sync": graph_sync,
+        "warnings": lifecycle_corpus_warnings(snapshot, phase="seeded_corpus"),
+        "corpus_after_pre_qa_flush": snapshot,
+    }
+
+
 def _run_lifecycle_conversation_impl(
     *,
     root: str | Path,
@@ -1253,6 +1274,7 @@ def _run_lifecycle_conversation_impl(
     progress: Any | None = None,
     progress_total: int | None = None,
     progress_completed_offset: int = 0,
+    qa_only_seeded: bool = False,
 ) -> dict[str, Any]:
     flags = shortcut_flags or BenchmarkShortcutFlags()
     assert_lifecycle_faithful_mode(dataset_mode=dataset_mode, shortcut_flags=flags)
@@ -1260,22 +1282,40 @@ def _run_lifecycle_conversation_impl(
     if qa_session_mode_name not in {"shared", "isolated"}:
         raise BenchmarkLifecycleError("qa_session_mode must be shared or isolated")
 
-    replay = replay_conversation_turns(
-        root=root,
-        conversation=conversation,
-        process_turn_finalized_fn=process_turn_finalized_fn,
-        progress=progress,
-        progress_completed=progress_completed_offset,
-        progress_total=progress_total if progress_total is not None else len(conversation.qa_cases),
-        conversation_index=int((conversation.metadata or {}).get("conversation_index") or 1),
-        conversation_total=int((conversation.metadata or {}).get("conversation_total") or 1),
-    )
-    pre_qa_flush = run_pre_qa_flush(
-        root=root,
-        conversation=conversation,
-        process_flush_fn=process_flush_fn,
-        run_async_jobs_fn=run_async_jobs_fn,
-    )
+    if bool(qa_only_seeded):
+        seeded_snapshot = corpus_snapshot(root)
+        replay = {
+            "ok": True,
+            "conversation_id": conversation.conversation_id,
+            "session_id": conversation.session_id,
+            "turns_replayed": 0,
+            "seeded_turns": len(conversation.turns),
+            "capture_hook_calls": 0,
+            "calls": [],
+            "errors": [],
+            "warnings": [],
+            "corpus_after_replay": seeded_snapshot,
+            "skipped_replay": True,
+            "replay_source": "eligible_seed_record",
+        }
+        pre_qa_flush = _seeded_pre_qa_ready(root=root)
+    else:
+        replay = replay_conversation_turns(
+            root=root,
+            conversation=conversation,
+            process_turn_finalized_fn=process_turn_finalized_fn,
+            progress=progress,
+            progress_completed=progress_completed_offset,
+            progress_total=progress_total if progress_total is not None else len(conversation.qa_cases),
+            conversation_index=int((conversation.metadata or {}).get("conversation_index") or 1),
+            conversation_total=int((conversation.metadata or {}).get("conversation_total") or 1),
+        )
+        pre_qa_flush = run_pre_qa_flush(
+            root=root,
+            conversation=conversation,
+            process_flush_fn=process_flush_fn,
+            run_async_jobs_fn=run_async_jobs_fn,
+        )
     semantic_build: dict[str, Any] = {}
     try:
         semantic_build = _build_semantic_index(root)
@@ -1387,7 +1427,7 @@ def _run_lifecycle_conversation_impl(
     extra_warnings: list[str] = []
 
     # FAIL CLOSED if a judge run authored nothing (see _assert_judge_engaged).
-    turns_replayed = int(replay.get("turns_replayed") or 0)
+    turns_replayed = int(replay.get("turns_replayed") or replay.get("seeded_turns") or 0)
     _assert_judge_engaged(
         enrich_mode=enrich_mode,
         corpus=corpus_after_qa,
@@ -1437,6 +1477,8 @@ def _run_lifecycle_conversation_impl(
             "lifecycle_faithful": dataset_mode == "locomo_native_lifecycle" and not flags.any_enabled(),
             "conversations": 1,
             "turns_replayed": int(replay.get("turns_replayed") or 0),
+            "seeded_turns": int(replay.get("seeded_turns") or 0),
+            "qa_only_seeded": bool(qa_only_seeded),
             "replay_turns_original": int((conversation.metadata or {}).get("replay_turns_original") or len(conversation.turns)),
             "replay_turns_required": int((conversation.metadata or {}).get("replay_turns_required") or len(conversation.turns)),
             "bounded_replay": bool((conversation.metadata or {}).get("bounded_replay")),
@@ -1571,6 +1613,7 @@ def run_locomo_lifecycle_suite(
     answer_mode: str = "none",
     generator_model: str | None = None,
     progress: Any | None = None,
+    qa_only_seeded: bool = False,
 ) -> dict[str, Any]:
     """Run faithful LoCoMo lifecycle benchmark over selected samples.
 
@@ -1599,7 +1642,7 @@ def run_locomo_lifecycle_suite(
     for idx, conversation in enumerate(conversations, start=1):
         conversation.metadata["conversation_index"] = idx
         conversation.metadata["conversation_total"] = len(conversations)
-        _emit_progress(progress, completed_qa, total_qa, None, {"status": "replaying", "phase": "locomo_lifecycle", "conversation_index": idx, "conversations": len(conversations), "conversation_id": conversation.conversation_id})
+        _emit_progress(progress, completed_qa, total_qa, None, {"status": "qa_seeded" if bool(qa_only_seeded) else "replaying", "phase": "locomo_lifecycle", "conversation_index": idx, "conversations": len(conversations), "conversation_id": conversation.conversation_id})
         out = run_lifecycle_conversation(
             root=root,
             conversation=conversation,
@@ -1617,6 +1660,7 @@ def run_locomo_lifecycle_suite(
             progress=progress,
             progress_total=total_qa,
             progress_completed_offset=completed_qa,
+            qa_only_seeded=qa_only_seeded,
         )
         results.append(out)
         completed_qa += int(((out.get("lifecycle") or {}).get("qa_cases") or 0))
@@ -1647,6 +1691,8 @@ def run_locomo_lifecycle_suite(
             "lifecycle_faithful": dataset_mode == "locomo_native_lifecycle" and not flags.any_enabled(),
             "conversations": len(conversations),
             "turns_replayed": sum(int(((r.get("lifecycle") or {}).get("turns_replayed") or 0)) for r in results),
+            "seeded_turns": sum(int(((r.get("lifecycle") or {}).get("seeded_turns") or 0)) for r in results),
+            "qa_only_seeded": bool(qa_only_seeded),
             "replay_turns_original": sum(int(((r.get("lifecycle") or {}).get("replay_turns_original") or 0)) for r in results),
             "replay_turns_required": sum(int(((r.get("lifecycle") or {}).get("replay_turns_required") or 0)) for r in results),
             "bounded_replay": any(bool((r.get("lifecycle") or {}).get("bounded_replay")) for r in results),

@@ -3628,9 +3628,14 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             # Official LoCoMo always uses Core Memory's native LLM bead-field
             # judge during replay. Ignore the legacy deterministic toggle.
             resolved_enrich_mode = "judge"
+            # Official lifecycle benchmark Run is QA-only. The route already
+            # requires a completed seed job with drain + final flush evidence;
+            # measure that eligible live corpus instead of replaying selected
+            # samples into this run's clean artifact root.
+            seeded_corpus_root = str(settings.core_memory_root)
             with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider), benchmark_enrich_mode(resolved_enrich_mode):
                 lifecycle_report = run_locomo_lifecycle_suite(
-                    root=str(base_root),
+                    root=seeded_corpus_root,
                     samples=selected_samples,
                     qa_cases=selected_cases,
                     qa_session_mode=qa_session_mode,
@@ -3638,6 +3643,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     answer_mode=resolved_answer_mode,
                     generator_model=resolved_generator_model,
                     progress=progress,
+                    qa_only_seeded=True,
                 )
             # Defense in depth: reject a report that degraded mid-run even though
             # the embeddings preflight passed.
@@ -3700,6 +3706,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "qa_cases": selected_qa_total,
                 "qa_completed": int(lifecycle_report.get("completed") or 0),
                 "turns_ingested": int((lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
+                "seeded_turns": int((lifecycle_report.get("lifecycle") or {}).get("seeded_turns") or 0),
                 "answer_f1_mean": float(lifecycle_overall.get("answer_f1_mean") or 0.0),
                 "evidence_recall_at_5": float(lifecycle_overall.get("evidence_recall@5") or 0.0),
                 "semantic_mode": semantic_mode_name,
@@ -3746,6 +3753,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     "enrich_mode": resolved_enrich_mode,
                     "enrich_mode_engaged": str((lifecycle_report.get("lifecycle") or {}).get("enrich_mode") or ""),
                     "seed_record_id": str((seed_record or {}).get("seed_record_id") or (seed_record or {}).get("seed_job_id") or ""),
+                    "qa_only_seeded": True,
+                    "seeded_corpus_root": seeded_corpus_root,
                 },
                 "dataset": dict((dataset_meta.get("dataset") or {})),
                 "lifecycle": dict(lifecycle_report.get("lifecycle") or {}),
@@ -3765,9 +3774,10 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 },
                 "ingestion": {
                     "mode": "locomo_native_lifecycle",
-                    "ingest_path": "eligible_seed_record",
+                    "ingest_path": "eligible_seed_record_qa_only",
                     "seed_record": dict(seed_record or {}),
-                    "turns_total": int((lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
+                    "seeded_corpus_root": seeded_corpus_root,
+                    "turns_total": int((lifecycle_report.get("lifecycle") or {}).get("seeded_turns") or (lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
                     "ingested_turns": int((lifecycle_report.get("lifecycle") or {}).get("turns_replayed") or 0),
                     "snapshot_sanitize": dict(snapshot_sanitize_meta or {}),
                 },
