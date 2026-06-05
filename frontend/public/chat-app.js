@@ -4518,8 +4518,8 @@ async function seedMemory() {
           seedPollBackoffMs = Math.max(3000, Number(job.poll_after_ms || 3000));
           const stage = String(job.stage || '');
           const stageMessage = String(job.stage_message || '').trim();
-          const ingestN = Number(job.ingest_n || 0);
-          const ingestTotal = Number(job.ingest_total || 0);
+          const ingestN = Number(job.ingest_n || job.seeded || 0);
+          const ingestTotal = Number(job.ingest_total || job.total || 0);
           let progressSuffix = stage;
           if (ingestTotal > 0) {
             progressSuffix = 'Seeded ' + ingestN + '/' + ingestTotal + ' turns';
