@@ -14,7 +14,7 @@ psycopg[binary]==3.3.2
 # default official trace depth is 6 and diagnostics report requested/effective caps.
 # Keep this SHA until the end-to-end benchmark-production-fidelity PRD is complete,
 # then update to the merged Core-Memory commit before final release if needed.
-core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@5f7c15f6be692c9af7c7d0af82741e012a53c5df
+core-memory[qdrant,kuzu,mcp] @ git+https://github.com/JohnnyFiv3r/Core-Memory.git@bfda1999cf6e12367baf6f3437da50895f53e9b9
 # Keep Qdrant explicit so deployment logs fail loudly if the semantic backend
 # dependency is skipped instead of silently falling back to lexical mode.
 qdrant-client[fastembed]>=1.9
