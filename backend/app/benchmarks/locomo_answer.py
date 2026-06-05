@@ -27,9 +27,10 @@ except Exception:  # pragma: no cover
 class RequiredToolPhaseError(RuntimeError):
     """Raised when official LoCoMo QA does not execute required memory tools.
 
-    The lifecycle runner treats this as fatal, not as an answer-generation
-    warning, because official production-fidelity benchmarks must fail closed
-    if the PydanticAI agent skips search → trace → hydrate.
+    Official production-fidelity benchmarks fail closed when the PydanticAI agent
+    skips search → trace → hydrate — but the lifecycle runner scopes that failure
+    to the offending question (records it as an unanswered tool-phase failure) so
+    one bad QA does not abort the whole run and discard the report.
     """
 
     def __init__(self, validation: dict[str, Any]):

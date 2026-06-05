@@ -1118,8 +1118,19 @@ def run_qa_efforts(
                 score_meta["prediction"] = prediction
                 score_meta["answer_f1"] = float(locomo_faithful.score_answer(category=category, prediction=prediction, answer=str(qa.expected_answer or ""))) if qa.expected_answer is not None else 0.0
                 payload = {**payload, "answer": prediction, "answer_payload": answer_payload}
-            except RequiredToolPhaseError:
-                raise
+            except RequiredToolPhaseError as exc:
+                # Fail closed at the QA level, NOT the run level. A single agent
+                # that skips a required tool phase invalidates that one question,
+                # but must not abort the whole benchmark and discard the report
+                # (which previously dropped the last questions + produced no report
+                # at all). Record it as an unanswered tool-phase failure and carry
+                # on so the run still completes and persists.
+                detail = dict(getattr(exc, "validation", None) or {})
+                score_meta["prediction"] = ""
+                score_meta["answer_f1"] = 0.0
+                score_meta["tool_phase_failed"] = True
+                score_meta["tool_phase_validation"] = detail or {"error": str(exc)}
+                warnings.append(f"required_tool_phase_failed:{qa.qa_id}:{detail.get('error') or exc}")
             except Exception as exc:
                 warnings.append(f"answer_generation_failed:{type(exc).__name__}:{exc}")
         results[effort] = {

@@ -481,7 +481,10 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual(0, out["lifecycle"]["turns_replayed"])
         self.assertEqual(2, out["lifecycle"]["seeded_turns"])
 
-    def test_required_tool_phase_failure_is_fatal_not_warning(self):
+    def test_required_tool_phase_failure_is_per_qa_not_fatal(self):
+        # A tool-phase violation fails closed for THAT question (recorded as an
+        # unanswered tool-phase failure) but must not abort the run or discard the
+        # report.
         from app.benchmarks.locomo_answer import RequiredToolPhaseError
 
         def fake_recall(request, *, effort, root, explain, include_raw):
@@ -492,15 +495,18 @@ class TestLifecycleRunner(unittest.TestCase):
                  "app.benchmarks.lifecycle_runner.generate_locomo_answer",
                  side_effect=RequiredToolPhaseError({"ok": False, "error": "required_tool_phase_missing", "missing": ["hydrate"]}),
              ):
-            with self.assertRaisesRegex(RuntimeError, "required_tool_phase_missing"):
-                run_qa_efforts(
-                    root=td,
-                    conversation=_conversation(),
-                    qa=_conversation().qa_cases[0],
-                    recall_fn=fake_recall,
-                    answer_mode="llm",
-                    generator_model="test:model",
-                )
+            out = run_qa_efforts(
+                root=td,
+                conversation=_conversation(),
+                qa=_conversation().qa_cases[0],
+                recall_fn=fake_recall,
+                answer_mode="llm",
+                generator_model="test:model",
+            )
+        high = out["efforts"]["high"]
+        self.assertTrue(high.get("tool_phase_failed"))
+        self.assertEqual("", high.get("prediction"))
+        self.assertEqual(["hydrate"], (high.get("tool_phase_validation") or {}).get("missing"))
 
     def test_lifecycle_conversation_recovers_recall_from_bead_dia_map(self):
         # Regression: retrieval rows that carry only a bead_id (no surfaced
@@ -756,3 +762,32 @@ class TestLocomoAnswerContextFormatting(unittest.TestCase):
         self.assertIn("dia_ids=D1:1", out)
         self.assertIn("dia_ids=D1:8", out)
         self.assertIn("evidence row 8", out)
+
+
+class TestRequiredToolPhasePerQA(unittest.TestCase):
+    """One agent that skips a required tool phase invalidates THAT question but
+    must not abort the run or discard the report (regression for the no-report,
+    last-questions-dropped failure)."""
+
+    def test_required_tool_phase_failure_is_recorded_not_fatal(self):
+        from app.benchmarks import lifecycle_runner as lr
+        from app.benchmarks.locomo_answer import RequiredToolPhaseError
+
+        conv = _conversation()
+        qa = conv.qa_cases[0]
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            return {"results": []}
+
+        def boom(**kwargs):
+            raise RequiredToolPhaseError({"error": "missing_trace_phase"})
+
+        with tempfile.TemporaryDirectory() as td, patch.object(lr, "generate_locomo_answer", boom):
+            out = run_qa_efforts(root=td, conversation=conv, qa=qa, recall_fn=fake_recall, k=8, answer_mode="llm")
+
+        high = out["efforts"]["high"]
+        self.assertEqual("", high.get("prediction"))
+        self.assertEqual(0.0, high.get("answer_f1"))
+        self.assertTrue(high.get("tool_phase_failed"))
+        self.assertEqual("missing_trace_phase", (high.get("tool_phase_validation") or {}).get("error"))
+        self.assertTrue(any("required_tool_phase_failed" in str(w) for w in high.get("warnings") or []))
