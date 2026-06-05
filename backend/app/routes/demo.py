@@ -2021,18 +2021,13 @@ async def benchmark_run(request: Request):
     run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
     if run_mode in {'disabled', 'off'}:
         return JSONResponse({'ok': False, 'job_id': None, 'status': 'failed', 'error': 'benchmark_run_disabled'}, status_code=503)
-    if suite == 'locomo_native_lifecycle' and run_mode not in {'queue', 'queued', 'cron'}:
-        return JSONResponse(
-            {
-                'ok': False,
-                'job_id': None,
-                'status': 'failed',
-                'error': 'locomo_benchmark_requires_cron_queue',
-                'detail': 'LoCoMo lifecycle benchmarks must be queued for the 8GB cron worker; refusing to run in the 2GB web service.',
-                'configured_run_mode': run_mode,
-            },
-            status_code=503,
-        )
+    if suite == 'locomo_native_lifecycle' and run_mode in {'queue', 'queued', 'cron', 'external', 'dispatch'}:
+        # Seed/replay is the memory-heavy phase and is queued separately as a
+        # durable `locomo_seed` job for the 8GB worker. The official benchmark
+        # run is QA-only against the already-seeded app corpus, so keep it in
+        # the web process where it can use the live demo root and stream UI
+        # progress without a second cross-process corpus handoff.
+        run_mode = 'background'
 
     seed_eligibility: dict[str, Any] | None = None
     if suite == 'locomo_native_lifecycle':
