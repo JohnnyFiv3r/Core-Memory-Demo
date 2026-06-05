@@ -29,6 +29,7 @@ from app.core.config import settings
 from app.core.state_fallback import safe_state_fallback
 from app.core.runtime import (
     _resolve_benchmark_embeddings_provider,
+    _load_locomo_dataset,
     compare_benchmark_runs,
     decide_entity_merge,
     detect_model,
@@ -106,6 +107,163 @@ def _benchmark_request_for_store(body: dict[str, Any] | None) -> dict[str, Any]:
     else:
         out.pop('graph_backend', None)
     return out
+
+
+def _locomo_evidence_refs(raw: Any) -> list[str]:
+    refs: list[str] = []
+    normalized = str(raw or '').replace(',', ' ').replace(';', ' ')
+    for chunk in normalized.split():
+        ref = chunk.strip()
+        if ref:
+            refs.append(ref)
+    return refs
+
+
+def _locomo_seed_turn_bound_from_selection(samples: list[dict[str, Any]], selected_cases: list[dict[str, Any]]) -> tuple[int | None, dict[str, Any]]:
+    """Return the flat replay prefix needed for the selected QA evidence.
+
+    The UI's LoCoMo numeric field selects QA count for the official benchmark.
+    Seeding must therefore replay the chronological prefix needed by those QAs,
+    not the literal numeric value as a turn count. For example, 20 QAs in conv-26
+    may need ~175 transcript turns because their latest gold evidence occurs
+    around that point.
+    """
+
+    cases_by_sample: dict[str, list[dict[str, Any]]] = {}
+    for case in list(selected_cases or []):
+        sid = str((case or {}).get('sample_id') or '').strip()
+        if sid:
+            cases_by_sample.setdefault(sid, []).append(dict(case or {}))
+
+    flat_offset = 0
+    max_global_required = 0
+    sample_bounds: list[dict[str, Any]] = []
+    missing_refs: list[str] = []
+    evidence_refs = 0
+    for sample in list(samples or []):
+        sample_d = dict(sample or {})
+        sample_id = str(sample_d.get('sample_id') or '').strip()
+        turn_index_by_ref: dict[str, int] = {}
+        local_turn_count = 0
+        for session in sorted(list(sample_d.get('sessions') or []), key=lambda s: int((s or {}).get('session_index') or 0)):
+            for turn in sorted(list((session or {}).get('turns') or []), key=lambda t: int((t or {}).get('turn_index') or 0)):
+                if not isinstance(turn, dict):
+                    continue
+                local_turn_count += 1
+                dia_id = str(turn.get('dia_id') or '').strip()
+                if dia_id:
+                    turn_index_by_ref[dia_id] = local_turn_count
+                    turn_index_by_ref[f'locomo:{sample_id}:{dia_id}'] = local_turn_count
+
+        required_local = 0
+        selected_for_sample = list(cases_by_sample.get(sample_id) or [])
+        for qa in selected_for_sample:
+            for raw_ref in list((qa or {}).get('evidence') or []):
+                for ref in _locomo_evidence_refs(raw_ref):
+                    evidence_refs += 1
+                    idx = turn_index_by_ref.get(ref)
+                    if idx is None:
+                        missing_refs.append(ref)
+                        continue
+                    required_local = max(required_local, idx)
+
+        if required_local > 0:
+            max_global_required = max(max_global_required, flat_offset + required_local)
+        sample_bounds.append({
+            'sample_id': sample_id,
+            'selected_qa_cases': len(selected_for_sample),
+            'turns_available': local_turn_count,
+            'turns_required': required_local,
+        })
+        flat_offset += local_turn_count
+
+    meta = {
+        'bounded_by_selected_qa': max_global_required > 0,
+        'selected_qa_cases': len(list(selected_cases or [])),
+        'selected_evidence_refs': evidence_refs,
+        'missing_evidence_refs': missing_refs[:20],
+        'sample_bounds': sample_bounds,
+        'turns_required': max_global_required,
+    }
+    return (max_global_required if max_global_required > 0 else None), meta
+
+
+def _locomo_seed_turn_bound_from_replay_dataset(*, sample_mode: str, sample_id: str | None, qa_limit: int) -> tuple[int | None, dict[str, Any]]:
+    """Derive seed prefix from the exact dataset rows replay_locomo_corpus uses."""
+
+    rows = _load_locomo_dataset()
+    sample_mode_n = str(sample_mode or 'single').strip().lower() or 'single'
+    selected: list[tuple[str, dict[str, Any]]] = []
+    if sample_mode_n == 'single':
+        sid = str(sample_id or '').strip()
+        if not sid:
+            raise ValueError('locomo_sample_not_found')
+        sid_index = int(sid) if sid.isdigit() else None
+        found: tuple[str, dict[str, Any]] | None = None
+        for idx, row in enumerate(rows):
+            rid = str(row.get('sample_id') if row.get('sample_id') is not None else idx)
+            if rid == sid or (sid_index is not None and idx == sid_index):
+                found = (rid, dict(row or {}))
+                break
+        if found is None:
+            raise ValueError('locomo_sample_not_found')
+        selected.append(found)
+    else:
+        for idx, row in enumerate(rows):
+            rid = str(row.get('sample_id') if row.get('sample_id') is not None else idx)
+            selected.append((rid, dict(row or {})))
+
+    selected_cases: list[dict[str, Any]] = []
+    for rid, row in selected:
+        for qa in list((row or {}).get('qa') or []):
+            if not isinstance(qa, dict):
+                continue
+            category = int(qa.get('category') or 0)
+            if category not in {1, 2, 3, 4}:
+                continue
+            selected_cases.append({
+                'sample_id': rid,
+                'category': category,
+                'question': str(qa.get('question') or '').strip(),
+                'answer': str(qa.get('answer') or '').strip(),
+                'evidence': list(qa.get('evidence') or []),
+            })
+            if len(selected_cases) >= int(qa_limit):
+                break
+        if len(selected_cases) >= int(qa_limit):
+            break
+
+    samples: list[dict[str, Any]] = []
+    for rid, row in selected:
+        conversation = dict((row or {}).get('conversation') or {})
+        session_numbers = sorted(
+            int(k.split('_')[-1])
+            for k in conversation.keys()
+            if k.startswith('session_') and not k.endswith('_date_time') and k.split('_')[-1].isdigit()
+        )
+        sessions: list[dict[str, Any]] = []
+        for session_index in session_numbers:
+            raw_turns = list(conversation.get(f'session_{session_index}') or [])
+            turns = [
+                {
+                    'dia_id': str((turn or {}).get('dia_id') or '').strip(),
+                    'turn_index': idx,
+                    'text': str((turn or {}).get('text') or '').strip(),
+                }
+                for idx, turn in enumerate(raw_turns, start=1)
+                if isinstance(turn, dict)
+            ]
+            sessions.append({'session_index': session_index, 'turns': turns})
+        samples.append({'sample_id': rid, 'sessions': sessions})
+
+    derived, meta = _locomo_seed_turn_bound_from_selection(samples, selected_cases)
+    meta.update({
+        'qa_limit': int(qa_limit),
+        'sample_mode': sample_mode_n,
+        'selected_sample_ids': [rid for rid, _row in selected],
+        'replay_dataset_source': 'runtime_locomo_dataset',
+    })
+    return derived, meta
 
 SEED_JOB_TTL_SECONDS = 30 * 60
 SEED_JOB_POLL_MS = 3000
@@ -1417,6 +1575,7 @@ async def locomo_replay(request: Request):
     sample_id = (body or {}).get('sample_id')
     replay_mode = str((body or {}).get('replay_mode') or 'transcript_only').strip() or 'transcript_only'
     max_turns_raw = (body or {}).get('max_turns')
+    qa_limit_raw = (body or {}).get('qa_limit')
     start_session_raw = (body or {}).get('start_session')
     max_sessions_raw = (body or {}).get('max_sessions')
     auto_flush = bool((body or {}).get('auto_flush', True))
@@ -1428,8 +1587,24 @@ async def locomo_replay(request: Request):
     drain_timeout_ms = int((body or {}).get('drain_timeout_ms') or 600_000)
 
     max_turns = int(max_turns_raw) if isinstance(max_turns_raw, (int, float)) and int(max_turns_raw) > 0 else None
+    qa_limit = int(qa_limit_raw) if isinstance(qa_limit_raw, (int, float)) and int(qa_limit_raw) > 0 else None
     start_session = int(start_session_raw) if isinstance(start_session_raw, (int, float)) and int(start_session_raw) > 0 else None
     max_sessions = int(max_sessions_raw) if isinstance(max_sessions_raw, (int, float)) and int(max_sessions_raw) > 0 else None
+
+    seed_selection: dict[str, Any] = {}
+    if qa_limit is not None and start_session is None and max_sessions is None:
+        derived_max_turns, seed_selection = _locomo_seed_turn_bound_from_replay_dataset(
+            sample_mode=sample_mode,
+            sample_id=str(sample_id).strip() if sample_id is not None else None,
+            qa_limit=qa_limit,
+        )
+        if derived_max_turns is not None:
+            max_turns = int(derived_max_turns)
+        seed_selection.update({
+            'qa_limit': qa_limit,
+            'requested_max_turns': int(max_turns_raw) if isinstance(max_turns_raw, (int, float)) and int(max_turns_raw) > 0 else None,
+            'effective_max_turns': max_turns,
+        })
 
     kwargs = {
         'sample_mode': sample_mode,
@@ -1463,7 +1638,9 @@ async def locomo_replay(request: Request):
         'cancel_event': threading.Event(),
     }
     SEED_JOBS[job_id] = row
-    _seed_event(row, 'queued', 'Seed request accepted')
+    if seed_selection:
+        row['seed_selection'] = seed_selection
+    _seed_event(row, 'queued', 'Seed request accepted', **({'seed_selection': seed_selection} if seed_selection else {}))
     asyncio.create_task(_run_seed_job(job_id, kwargs))
     return {'ok': True, 'job_id': job_id, 'status': 'queued'}
 

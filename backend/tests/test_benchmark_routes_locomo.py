@@ -3,6 +3,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -16,6 +17,87 @@ class TestBenchmarkRoutesLocomo(unittest.TestCase):
             demo_routes.SEED_STATUS.update({'active': False, 'kind': '', 'status': 'idle', 'updated_ms': 0, 'message': ''})
         except Exception:
             pass
+
+    def test_locomo_seed_turn_bound_uses_selected_qa_evidence_prefix(self):
+        from app.routes import demo as demo_routes
+
+        samples = [
+            {
+                "sample_id": "conv-26",
+                "sessions": [
+                    {
+                        "session_index": 1,
+                        "turns": [
+                            {"dia_id": f"D1:{idx}", "turn_index": idx, "text": f"turn {idx}"}
+                            for idx in range(1, 421)
+                        ],
+                    }
+                ],
+            }
+        ]
+        selected_cases = [
+            {"sample_id": "conv-26", "qa_id": "q1", "evidence": ["D1:3"]},
+            {"sample_id": "conv-26", "qa_id": "q20", "evidence": ["D1:175"]},
+        ]
+
+        required, meta = demo_routes._locomo_seed_turn_bound_from_selection(samples, selected_cases)
+
+        self.assertEqual(175, required)
+        self.assertTrue(meta["bounded_by_selected_qa"])
+        self.assertEqual(2, meta["selected_qa_cases"])
+        self.assertEqual(420, meta["sample_bounds"][0]["turns_available"])
+        self.assertEqual(175, meta["sample_bounds"][0]["turns_required"])
+
+    def test_locomo_seed_route_derives_max_turns_from_qa_limit(self):
+        try:
+            from fastapi.testclient import TestClient
+        except Exception as exc:  # pragma: no cover
+            self.skipTest(f"fastapi unavailable: {exc}")
+        from app.main import app
+        from app.routes import demo as demo_routes
+
+        replay_rows = [
+            {
+                "sample_id": "conv-26",
+                "conversation": {
+                    "session_1": [
+                        {"dia_id": f"D1:{idx}", "text": f"turn {idx}"}
+                        for idx in range(1, 421)
+                    ],
+                    "session_1_date_time": "2026-01-01",
+                },
+                "qa": [
+                    {"category": 1, "question": "q", "answer": "a", "evidence": ["D1:175"]},
+                ],
+            }
+        ]
+        captured: dict[str, object] = {}
+
+        async def fake_run_seed_job(job_id, kwargs):
+            captured["job_id"] = job_id
+            captured["kwargs"] = dict(kwargs)
+
+        def fake_create_task(coro):
+            try:
+                coro.close()
+            except Exception:
+                pass
+            return object()
+
+        with patch.object(demo_routes, "_load_locomo_dataset", return_value=replay_rows), \
+             patch.object(demo_routes, "build_locomo_suite_metadata", side_effect=AssertionError("seed bound must use replay dataset loader")), \
+             patch.object(demo_routes, "_run_seed_job", side_effect=fake_run_seed_job), \
+             patch.object(demo_routes.asyncio, "create_task", side_effect=fake_create_task):
+            res = TestClient(app).post("/api/locomo/replay", json={"sample_mode": "single", "sample_id": "conv-26", "qa_limit": 20})
+
+        self.assertEqual(200, res.status_code)
+        self.assertTrue(res.json().get("ok"))
+        job_id = str(res.json().get("job_id") or "")
+        self.assertTrue(job_id)
+        row = demo_routes.SEED_JOBS[job_id]
+        self.assertEqual(175, (row.get("seed_selection") or {}).get("effective_max_turns"))
+        self.assertEqual(20, (row.get("seed_selection") or {}).get("qa_limit"))
+        self.assertEqual("runtime_locomo_dataset", (row.get("seed_selection") or {}).get("replay_dataset_source"))
 
     def test_locomo_seed_eligibility_requires_completed_flushed_seed(self):
         from app.routes import demo as demo_routes
