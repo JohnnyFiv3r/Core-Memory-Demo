@@ -86,6 +86,7 @@ class TestBenchmarkRoutesLocomo(unittest.TestCase):
 
         with patch.object(demo_routes, "_load_locomo_dataset", return_value=replay_rows), \
              patch.object(demo_routes, "build_locomo_suite_metadata", side_effect=AssertionError("seed bound must use replay dataset loader")), \
+             patch.object(demo_routes.benchmark_store, "enabled", return_value=False), \
              patch.object(demo_routes, "_run_seed_job", side_effect=fake_run_seed_job), \
              patch.object(demo_routes.asyncio, "create_task", side_effect=fake_create_task):
             res = TestClient(app).post("/api/locomo/replay", json={"sample_mode": "single", "sample_id": "conv-26", "qa_limit": 20})
@@ -98,6 +99,100 @@ class TestBenchmarkRoutesLocomo(unittest.TestCase):
         self.assertEqual(175, (row.get("seed_selection") or {}).get("effective_max_turns"))
         self.assertEqual(20, (row.get("seed_selection") or {}).get("qa_limit"))
         self.assertEqual("runtime_locomo_dataset", (row.get("seed_selection") or {}).get("replay_dataset_source"))
+
+    def test_locomo_seed_route_queues_durable_worker_job_when_store_enabled(self):
+        try:
+            from fastapi.testclient import TestClient
+        except Exception as exc:  # pragma: no cover
+            self.skipTest(f"fastapi unavailable: {exc}")
+        from app.main import app
+        from app.routes import demo as demo_routes
+
+        captured: dict[str, object] = {}
+
+        def fake_enqueue(*, job_id, request, kwargs):
+            captured["job_id"] = job_id
+            captured["request"] = dict(request)
+            captured["kwargs"] = dict(kwargs)
+            return True
+
+        with patch.object(demo_routes.benchmark_store, "enabled", return_value=True), \
+             patch.object(demo_routes.benchmark_store, "enqueue_job", side_effect=fake_enqueue), \
+             patch.object(demo_routes.asyncio, "create_task", side_effect=AssertionError("durable seed must not run in web process")):
+            res = TestClient(app).post("/api/locomo/replay", json={"sample_mode": "single", "sample_id": "conv-26", "qa_limit": 3})
+
+        self.assertEqual(200, res.status_code)
+        data = res.json()
+        self.assertTrue(data.get("ok"))
+        self.assertTrue(data.get("queued_external"))
+        self.assertEqual("locomo_seed", (captured.get("request") or {}).get("kind"))
+        self.assertEqual(data.get("job_id"), captured.get("job_id"))
+        self.assertTrue((captured.get("kwargs") or {}).get("drain_after_ingest"))
+
+    def test_locomo_seed_job_status_reads_durable_worker_job(self):
+        try:
+            from fastapi.testclient import TestClient
+        except Exception as exc:  # pragma: no cover
+            self.skipTest(f"fastapi unavailable: {exc}")
+        from app.main import app
+        from app.routes import demo as demo_routes
+
+        stored = {
+            "job_id": "seed-pg-1",
+            "status": "running",
+            "request": {"kind": "locomo_seed"},
+            "progress": {"stage": "seeding", "stage_message": "Seeded 2/5 turns", "ingest_n": 2, "ingest_total": 5, "updated_ms": 1234},
+            "events": [{"seq": 1, "stage": "seeding", "message": "Seeded 2/5 turns", "seeded": 2, "total": 5}],
+        }
+
+        with patch.object(demo_routes.benchmark_store, "read_job", return_value=stored):
+            res = TestClient(app).get("/api/locomo/replay/job/seed-pg-1?cursor=0")
+
+        self.assertEqual(200, res.status_code)
+        data = res.json()
+        self.assertTrue(data.get("ok"))
+        self.assertEqual("running", data.get("status"))
+        self.assertFalse(data.get("done"))
+        self.assertEqual(2, data.get("seeded"))
+        self.assertEqual(5, data.get("total"))
+
+    def test_locomo_benchmark_route_rejects_active_durable_seed_job(self):
+        try:
+            from fastapi.testclient import TestClient
+        except Exception as exc:  # pragma: no cover
+            self.skipTest(f"fastapi unavailable: {exc}")
+
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            os.environ["CORE_MEMORY_ROOT"] = str(root / "core-memory")
+            os.environ["CORE_MEMORY_DEMO_BENCHMARK_ROOT"] = str(root / "core-memory-bench")
+            os.environ["CORE_MEMORY_DEMO_ARTIFACTS_ROOT"] = str(root / "core-memory-artifacts")
+            os.environ["ALLOWED_ORIGIN"] = "http://localhost:5173"
+
+            from app.routes import demo as demo_routes
+            from app.main import app
+
+            demo_routes.SEED_JOBS.clear()
+            demo_routes.SEED_STATUS.update({'active': False, 'kind': '', 'status': 'idle', 'updated_ms': 0, 'message': ''})
+            old_mode = demo_routes.settings.benchmark_run_mode
+            demo_routes.settings.benchmark_run_mode = "queue"
+            durable = {
+                "job_id": "seed-pg-active",
+                "status": "running",
+                "request": {"kind": "locomo_seed"},
+                "progress": {"stage": "seeding", "stage_message": "Seeded 1/10 turns", "ingest_n": 1, "ingest_total": 10, "updated_ms": 1234},
+                "events": [],
+            }
+            try:
+                with patch.object(demo_routes.benchmark_store, "read_latest_job_by_kind", return_value=durable):
+                    res = TestClient(app).post("/api/benchmark-run", json={"suite": "locomo_native_lifecycle", "sample_ids": ["conv-1"]})
+            finally:
+                demo_routes.settings.benchmark_run_mode = old_mode
+
+            self.assertEqual(409, res.status_code)
+            data = res.json()
+            self.assertEqual("seed_in_progress", data.get("error"))
+            self.assertEqual("seed-pg-active", data.get("active_seed_job_id"))
 
     def test_locomo_seed_eligibility_requires_completed_flushed_seed(self):
         from app.routes import demo as demo_routes

@@ -355,7 +355,7 @@ def read_job(job_id: str) -> dict[str, Any] | None:
     return out
 
 
-def read_active_job(max_age_seconds: int = 35 * 60) -> dict[str, Any] | None:
+def read_active_job(max_age_seconds: int = 35 * 60, *, kind: str = 'benchmark') -> dict[str, Any] | None:
     """Return the oldest queued/running benchmark job, or None.
 
     Jobs whose ``started_at`` (or ``created_at`` if never started) is older
@@ -371,12 +371,12 @@ def read_active_job(max_age_seconds: int = 35 * 60) -> dict[str, Any] | None:
             SELECT job_id, status, request, kwargs, progress, events, result, error, attempts, created_at, updated_at, started_at, finished_at
             FROM benchmarks.jobs
             WHERE status IN ('queued', 'running')
-              AND COALESCE(request->>'kind', 'benchmark') != 'transcript_ingest'
+              AND COALESCE(request->>'kind', 'benchmark') = %s
               AND COALESCE(started_at, created_at) > now() - (%s * interval '1 second')
             ORDER BY created_at ASC
             LIMIT 1
             """,
-            (int(max_age_seconds),),
+            (str(kind or 'benchmark'), int(max_age_seconds)),
         ).fetchone()
     if not row:
         return None
@@ -387,7 +387,32 @@ def read_active_job(max_age_seconds: int = 35 * 60) -> dict[str, Any] | None:
     return out
 
 
-def timeout_stale_jobs(max_runtime_seconds: int = 35 * 60, *, error_reason: str = 'benchmark_runtime_exceeded') -> list[str]:
+def read_latest_job_by_kind(kind: str, *, max_age_seconds: int = 24 * 60 * 60) -> dict[str, Any] | None:
+    if not enabled():
+        return None
+    ensure_schema()
+    with psycopg.connect(_database_url(), row_factory=dict_row) as conn:
+        row = conn.execute(
+            """
+            SELECT job_id, status, request, kwargs, progress, events, result, error, attempts, created_at, updated_at, started_at, finished_at
+            FROM benchmarks.jobs
+            WHERE COALESCE(request->>'kind', 'benchmark') = %s
+              AND created_at > now() - (%s * interval '1 second')
+            ORDER BY created_at DESC
+            LIMIT 1
+            """,
+            (str(kind or 'benchmark'), int(max_age_seconds)),
+        ).fetchone()
+    if not row:
+        return None
+    out = dict(row)
+    for key in ('created_at', 'updated_at', 'started_at', 'finished_at'):
+        if out.get(key) is not None:
+            out[key] = out[key].isoformat()
+    return out
+
+
+def timeout_stale_jobs(max_runtime_seconds: int = 35 * 60, *, error_reason: str = 'benchmark_runtime_exceeded', kind: str = 'benchmark') -> list[str]:
     """Mark long-running or stuck Postgres benchmark jobs as failed.
 
     Any queued/running row whose ``started_at`` (falling back to ``created_at``)
@@ -409,16 +434,16 @@ def timeout_stale_jobs(max_runtime_seconds: int = 35 * 60, *, error_reason: str 
                 error     = %s,
                 updated_at  = now()
             WHERE status IN ('queued', 'running')
-              AND COALESCE(request->>'kind', 'benchmark') != 'transcript_ingest'
+              AND COALESCE(request->>'kind', 'benchmark') = %s
               AND COALESCE(started_at, created_at) < now() - (%s * interval '1 second')
             RETURNING job_id
             """,
-            (str(error_reason), int(max_runtime_seconds)),
+            (str(error_reason), str(kind or 'benchmark'), int(max_runtime_seconds)),
         ).fetchall()
     return [str(row['job_id']) for row in rows]
 
 
-def timeout_stale_queued_jobs(max_queue_seconds: int = 5 * 60, *, error_reason: str = 'benchmark_queue_unclaimed') -> list[str]:
+def timeout_stale_queued_jobs(max_queue_seconds: int = 5 * 60, *, error_reason: str = 'benchmark_queue_unclaimed', kind: str = 'benchmark') -> list[str]:
     """Fail benchmark jobs that sat in the durable queue without being claimed."""
     if not enabled():
         return []
@@ -433,13 +458,14 @@ def timeout_stale_queued_jobs(max_queue_seconds: int = 5 * 60, *, error_reason: 
                 progress    = COALESCE(progress, '{}'::jsonb) || %s::jsonb,
                 updated_at  = now()
             WHERE status = 'queued'
-              AND COALESCE(request->>'kind', 'benchmark') != 'transcript_ingest'
+              AND COALESCE(request->>'kind', 'benchmark') = %s
               AND created_at < now() - (%s * interval '1 second')
             RETURNING job_id
             """,
             (
                 str(error_reason),
                 Jsonb({'stage': 'failed', 'stage_message': 'Benchmark queue was not claimed by worker', 'updated_ms': _now_ms()}),
+                str(kind or 'benchmark'),
                 int(max_queue_seconds),
             ),
         ).fetchall()

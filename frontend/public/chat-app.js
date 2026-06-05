@@ -4075,6 +4075,14 @@ async function refreshMemory() {
     const benchmarkRunning = initialStateHydrated && (activeBenchmarkStatus === 'running' || activeBenchmarkStatus === 'queued' || activeBenchmarkStatus === 'waiting_for_slot');
 
     if (benchmarkRunning) {
+      // A dedicated /benchmark/job/{id} poll loop owns live benchmark progress.
+      // Avoid also polling control-state/runtime/run-state every refresh tick;
+      // on hosted this creates multiple 1-2s loops against the 2GB web service
+      // while the cron worker is doing the heavy benchmark work.
+      if (activeBenchmarkPollJobId) {
+        refreshErrorStreak = 0;
+        return;
+      }
       try {
         const controlRes = await fetch('/api/demo/control-state');
         const control = await parseApiJsonResponse(controlRes, 'control-state');
@@ -4953,7 +4961,7 @@ async function runBenchmark() {
       done = !!job.done;
       if (!done) {
         syncBenchmarkButton(lastBenchmarkSummary || {});
-        await new Promise(resolve => setTimeout(resolve, Math.max(500, Number(job.poll_after_ms || 1200))));
+        await new Promise(resolve => setTimeout(resolve, Math.max(3000, Number(job.poll_after_ms || 3000))));
       } else if (job.result && job.result.ok) {
         const result = job.result || {};
         lastBenchmarkSummary = { ...(lastBenchmarkSummary || {}), ...(result.summary || {}) };
