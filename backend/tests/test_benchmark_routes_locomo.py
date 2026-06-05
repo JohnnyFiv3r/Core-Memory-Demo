@@ -214,7 +214,10 @@ class TestBenchmarkRoutesLocomo(unittest.TestCase):
         self.assertTrue(eligibility["eligible"])
         self.assertEqual("seed-1", eligibility["seed_record_id"])
 
-    def test_locomo_benchmark_route_fails_without_seed_record(self):
+    def test_locomo_benchmark_route_enqueues_combined_locomo_full_job(self):
+        # Option A: a queued LoCoMo run seeds itself in one worker job, so it no
+        # longer requires a pre-existing seed — it enqueues kind=locomo_full
+        # carrying both seed and benchmark kwargs.
         try:
             from fastapi.testclient import TestClient
         except Exception as exc:  # pragma: no cover
@@ -229,18 +232,38 @@ class TestBenchmarkRoutesLocomo(unittest.TestCase):
 
             from app.routes import demo as demo_routes
             demo_routes.SEED_JOBS.clear()
+            demo_routes.SEED_STATUS.update({"active": False})
+            captured: dict = {}
+
+            def fake_enqueue(*, job_id, request, kwargs):
+                captured["request"] = dict(request)
+                captured["kwargs"] = dict(kwargs)
+                return True
+
             old_mode = demo_routes.settings.benchmark_run_mode
             demo_routes.settings.benchmark_run_mode = "queue"
             from app.main import app
 
             try:
-                res = TestClient(app).post("/api/benchmark-run", json={"suite": "locomo_native_lifecycle", "sample_ids": ["conv-1"]})
+                with patch.object(demo_routes.benchmark_store, "enabled", return_value=True), \
+                     patch.object(demo_routes.benchmark_store, "diagnostics", return_value={}), \
+                     patch.object(demo_routes.benchmark_store, "read_active_job", return_value=None), \
+                     patch.object(demo_routes.benchmark_store, "enqueue_job", side_effect=fake_enqueue):
+                    res = TestClient(app).post(
+                        "/api/benchmark-run",
+                        json={"suite": "locomo_native_lifecycle", "sample_ids": ["conv-1"], "qa_limit": 5},
+                    )
             finally:
                 demo_routes.settings.benchmark_run_mode = old_mode
-            self.assertEqual(409, res.status_code)
-            data = res.json()
-            self.assertFalse(bool(data.get("ok")))
-            self.assertEqual("benchmark_requires_seeded_corpus", data.get("error"))
+
+            self.assertEqual(200, res.status_code, res.text)
+            self.assertEqual("locomo_full", captured["request"]["kind"])
+            self.assertIn("seed", captured["kwargs"])
+            self.assertIn("benchmark", captured["kwargs"])
+            self.assertEqual("single", captured["kwargs"]["seed"]["sample_mode"])
+            self.assertEqual("conv-1", captured["kwargs"]["seed"]["sample_id"])
+            self.assertTrue(captured["kwargs"]["seed"]["reset_session"])
+            self.assertEqual("locomo_native_lifecycle", captured["kwargs"]["benchmark"]["suite"])
 
     def test_locomo_benchmark_route_rejects_active_seed_job(self):
         try:

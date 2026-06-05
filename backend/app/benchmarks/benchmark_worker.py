@@ -185,6 +185,9 @@ def run_once() -> int:
                 message=f"Seed complete ({int((seed_out or {}).get('seeded') or 0)} turns); starting QA",
                 event={'stage': 'seeded', 'message': 'Seed complete; starting QA', 'seeded': int((seed_out or {}).get('seeded') or 0)},
             )
+            # Record what was just seeded so the report's seed metadata is populated
+            # (the route no longer pre-seeds for this path).
+            benchmark_kwargs.setdefault('seed_record', dict(seed_out or {}))
             out = run_benchmark(**benchmark_kwargs, progress=cb['progress'], ingest_progress=cb['ingest_progress'], heartbeat=cb['heartbeat'])
             out = {**dict(out or {}), 'seed': dict(seed_out or {})}
         else:
