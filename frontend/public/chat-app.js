@@ -788,10 +788,20 @@ function updateDatasetScopedControls() {
   const benchmarkBtn = document.getElementById('btn-benchmark');
   if (benchmarkBtn) {
     benchmarkBtn.textContent = dataset === 'locomo' ? 'Run LoCoMo Benchmark' : 'Run Benchmark';
+    benchmarkBtn.title = dataset === 'locomo'
+      ? 'Run the full official LoCoMo benchmark: seed/replay, drain/flush, QA, and report.'
+      : 'Run the selected benchmark.';
   }
   const seedBtn = document.getElementById('btn-seed');
-  if (seedBtn && !activeSeedJobId) {
-    seedBtn.textContent = dataset === 'locomo' ? 'Seed LoCoMo' : (dataset === 'story_pack' ? 'Seed Story Pack' : 'Seed Demo');
+  if (seedBtn) {
+    const hideStandaloneLocomoSeed = dataset === 'locomo' && !activeSeedJobId;
+    seedBtn.style.display = hideStandaloneLocomoSeed ? 'none' : '';
+    seedBtn.title = dataset === 'locomo'
+      ? 'LoCoMo seeding is part of Run LoCoMo Benchmark; this button is only shown for cancelling an active legacy seed.'
+      : 'Seed/replay demo memory for the selected dataset.';
+    if (!activeSeedJobId) {
+      seedBtn.textContent = dataset === 'story_pack' ? 'Seed Story Pack' : (dataset === 'default_demo' ? 'Seed Demo' : 'Seed');
+    }
   }
   const subset = document.getElementById('bench-subset');
   if (subset && dataset === 'locomo') {
@@ -1019,6 +1029,9 @@ function bindUiEventHandlers() {
       const jobId = activeSeedJobId;
       activeSeedJobId = null;
       fetch(`/api/locomo/replay/job/${jobId}/cancel`, {method: 'POST'}).catch(() => {});
+    } else if (String(document.getElementById('seed-source')?.value || '').trim() === 'locomo') {
+      addMsg('system', 'LoCoMo seeding now runs as part of Run LoCoMo Benchmark. Use that button for the full end-to-end benchmark.');
+      updateDatasetScopedControls();
     } else {
       seedMemory();
     }
@@ -4825,7 +4838,8 @@ async function runBenchmark() {
   updateBenchmarkProgressMessage(lastBenchmarkSummary, lastBenchmarkReport);
   addMsg(
     'system',
-    'Starting LOCOMO benchmark (' + subset + ', answer=' + optimisticAnswerMode + (generatorModel ? '/' + generatorModel : '') + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
+    (subset === 'locomo_native_lifecycle' ? 'Starting full LoCoMo benchmark lifecycle (seed + QA + report) ' : 'Starting LOCOMO benchmark ') +
+      '(' + subset + ', answer=' + optimisticAnswerMode + (generatorModel ? '/' + generatorModel : '') + ', semantic=' + semanticMode + ', embeddings=' + embeddingsProvider + ', myelination=' + myelination + ', root=' + rootMode +
       ', preload=' + (preloadEnabled ? preloadMax : 0) + ')...'
   );
   benchmarkProgressEl = addMsg('system', 'Benchmark running...');
