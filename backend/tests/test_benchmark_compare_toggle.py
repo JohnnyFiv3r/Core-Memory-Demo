@@ -103,26 +103,66 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(120 * 60, demo_routes.settings.benchmark_max_runtime_seconds)
         self.assertEqual(120 * 60, demo_routes.BENCHMARK_MAX_RUNTIME_SECONDS)
 
-    async def test_locomo_lifecycle_refuses_non_queue_web_execution(self):
+    async def test_locomo_lifecycle_queue_config_runs_qa_in_web_background(self):
         if demo_routes is None:
             self.skipTest('pydantic_settings unavailable')
         req = _Req({'suite': 'locomo_native_lifecycle', 'root_mode': 'snapshot'})
         old_mode = demo_routes.settings.benchmark_run_mode
-        demo_routes.settings.benchmark_run_mode = 'background'
+        demo_routes.settings.benchmark_run_mode = 'queue'
+
+        def fake_create_task(coro):
+            try:
+                coro.close()
+            except Exception:
+                pass
+            return object()
+
         try:
+            demo_routes.SEED_JOBS.clear()
+            demo_routes.SEED_JOBS['seed-1'] = {
+                'job_id': 'seed-1',
+                'status': 'completed',
+                'done': True,
+                'updated_ms': demo_routes._now_ms(),
+                'result': {
+                    'ok': True,
+                    'sample_ids': [],
+                    'seeded_turns': 1,
+                    'requested_turns': 1,
+                    'queue_idle': True,
+                    'final_flush_count': 1,
+                    'final_flush_failed': 0,
+                },
+            }
             with patch.object(demo_routes, '_prune_benchmark_jobs'):
-                out = await demo_routes.benchmark_run(req)
+                with patch.object(demo_routes.benchmark_store, 'enqueue_job') as enqueue, \
+                     patch.object(demo_routes.asyncio, 'create_task', side_effect=fake_create_task) as create_task:
+                    out = await demo_routes.benchmark_run(req)
         finally:
             demo_routes.settings.benchmark_run_mode = old_mode
-        self.assertEqual(503, out.status_code)
-        self.assertIn('locomo_benchmark_requires_cron_queue', out.body.decode())
+            demo_routes.SEED_JOBS.clear()
+        self.assertTrue(out['ok'])
+        self.assertEqual('queued', out['status'])
+        self.assertFalse(enqueue.called)
+        self.assertTrue(create_task.called)
+        row = demo_routes.BENCHMARK_JOBS.pop(out['job_id'], None)
+        self.assertIsInstance(row, dict)
+        self.assertEqual('shared', (row or {}).get('kwargs', {}).get('qa_session_mode'))
 
-    async def test_locomo_lifecycle_queue_forces_clean_isolated_llm(self):
+    async def test_locomo_lifecycle_queue_forces_clean_shared_llm_without_durable_benchmark_enqueue(self):
         if demo_routes is None:
             self.skipTest('pydantic_settings unavailable')
         req = _Req({'suite': 'locomo_native_lifecycle', 'root_mode': 'snapshot', 'qa_session_mode': 'shared', 'answer_mode': 'none', 'vector_backend': 'local-faiss'})
         old_mode = demo_routes.settings.benchmark_run_mode
         demo_routes.settings.benchmark_run_mode = 'queue'
+
+        def fake_create_task(coro):
+            try:
+                coro.close()
+            except Exception:
+                pass
+            return object()
+
         try:
             demo_routes.SEED_JOBS.clear()
             demo_routes.SEED_JOBS['seed-1'] = {
@@ -143,20 +183,20 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
             with patch.dict(demo_routes.os.environ, {'CORE_MEMORY_VECTOR_BACKEND': 'qdrant', 'CORE_MEMORY_GRAPH_BACKEND': 'kuzu'}), \
                  patch.object(demo_routes, '_prune_benchmark_jobs'), \
                  patch.object(demo_routes.benchmark_store, 'read_active_job', return_value=None), \
-                 patch.object(demo_routes.benchmark_store, 'enqueue_job', return_value=True) as enqueue:
+                 patch.object(demo_routes.benchmark_store, 'enqueue_job', return_value=True) as enqueue, \
+                 patch.object(demo_routes.asyncio, 'create_task', side_effect=fake_create_task):
                 out = await demo_routes.benchmark_run(req)
         finally:
             demo_routes.settings.benchmark_run_mode = old_mode
             demo_routes.SEED_JOBS.clear()
         self.assertTrue(out['ok'])
-        kwargs = enqueue.call_args.kwargs['kwargs']
+        self.assertFalse(enqueue.called)
+        row = demo_routes.BENCHMARK_JOBS.pop(out['job_id'], None)
+        self.assertIsInstance(row, dict)
+        kwargs = (row or {}).get('kwargs') or {}
         self.assertEqual('clean', kwargs['root_mode'])
         self.assertEqual('shared', kwargs['qa_session_mode'])
         self.assertEqual('llm', kwargs['answer_mode'])
-        stored_request = enqueue.call_args.kwargs['request']
-        self.assertEqual('qdrant', stored_request['vector_backend'])
-        self.assertEqual('kuzu', stored_request['graph_backend'])
-        demo_routes.BENCHMARK_JOBS.pop(out['job_id'], None)
 
     def test_benchmark_request_for_store_uses_runtime_backends(self):
         if demo_routes is None:

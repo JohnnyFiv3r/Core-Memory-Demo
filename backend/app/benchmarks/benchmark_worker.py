@@ -11,7 +11,7 @@ configure_shared_semantic_backend_env()
 
 from app.benchmarks import benchmark_store
 from app.core.config import settings
-from app.core.runtime import run_benchmark
+from app.core.runtime import replay_locomo_corpus, run_benchmark
 from app.ingest.transcript import run_transcript_ingest_job
 
 
@@ -28,6 +28,35 @@ def run_once() -> int:
     try:
         if kind == 'transcript_ingest':
             out = run_transcript_ingest_job(**kwargs)
+        elif kind == 'locomo_seed':
+            last_seed_write = 0.0
+
+            def seed_progress(seeded: int, total: int) -> None:
+                nonlocal last_seed_write
+                now = time.monotonic()
+                if now - last_seed_write < 1.5 and int(seeded) < int(total):
+                    return
+                last_seed_write = now
+                benchmark_store.update_job_progress(
+                    job_id,
+                    status='running',
+                    stage='seeding',
+                    message=f'Seeded {int(seeded)}/{int(total)} turns',
+                    ingest_n=int(seeded),
+                    ingest_total=int(total),
+                    event={'stage': 'seeding', 'message': f'Seeded {int(seeded)}/{int(total)} turns', 'seeded': int(seeded), 'total': int(total)},
+                )
+
+            def seed_heartbeat(stage: str, message: str) -> None:
+                benchmark_store.update_job_progress(
+                    job_id,
+                    status='running',
+                    stage=str(stage or 'seeding'),
+                    message=str(message or ''),
+                )
+
+            benchmark_store.update_job_progress(job_id, status='running', stage='starting', message='LoCoMo seed worker started')
+            out = replay_locomo_corpus(progress=seed_progress, heartbeat=seed_heartbeat, **kwargs)
         else:
             last_heartbeat_write = 0.0
             last_ingest_write = 0.0

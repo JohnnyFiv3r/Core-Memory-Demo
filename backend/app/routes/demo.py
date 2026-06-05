@@ -539,6 +539,64 @@ def _seed_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]
     return out
 
 
+def _stored_seed_job_payload(row: dict[str, Any], *, cursor: int = 0) -> dict[str, Any]:
+    progress = dict(row.get('progress') or {})
+    raw_events = list(row.get('events') or [])
+    events = [e for e in raw_events if int((e or {}).get('seq') or 0) > int(cursor)]
+    next_cursor = int(cursor)
+    if events:
+        next_cursor = int((events[-1] or {}).get('seq') or cursor)
+    status = str(row.get('status') or 'queued')
+    done = status in {'completed', 'failed', 'cancelled'}
+    out: dict[str, Any] = {
+        'ok': True,
+        'job_id': str(row.get('job_id') or ''),
+        'status': status,
+        'stage': str(progress.get('stage') or status),
+        'stage_message': str(progress.get('stage_message') or ''),
+        'done': done,
+        'poll_after_ms': max(SEED_JOB_POLL_MS, 3000),
+        'events': events,
+        'cursor_next': next_cursor,
+        'started_ms': int(progress.get('updated_ms') or 0),
+        'updated_ms': int(progress.get('updated_ms') or _now_ms()),
+        'elapsed_ms': 0,
+        'seeded': int(progress.get('ingest_n') or 0),
+        'total': int(progress.get('ingest_total') or 0),
+    }
+    if row.get('error'):
+        out['error'] = str(row.get('error') or '')
+    if done and isinstance(row.get('result'), dict):
+        out['result'] = dict(row.get('result') or {})
+    return out
+
+
+def _latest_durable_seed_job() -> dict[str, Any] | None:
+    try:
+        return benchmark_store.read_latest_job_by_kind('locomo_seed')
+    except Exception:
+        return None
+
+
+def _durable_seed_status() -> dict[str, Any] | None:
+    row = _latest_durable_seed_job()
+    if not isinstance(row, dict):
+        return None
+    payload = _stored_seed_job_payload(row, cursor=0)
+    result = dict(row.get('result') or {}) if isinstance(row.get('result'), dict) else {}
+    seeded = int(result.get('seeded_turns') or result.get('seeded') or payload.get('seeded') or 0)
+    status = str(payload.get('status') or '')
+    active = status in {'queued', 'running'}
+    message = str(payload.get('stage_message') or '')
+    if status == 'completed':
+        message = f'LoCoMo replay complete: {seeded} turns'
+    elif status == 'failed':
+        message = str(payload.get('error') or message or 'Seed failed')
+    elif not message:
+        message = 'LoCoMo replay queued' if status == 'queued' else 'LoCoMo replay in progress'
+    return {'active': active, 'kind': 'locomo', 'status': status, 'updated_ms': int(payload.get('updated_ms') or _now_ms()), 'message': message, 'job_id': str(payload.get('job_id') or '')}
+
+
 def _locomo_seed_eligibility(*, sample_ids: list[str] | None = None) -> dict[str, Any]:
     """Return the latest completed LoCoMo seed record eligible for QA-only benchmark.
 
@@ -548,6 +606,15 @@ def _locomo_seed_eligibility(*, sample_ids: list[str] | None = None) -> dict[str
     """
     requested = sorted({str(x).strip() for x in list(sample_ids or []) if str(x).strip()})
     candidates: list[dict[str, Any]] = []
+    durable = _latest_durable_seed_job()
+    if isinstance(durable, dict) and str(durable.get('status') or '') == 'completed' and isinstance(durable.get('result'), dict):
+        candidates.append({
+            'job_id': str(durable.get('job_id') or ''),
+            'status': 'completed',
+            'done': True,
+            'updated_ms': _now_ms(),
+            'result': dict(durable.get('result') or {}),
+        })
     for row in list(SEED_JOBS.values()):
         if not isinstance(row, dict) or str(row.get('status') or '') != 'completed' or not bool(row.get('done')):
             continue
@@ -1533,6 +1600,9 @@ def locomo_meta():
 
 @router.get('/demo/seed-status')
 def demo_seed_status():
+    durable = _durable_seed_status()
+    if isinstance(durable, dict):
+        return {'ok': True, **durable}
     return {'ok': True, **dict(SEED_STATUS)}
 
 
@@ -1637,6 +1707,13 @@ async def locomo_replay(request: Request):
         'updated_ms': _now_ms(),
         'cancel_event': threading.Event(),
     }
+    request_payload = {'kind': 'locomo_seed', 'sample_mode': sample_mode, 'sample_id': str(sample_id or ''), 'seed_selection': seed_selection}
+    if benchmark_store.enabled():
+        queued = benchmark_store.enqueue_job(job_id=job_id, request=request_payload, kwargs=kwargs)
+        if queued:
+            _set_seed_status(active=True, kind='locomo', status='queued', message='LoCoMo replay queued for seed worker')
+            return {'ok': True, 'job_id': job_id, 'status': 'queued', 'queued_external': True}
+
     SEED_JOBS[job_id] = row
     if seed_selection:
         row['seed_selection'] = seed_selection
@@ -1651,6 +1728,9 @@ def locomo_replay_job_status(job_id: str, cursor: int = 0):
     job_id_s = str(job_id or '').strip()
     row = SEED_JOBS.get(job_id_s)
     if not isinstance(row, dict):
+        stored = benchmark_store.read_job(job_id_s)
+        if isinstance(stored, dict) and str((stored.get('request') or {}).get('kind') or '') == 'locomo_seed':
+            return _stored_seed_job_payload(stored, cursor=max(0, int(cursor)))
         return JSONResponse({'ok': False, 'error': 'seed_job_not_found'}, status_code=404)
     return _seed_job_payload(row, cursor=max(0, int(cursor)))
 
@@ -1941,25 +2021,24 @@ async def benchmark_run(request: Request):
     run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
     if run_mode in {'disabled', 'off'}:
         return JSONResponse({'ok': False, 'job_id': None, 'status': 'failed', 'error': 'benchmark_run_disabled'}, status_code=503)
-    if suite == 'locomo_native_lifecycle' and run_mode not in {'queue', 'queued', 'cron'}:
-        return JSONResponse(
-            {
-                'ok': False,
-                'job_id': None,
-                'status': 'failed',
-                'error': 'locomo_benchmark_requires_cron_queue',
-                'detail': 'LoCoMo lifecycle benchmarks must be queued for the 8GB cron worker; refusing to run in the 2GB web service.',
-                'configured_run_mode': run_mode,
-            },
-            status_code=503,
-        )
+    if suite == 'locomo_native_lifecycle' and run_mode in {'queue', 'queued', 'cron', 'external', 'dispatch'}:
+        # Seed/replay is the memory-heavy phase and is queued separately as a
+        # durable `locomo_seed` job for the 8GB worker. The official benchmark
+        # run is QA-only against the already-seeded app corpus, so keep it in
+        # the web process where it can use the live demo root and stream UI
+        # progress without a second cross-process corpus handoff.
+        run_mode = 'background'
 
     seed_eligibility: dict[str, Any] | None = None
     if suite == 'locomo_native_lifecycle':
         _prune_seed_jobs()
         active_seed = _active_seed_job()
-        if active_seed or bool(SEED_STATUS.get('active')):
+        durable_seed = _durable_seed_status()
+        durable_seed_active = isinstance(durable_seed, dict) and bool(durable_seed.get('active'))
+        if active_seed or bool(SEED_STATUS.get('active')) or durable_seed_active:
             active_seed_id = str((active_seed or {}).get('job_id') or '')
+            if not active_seed_id and isinstance(durable_seed, dict):
+                active_seed_id = str(durable_seed.get('job_id') or '')
             return JSONResponse(
                 {
                     'ok': False,
@@ -1967,7 +2046,7 @@ async def benchmark_run(request: Request):
                     'status': 'failed',
                     'error': 'seed_in_progress',
                     'active_seed_job_id': active_seed_id,
-                    'seed': dict(SEED_STATUS),
+                    'seed': dict(durable_seed or SEED_STATUS),
                 },
                 status_code=409,
             )
