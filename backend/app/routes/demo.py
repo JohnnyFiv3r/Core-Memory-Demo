@@ -28,6 +28,7 @@ from app.core.auth import auth_meta_payload, require_admin
 from app.core.config import settings
 from app.core.state_fallback import safe_state_fallback
 from app.core.runtime import (
+    _resolve_benchmark_embeddings_provider,
     compare_benchmark_runs,
     decide_entity_merge,
     detect_model,
@@ -1578,6 +1579,7 @@ def benchmark_preflight(
     semantic_mode: str = 'required',
     answer_mode: str = 'none',
     generator_model: str = '',
+    embeddings_provider: str = '',
 ):
     import importlib.util
     import os
@@ -1590,8 +1592,11 @@ def benchmark_preflight(
     generator_model_name = str(generator_model or '').strip()
     if answer_mode_name == 'llm' and not generator_model_name:
         generator_model_name = detect_model()
-    embeddings_provider = str(os.environ.get('CORE_MEMORY_EMBEDDINGS_PROVIDER') or '').strip() or 'hash'
+    explicit_embeddings_provider = str(embeddings_provider or '').strip() or None
+    embeddings_provider = _resolve_benchmark_embeddings_provider(explicit_embeddings_provider)
     embeddings_model = str(os.environ.get('CORE_MEMORY_EMBEDDINGS_MODEL') or '').strip()
+    vector_backend = str(os.environ.get('CORE_MEMORY_VECTOR_BACKEND') or '').strip().lower()
+    qdrant_external_embeddings = str(os.environ.get('CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS') or '').strip().lower()
 
     dataset_ok = True
     dataset_error: dict[str, Any] | None = None
@@ -1602,11 +1607,27 @@ def benchmark_preflight(
         dataset_error = {'type': exc.__class__.__name__, 'message': str(exc)}
 
     provider_dependencies: list[dict[str, Any]] = []
+    semantic_config_errors: list[str] = []
+    lifecycle_required = suite_name == 'locomo_native_lifecycle' and semantic_mode_name == 'required'
+    if lifecycle_required:
+        if vector_backend != 'qdrant':
+            semantic_config_errors.append(f"CORE_MEMORY_VECTOR_BACKEND must be qdrant, got {vector_backend or 'unset'}")
+        if qdrant_external_embeddings not in {'1', 'true', 'yes', 'on'}:
+            semantic_config_errors.append('CORE_MEMORY_QDRANT_EXTERNAL_EMBEDDINGS must be 1')
+        if embeddings_provider != 'openai':
+            semantic_config_errors.append(f"CORE_MEMORY_EMBEDDINGS_PROVIDER must be openai, got {embeddings_provider or 'unset'}")
+        if embeddings_model != 'text-embedding-3-large':
+            semantic_config_errors.append(f"CORE_MEMORY_EMBEDDINGS_MODEL must be text-embedding-3-large, got {embeddings_model or 'unset'}")
+        if embeddings_provider == 'openai' and not str(os.environ.get('OPENAI_API_KEY') or '').strip():
+            semantic_config_errors.append('OPENAI_API_KEY is required for OpenAI embeddings')
+    if vector_backend == 'qdrant':
+        provider_dependencies.append({'name': 'qdrant_client', 'installed': importlib.util.find_spec('qdrant_client') is not None, 'required_for': 'semantic_index'})
+    elif vector_backend in {'faiss', 'local-faiss', 'local_faiss'}:
+        provider_dependencies.append({'name': 'faiss', 'installed': importlib.util.find_spec('faiss') is not None, 'required_for': 'semantic_index'})
     if embeddings_provider == 'openai':
         provider_dependencies.append({'name': 'openai', 'installed': importlib.util.find_spec('openai') is not None, 'required_for': 'provider_embeddings'})
     if embeddings_provider not in {'hash', ''}:
         provider_dependencies.append({'name': 'numpy', 'installed': importlib.util.find_spec('numpy') is not None, 'required_for': 'semantic_vectors'})
-        provider_dependencies.append({'name': 'faiss', 'installed': importlib.util.find_spec('faiss') is not None, 'required_for': 'semantic_index'})
 
     answer_dependencies: list[dict[str, Any]] = []
     llm_answer_ready = True
@@ -1620,7 +1641,7 @@ def benchmark_preflight(
             llm_answer_ready = False
             llm_answer_error = 'missing_openai_client'
 
-    semantic_required_ready = all(bool(row.get('installed')) for row in provider_dependencies)
+    semantic_required_ready = all(bool(row.get('installed')) for row in provider_dependencies) and not semantic_config_errors
     overall_ok = bool(dataset_ok)
     if semantic_mode_name == 'required':
         overall_ok = overall_ok and semantic_required_ready
@@ -1638,10 +1659,13 @@ def benchmark_preflight(
             'error': dataset_error,
         },
         'semantic': {
+            'vector_backend': vector_backend,
             'provider': embeddings_provider,
             'model': embeddings_model,
+            'qdrant_external_embeddings': qdrant_external_embeddings,
             'required_ready': semantic_required_ready,
             'dependencies': provider_dependencies,
+            'config_errors': semantic_config_errors,
         },
         'answering': {
             'ready': llm_answer_ready if answer_mode_name == 'llm' else True,
