@@ -4517,6 +4517,15 @@ async function seedMemory() {
           cursor = Number(job.cursor_next || cursor);
           seedPollBackoffMs = Math.max(3000, Number(job.poll_after_ms || 3000));
           const stage = String(job.stage || '');
+          const stageMessage = String(job.stage_message || '').trim();
+          const ingestN = Number(job.ingest_n || job.seeded || 0);
+          const ingestTotal = Number(job.ingest_total || job.total || 0);
+          let progressSuffix = stage;
+          if (ingestTotal > 0) {
+            progressSuffix = 'Seeded ' + ingestN + '/' + ingestTotal + ' turns';
+          } else if (stageMessage) {
+            progressSuffix = stageMessage;
+          }
           if (activeSeedJobId !== seedJobId) {
             if (!cancellingStartMs) cancellingStartMs = Date.now();
             progressEl.textContent = 'Cancelling LoCoMo seed...';
@@ -4526,7 +4535,7 @@ async function seedMemory() {
             }
           } else {
             cancellingStartMs = 0;
-            progressEl.textContent = 'Seeding LoCoMo transcript corpus... ' + stage;
+            progressEl.textContent = 'Seeding LoCoMo transcript corpus... ' + progressSuffix;
           }
         } catch (_) {
           // transient poll failure — keep trying
