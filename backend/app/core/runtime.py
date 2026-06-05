@@ -3633,17 +3633,24 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             # measure that eligible live corpus instead of replaying selected
             # samples into this run's clean artifact root.
             seeded_corpus_root = str(settings.core_memory_root)
+            # QA-only seeded runs must query the seeded application corpus
+            # directly. Isolated per-QA clones were for benchmark-owned replay
+            # roots; with embedded Qdrant they require rebuilding under a new
+            # collection name and can fail closed before QA starts despite the
+            # live corpus being ready.
+            resolved_qa_session_mode = "shared"
             with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider), benchmark_enrich_mode(resolved_enrich_mode):
                 lifecycle_report = run_locomo_lifecycle_suite(
                     root=seeded_corpus_root,
                     samples=selected_samples,
                     qa_cases=selected_cases,
-                    qa_session_mode=qa_session_mode,
+                    qa_session_mode=resolved_qa_session_mode,
                     retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
                     answer_mode=resolved_answer_mode,
                     generator_model=resolved_generator_model,
                     progress=progress,
                     qa_only_seeded=True,
+                    write_qa_beads=False,
                 )
             # Defense in depth: reject a report that degraded mid-run even though
             # the embeddings preflight passed.
@@ -3741,7 +3748,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     "multi_hop_category": int(MULTI_HOP_CATEGORY),
                     "retrieval_efforts": ["low", "medium", "high"],
                     "recall_scope": "full_bead_corpus",
-                    "qa_session_mode": str(qa_session_mode or "isolated"),
+                    "qa_session_mode": resolved_qa_session_mode,
                     "dataset_mode": "locomo_native_lifecycle",
                     "answer_mode": resolved_answer_mode,
                     "generator_model": resolved_generator_model,

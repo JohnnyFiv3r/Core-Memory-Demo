@@ -151,7 +151,7 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertTrue(out['ok'])
         kwargs = enqueue.call_args.kwargs['kwargs']
         self.assertEqual('clean', kwargs['root_mode'])
-        self.assertEqual('isolated', kwargs['qa_session_mode'])
+        self.assertEqual('shared', kwargs['qa_session_mode'])
         self.assertEqual('llm', kwargs['answer_mode'])
         stored_request = enqueue.call_args.kwargs['request']
         self.assertEqual('qdrant', stored_request['vector_backend'])
