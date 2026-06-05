@@ -17,6 +17,18 @@ except Exception:  # pragma: no cover - benchmark DB persistence is optional
     Jsonb = None  # type: ignore
 
 
+
+BENCHMARK_ACTIVE_KINDS = ('benchmark', 'locomo_full')
+
+
+def _kind_filter(kind: str | list[str] | tuple[str, ...] | set[str] | None) -> list[str]:
+    if kind in (None, '', 'benchmark'):
+        return list(BENCHMARK_ACTIVE_KINDS)
+    if isinstance(kind, (list, tuple, set)):
+        kinds = [str(x).strip() for x in kind if str(x).strip()]
+        return kinds or list(BENCHMARK_ACTIVE_KINDS)
+    return [str(kind or 'benchmark').strip() or 'benchmark']
+
 _ALLOWED_ARTIFACTS = {
     'report.json': 'application/json',
     'summary.json': 'application/json',
@@ -355,7 +367,7 @@ def read_job(job_id: str) -> dict[str, Any] | None:
     return out
 
 
-def read_active_job(max_age_seconds: int = 35 * 60, *, kind: str = 'benchmark') -> dict[str, Any] | None:
+def read_active_job(max_age_seconds: int = 35 * 60, *, kind: str | list[str] | tuple[str, ...] | set[str] | None = 'benchmark') -> dict[str, Any] | None:
     """Return the oldest queued/running benchmark job, or None.
 
     Jobs whose ``started_at`` (or ``created_at`` if never started) is older
@@ -365,18 +377,19 @@ def read_active_job(max_age_seconds: int = 35 * 60, *, kind: str = 'benchmark') 
     if not enabled():
         return None
     ensure_schema()
+    kinds = _kind_filter(kind)
     with psycopg.connect(_database_url(), row_factory=dict_row) as conn:
         row = conn.execute(
             """
             SELECT job_id, status, request, kwargs, progress, events, result, error, attempts, created_at, updated_at, started_at, finished_at
             FROM benchmarks.jobs
             WHERE status IN ('queued', 'running')
-              AND COALESCE(request->>'kind', 'benchmark') = %s
+              AND COALESCE(request->>'kind', 'benchmark') = ANY(%s)
               AND COALESCE(started_at, created_at) > now() - (%s * interval '1 second')
             ORDER BY created_at ASC
             LIMIT 1
             """,
-            (str(kind or 'benchmark'), int(max_age_seconds)),
+            (kinds, int(max_age_seconds)),
         ).fetchone()
     if not row:
         return None
@@ -412,7 +425,7 @@ def read_latest_job_by_kind(kind: str, *, max_age_seconds: int = 24 * 60 * 60) -
     return out
 
 
-def timeout_stale_jobs(max_runtime_seconds: int = 35 * 60, *, error_reason: str = 'benchmark_runtime_exceeded', kind: str = 'benchmark') -> list[str]:
+def timeout_stale_jobs(max_runtime_seconds: int = 35 * 60, *, error_reason: str = 'benchmark_runtime_exceeded', kind: str | list[str] | tuple[str, ...] | set[str] | None = 'benchmark') -> list[str]:
     """Mark long-running or stuck Postgres benchmark jobs as failed.
 
     Any queued/running row whose ``started_at`` (falling back to ``created_at``)
@@ -425,6 +438,7 @@ def timeout_stale_jobs(max_runtime_seconds: int = 35 * 60, *, error_reason: str 
     if not enabled():
         return []
     ensure_schema()
+    kinds = _kind_filter(kind)
     with psycopg.connect(_database_url(), autocommit=True, row_factory=dict_row) as conn:
         rows = conn.execute(
             """
@@ -434,20 +448,21 @@ def timeout_stale_jobs(max_runtime_seconds: int = 35 * 60, *, error_reason: str 
                 error     = %s,
                 updated_at  = now()
             WHERE status IN ('queued', 'running')
-              AND COALESCE(request->>'kind', 'benchmark') = %s
+              AND COALESCE(request->>'kind', 'benchmark') = ANY(%s)
               AND COALESCE(started_at, created_at) < now() - (%s * interval '1 second')
             RETURNING job_id
             """,
-            (str(error_reason), str(kind or 'benchmark'), int(max_runtime_seconds)),
+            (str(error_reason), kinds, int(max_runtime_seconds)),
         ).fetchall()
     return [str(row['job_id']) for row in rows]
 
 
-def timeout_stale_queued_jobs(max_queue_seconds: int = 5 * 60, *, error_reason: str = 'benchmark_queue_unclaimed', kind: str = 'benchmark') -> list[str]:
+def timeout_stale_queued_jobs(max_queue_seconds: int = 5 * 60, *, error_reason: str = 'benchmark_queue_unclaimed', kind: str | list[str] | tuple[str, ...] | set[str] | None = 'benchmark') -> list[str]:
     """Fail benchmark jobs that sat in the durable queue without being claimed."""
     if not enabled():
         return []
     ensure_schema()
+    kinds = _kind_filter(kind)
     with psycopg.connect(_database_url(), autocommit=True, row_factory=dict_row) as conn:
         rows = conn.execute(
             """
@@ -458,14 +473,14 @@ def timeout_stale_queued_jobs(max_queue_seconds: int = 5 * 60, *, error_reason: 
                 progress    = COALESCE(progress, '{}'::jsonb) || %s::jsonb,
                 updated_at  = now()
             WHERE status = 'queued'
-              AND COALESCE(request->>'kind', 'benchmark') = %s
+              AND COALESCE(request->>'kind', 'benchmark') = ANY(%s)
               AND created_at < now() - (%s * interval '1 second')
             RETURNING job_id
             """,
             (
                 str(error_reason),
                 Jsonb({'stage': 'failed', 'stage_message': 'Benchmark queue was not claimed by worker', 'updated_ms': _now_ms()}),
-                str(kind or 'benchmark'),
+                kinds,
                 int(max_queue_seconds),
             ),
         ).fetchall()

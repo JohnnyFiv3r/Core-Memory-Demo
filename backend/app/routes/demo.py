@@ -274,7 +274,8 @@ def _locomo_full_seed_kwargs(*, sample_ids: list[str], qa_limit: int | None) -> 
     run a clean corpus (matching root_mode='clean'), since the combined job seeds
     and then runs QA in the same worker process.
     """
-    sample_id = sample_ids[0] if sample_ids else None
+    normalized_sample_ids = [str(x).strip() for x in list(sample_ids or []) if str(x).strip()]
+    sample_id = normalized_sample_ids[0] if len(normalized_sample_ids) == 1 else None
     sample_mode = 'single' if sample_id else 'all'
     max_turns: int | None = None
     if sample_id and qa_limit:
@@ -290,6 +291,7 @@ def _locomo_full_seed_kwargs(*, sample_ids: list[str], qa_limit: int | None) -> 
     return {
         'sample_mode': sample_mode,
         'sample_id': str(sample_id) if sample_id else None,
+        'sample_ids': normalized_sample_ids,
         'replay_mode': 'transcript_only',
         'max_turns': max_turns,
         'auto_flush': True,
