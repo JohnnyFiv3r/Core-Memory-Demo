@@ -481,6 +481,27 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual(0, out["lifecycle"]["turns_replayed"])
         self.assertEqual(2, out["lifecycle"]["seeded_turns"])
 
+    def test_required_tool_phase_failure_is_fatal_not_warning(self):
+        from app.benchmarks.locomo_answer import RequiredToolPhaseError
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            return {"answer": f"answer-{effort}", "warnings": [], "raw": {"results": []}}
+
+        with tempfile.TemporaryDirectory() as td, \
+             patch(
+                 "app.benchmarks.lifecycle_runner.generate_locomo_answer",
+                 side_effect=RequiredToolPhaseError({"ok": False, "error": "required_tool_phase_missing", "missing": ["hydrate"]}),
+             ):
+            with self.assertRaisesRegex(RuntimeError, "required_tool_phase_missing"):
+                run_qa_efforts(
+                    root=td,
+                    conversation=_conversation(),
+                    qa=_conversation().qa_cases[0],
+                    recall_fn=fake_recall,
+                    answer_mode="llm",
+                    generator_model="test:model",
+                )
+
     def test_lifecycle_conversation_recovers_recall_from_bead_dia_map(self):
         # Regression: retrieval rows that carry only a bead_id (no surfaced
         # dia_id) used to score evidence recall as zero. The bead_id -> dia_id
