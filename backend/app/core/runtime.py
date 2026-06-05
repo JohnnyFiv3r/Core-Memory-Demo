@@ -358,14 +358,26 @@ def get_locomo_meta() -> dict[str, Any]:
     }
 
 
-def _iter_locomo_replay_rows(*, sample_mode: str, sample_id: str | None = None, max_turns: int | None = None, start_session: int | None = None, max_sessions: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+def _iter_locomo_replay_rows(*, sample_mode: str, sample_id: str | None = None, sample_ids: list[str] | None = None, max_turns: int | None = None, start_session: int | None = None, max_sessions: int | None = None) -> tuple[list[dict[str, Any]], dict[str, Any]]:
     rows = _load_locomo_dataset()
     sample_mode_n = str(sample_mode or "single").strip().lower()
     if sample_mode_n not in {"single", "all"}:
         raise ValueError("locomo_invalid_sample_mode")
 
+    wanted_ids = [str(x).strip() for x in list(sample_ids or []) if str(x).strip()]
+    wanted_set = set(wanted_ids)
     selected: list[tuple[str, dict[str, Any]]] = []
-    if sample_mode_n == "single":
+    if wanted_ids:
+        wanted_indexes = {int(x) for x in wanted_ids if x.isdigit()}
+        for idx, row in enumerate(rows):
+            rid = str(row.get("sample_id") if row.get("sample_id") is not None else idx)
+            if rid in wanted_set or idx in wanted_indexes:
+                selected.append((rid, row))
+        found_ids = {rid for rid, _row in selected}
+        missing = [sid for sid in wanted_ids if sid not in found_ids and not (sid.isdigit() and int(sid) < len(rows))]
+        if missing:
+            raise ValueError("locomo_sample_not_found")
+    elif sample_mode_n == "single":
         sid = str(sample_id or "").strip()
         if not sid:
             raise ValueError("locomo_sample_not_found")
@@ -747,7 +759,7 @@ def _validate_locomo_benchmark_corpus(*, root: str, turns_ingested: int, semanti
     return validation
 
 
-def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, replay_mode: str = "transcript_only", max_turns: int | None = None, start_session: int | None = None, max_sessions: int | None = None, auto_flush: bool = True, flush_threshold_ratio: float = 0.80, flush_every_turns: int = 0, max_compaction_per_pass: int = 2, max_side_effects_per_pass: int = 8, reset_session: bool = False, drain_after_ingest: bool = True, drain_timeout_ms: int = 600_000, cancel_event: Any | None = None, progress: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
+def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, sample_ids: list[str] | None = None, replay_mode: str = "transcript_only", max_turns: int | None = None, start_session: int | None = None, max_sessions: int | None = None, auto_flush: bool = True, flush_threshold_ratio: float = 0.80, flush_every_turns: int = 0, max_compaction_per_pass: int = 2, max_side_effects_per_pass: int = 8, reset_session: bool = False, drain_after_ingest: bool = True, drain_timeout_ms: int = 600_000, cancel_event: Any | None = None, progress: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
     replay_mode_n = str(replay_mode or "transcript_only").strip().lower()
     if replay_mode_n != "transcript_only":
         raise ValueError("locomo_invalid_replay_mode")
@@ -755,6 +767,7 @@ def replay_locomo_corpus(*, sample_mode: str, sample_id: str | None = None, repl
     rows, meta = _iter_locomo_replay_rows(
         sample_mode=sample_mode,
         sample_id=sample_id,
+        sample_ids=sample_ids,
         max_turns=max_turns,
         start_session=start_session,
         max_sessions=max_sessions,

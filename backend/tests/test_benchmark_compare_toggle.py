@@ -143,8 +143,44 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('locomo_full', captured['request']['kind'])
         self.assertIn('seed', captured['kwargs'])
         self.assertIn('benchmark', captured['kwargs'])
+        self.assertEqual(['conv-1'], captured['kwargs']['seed']['sample_ids'])
+        self.assertEqual('single', captured['kwargs']['seed']['sample_mode'])
         self.assertEqual('shared', captured['kwargs']['benchmark']['qa_session_mode'])
         self.assertFalse(create_task.called)  # durable worker job, not web background
+
+    async def test_locomo_lifecycle_queue_seeds_all_requested_samples(self):
+        if demo_routes is None:
+            self.skipTest('pydantic_settings unavailable')
+        req = _Req({'suite': 'locomo_native_lifecycle', 'root_mode': 'snapshot', 'sample_ids': ['conv-1', 'conv-2'], 'qa_limit': 5})
+        old_mode = demo_routes.settings.benchmark_run_mode
+        demo_routes.settings.benchmark_run_mode = 'queue'
+
+        captured: dict = {}
+
+        def fake_enqueue(*, job_id, request, kwargs):
+            captured['request'] = dict(request)
+            captured['kwargs'] = dict(kwargs)
+            return True
+
+        try:
+            demo_routes.SEED_JOBS.clear()
+            demo_routes.SEED_STATUS.update({'active': False})
+            with patch.object(demo_routes, '_prune_benchmark_jobs'), \
+                 patch.object(demo_routes.benchmark_store, 'read_active_job', return_value=None), \
+                 patch.object(demo_routes.benchmark_store, 'diagnostics', return_value={}), \
+                 patch.object(demo_routes.benchmark_store, 'enqueue_job', side_effect=fake_enqueue):
+                out = await demo_routes.benchmark_run(req)
+        finally:
+            demo_routes.settings.benchmark_run_mode = old_mode
+            demo_routes.SEED_JOBS.clear()
+
+        self.assertTrue(out['ok'])
+        self.assertEqual('locomo_full', captured['request']['kind'])
+        self.assertEqual(['conv-1', 'conv-2'], captured['kwargs']['seed']['sample_ids'])
+        self.assertEqual('all', captured['kwargs']['seed']['sample_mode'])
+        self.assertIsNone(captured['kwargs']['seed']['sample_id'])
+        self.assertIsNone(captured['kwargs']['seed']['max_turns'])
+        self.assertEqual(['conv-1', 'conv-2'], captured['kwargs']['benchmark']['sample_ids'])
 
     async def test_locomo_lifecycle_queue_durably_enqueues_locomo_full_with_clean_shared_llm(self):
         if demo_routes is None:
