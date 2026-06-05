@@ -265,6 +265,41 @@ def _locomo_seed_turn_bound_from_replay_dataset(*, sample_mode: str, sample_id: 
     })
     return derived, meta
 
+
+def _locomo_full_seed_kwargs(*, sample_ids: list[str], qa_limit: int | None) -> dict[str, Any]:
+    """Build replay_locomo_corpus kwargs for the combined `locomo_full` worker job.
+
+    Mirrors the standalone LoCoMo seed dispatch: single-sample replay bounded to
+    the turns the selected QA actually need. reset_session=True gives each official
+    run a clean corpus (matching root_mode='clean'), since the combined job seeds
+    and then runs QA in the same worker process.
+    """
+    sample_id = sample_ids[0] if sample_ids else None
+    sample_mode = 'single' if sample_id else 'all'
+    max_turns: int | None = None
+    if sample_id and qa_limit:
+        try:
+            derived, _meta = _locomo_seed_turn_bound_from_replay_dataset(
+                sample_mode=sample_mode, sample_id=str(sample_id), qa_limit=int(qa_limit),
+            )
+            if derived is not None:
+                max_turns = int(derived)
+        except Exception:
+            # Bounding is an optimization; on any derivation error seed all turns.
+            max_turns = None
+    return {
+        'sample_mode': sample_mode,
+        'sample_id': str(sample_id) if sample_id else None,
+        'replay_mode': 'transcript_only',
+        'max_turns': max_turns,
+        'auto_flush': True,
+        'flush_threshold_ratio': 0.80,
+        'reset_session': True,
+        'drain_after_ingest': True,
+        'drain_timeout_ms': 600000,
+    }
+
+
 SEED_JOB_TTL_SECONDS = 30 * 60
 SEED_JOB_POLL_MS = 3000
 SEED_JOB_MAX_EVENTS = 64
@@ -2021,12 +2056,17 @@ async def benchmark_run(request: Request):
     run_mode = str(settings.benchmark_run_mode or 'inline').strip().lower() or 'inline'
     if run_mode in {'disabled', 'off'}:
         return JSONResponse({'ok': False, 'job_id': None, 'status': 'failed', 'error': 'benchmark_run_disabled'}, status_code=503)
-    if suite == 'locomo_native_lifecycle' and run_mode in {'queue', 'queued', 'cron', 'external', 'dispatch'}:
-        # Seed/replay is the memory-heavy phase and is queued separately as a
-        # durable `locomo_seed` job for the 8GB worker. The official benchmark
-        # run is QA-only against the already-seeded app corpus, so keep it in
-        # the web process where it can use the live demo root and stream UI
-        # progress without a second cross-process corpus handoff.
+    use_locomo_full = False
+    if suite == 'locomo_native_lifecycle' and run_mode in {'queue', 'queued', 'cron'}:
+        # Option A: seed + QA + report run in ONE worker invocation (kind=
+        # locomo_full), so the seeded corpus lives in that process's filesystem
+        # for the whole run — no cross-cron/cross-service handoff (the cron worker
+        # has no persistent disk), and the memory-heavy seed stays off the 2GB web
+        # app. Both phases stream to the UI via the queued-job progress channel.
+        use_locomo_full = True
+    elif suite == 'locomo_native_lifecycle' and run_mode in {'external', 'dispatch'}:
+        # External dispatch can't host the combined job; fall back to the QA-only
+        # web path against an already-seeded corpus.
         run_mode = 'background'
 
     seed_eligibility: dict[str, Any] | None = None
@@ -2050,18 +2090,21 @@ async def benchmark_run(request: Request):
                 },
                 status_code=409,
             )
-        seed_eligibility = _locomo_seed_eligibility(sample_ids=sample_ids)
-        if not bool(seed_eligibility.get('eligible')):
-            return JSONResponse(
-                {
-                    'ok': False,
-                    'job_id': None,
-                    'status': 'failed',
-                    'error': str(seed_eligibility.get('error') or 'benchmark_requires_seeded_corpus'),
-                    'seed_eligibility': seed_eligibility,
-                },
-                status_code=409,
-            )
+        if not use_locomo_full:
+            # The split path still requires a completed seed; the combined
+            # locomo_full job seeds itself, so skip the pre-existing-seed gate.
+            seed_eligibility = _locomo_seed_eligibility(sample_ids=sample_ids)
+            if not bool(seed_eligibility.get('eligible')):
+                return JSONResponse(
+                    {
+                        'ok': False,
+                        'job_id': None,
+                        'status': 'failed',
+                        'error': str(seed_eligibility.get('error') or 'benchmark_requires_seeded_corpus'),
+                        'seed_eligibility': seed_eligibility,
+                    },
+                    status_code=409,
+                )
 
     kwargs = dict(
         suite=suite,
@@ -2167,11 +2210,26 @@ async def benchmark_run(request: Request):
         _force_finalize_benchmark_job(prior_row, status='cancelled', message='Benchmark superseded by a newer run')
     if run_mode in {'queue', 'queued', 'cron'}:
         queue_diag = benchmark_store.diagnostics()
-        try:
-            queued = benchmark_store.enqueue_job(job_id=job_id, request=_benchmark_request_for_store(body), kwargs=kwargs)
-        except Exception as exc:
-            queued = False
-            row['queue_error_detail'] = str(exc)
+        if use_locomo_full:
+            # One worker job: seed (replay_locomo_corpus) then QA (run_benchmark
+            # qa_only against the just-seeded corpus) then report — see
+            # benchmark_worker.run_once kind='locomo_full'.
+            full_request = {**_benchmark_request_for_store(body), 'kind': 'locomo_full'}
+            full_kwargs = {
+                'seed': _locomo_full_seed_kwargs(sample_ids=sample_ids, qa_limit=qa_limit),
+                'benchmark': dict(kwargs),
+            }
+            try:
+                queued = benchmark_store.enqueue_job(job_id=job_id, request=full_request, kwargs=full_kwargs)
+            except Exception as exc:
+                queued = False
+                row['queue_error_detail'] = str(exc)
+        else:
+            try:
+                queued = benchmark_store.enqueue_job(job_id=job_id, request=_benchmark_request_for_store(body), kwargs=kwargs)
+            except Exception as exc:
+                queued = False
+                row['queue_error_detail'] = str(exc)
         if not queued:
             row['status'] = 'failed'
             row['done'] = True
