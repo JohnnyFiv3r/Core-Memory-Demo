@@ -145,7 +145,8 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertIn('benchmark', captured['kwargs'])
         self.assertEqual(['conv-1'], captured['kwargs']['seed']['sample_ids'])
         self.assertEqual('single', captured['kwargs']['seed']['sample_mode'])
-        self.assertEqual('shared', captured['kwargs']['benchmark']['qa_session_mode'])
+        self.assertEqual('isolated', captured['kwargs']['benchmark']['qa_session_mode'])
+        self.assertFalse(captured['kwargs']['benchmark']['qa_only_seeded'])
         self.assertFalse(create_task.called)  # durable worker job, not web background
 
     async def test_locomo_lifecycle_queue_seeds_all_requested_samples(self):
@@ -181,6 +182,7 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertIsNone(captured['kwargs']['seed']['sample_id'])
         self.assertIsNone(captured['kwargs']['seed']['max_turns'])
         self.assertEqual(['conv-1', 'conv-2'], captured['kwargs']['benchmark']['sample_ids'])
+        self.assertFalse(captured['kwargs']['benchmark']['qa_only_seeded'])
 
     async def test_locomo_lifecycle_queue_durably_enqueues_locomo_full_with_clean_shared_llm(self):
         if demo_routes is None:
@@ -221,6 +223,7 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         bench = captured['kwargs']['benchmark']
         self.assertEqual('clean', bench['root_mode'])
         self.assertEqual('shared', bench['qa_session_mode'])
+        self.assertFalse(bench['qa_only_seeded'])
         self.assertEqual('llm', bench['answer_mode'])
 
     def test_benchmark_request_for_store_uses_runtime_backends(self):
