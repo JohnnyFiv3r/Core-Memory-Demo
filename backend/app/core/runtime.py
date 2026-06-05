@@ -3584,7 +3584,7 @@ def _assert_no_degraded_semantic(report: Any, semantic_mode_name: str) -> None:
         )
 
 
-def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", qa_session_mode: str = "isolated", enrich_mode: str = "judge", seed_record: dict[str, Any] | None = None, progress: Any | None = None, ingest_progress: Any | None = None, cancel_event: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
+def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo: bool, preload_turns_max: int, limit: int | None = None, subset: str = "local", suite: str = "fixture_smoke", sample_limit: int | None = None, qa_limit: int | None = None, sample_ids: list[str] | None = None, category_filter: list[int] | None = None, qa_per_category: dict[int | str, int] | None = None, retrieval_k: int | None = None, ingestion_mode: str | None = None, answer_mode: str | None = None, generator_model: str | None = None, evidence_recall_k: list[int] | None = None, persist_case_artifacts: bool = True, legacy_mode: bool = False, embeddings_provider: str | None = None, compare_paths: bool = False, compare_retrieval_modes: bool = False, retrieval_pipeline: str = "execute_trace", qa_session_mode: str = "isolated", enrich_mode: str = "judge", seed_record: dict[str, Any] | None = None, qa_only_seeded: bool | None = None, progress: Any | None = None, ingest_progress: Any | None = None, cancel_event: Any | None = None, heartbeat: Any | None = None) -> dict[str, Any]:
     suite_name = str(suite or "fixture_smoke").strip().lower() or "fixture_smoke"
     if suite_name in {"locomo_qa", "locomo_retrieval", "locomo_mini", "locomo_native_lifecycle"}:
         try:
@@ -3641,20 +3641,22 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             # Official LoCoMo always uses Core Memory's native LLM bead-field
             # judge during replay. Ignore the legacy deterministic toggle.
             resolved_enrich_mode = "judge"
-            # Official lifecycle benchmark Run is QA-only. The route already
-            # requires a completed seed job with drain + final flush evidence;
-            # measure that eligible live corpus instead of replaying selected
-            # samples into this run's clean artifact root.
-            seeded_corpus_root = str(settings.core_memory_root)
-            # QA-only seeded runs must query the seeded application corpus
-            # directly. Isolated per-QA clones were for benchmark-owned replay
-            # roots; with embedded Qdrant they require rebuilding under a new
-            # collection name and can fail closed before QA starts despite the
-            # live corpus being ready.
-            resolved_qa_session_mode = "shared"
+            # Split/dev paths can run QA-only against a previously seeded
+            # application corpus. The queued product path must not do that on
+            # hosted embedded Qdrant: the web process and worker can contend for
+            # the same live Qdrant path (multi_worker_safe=false), producing a
+            # bare RuntimeError during semantic build. For the end-to-end Run
+            # Benchmark path, replay/seed into this run's clean benchmark root so
+            # semantic build + QA are fully worker-local and artifact-owned.
+            resolved_qa_only_seeded = True if qa_only_seeded is None else bool(qa_only_seeded)
+            lifecycle_root = str(settings.core_memory_root) if resolved_qa_only_seeded else str(base_root)
+            seeded_corpus_root = str(settings.core_memory_root) if resolved_qa_only_seeded else str(base_root)
+            resolved_qa_session_mode = "shared" if resolved_qa_only_seeded else str(qa_session_mode or "shared").strip().lower() or "shared"
+            if resolved_qa_session_mode not in {"shared", "isolated"}:
+                resolved_qa_session_mode = "shared"
             with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider), benchmark_enrich_mode(resolved_enrich_mode):
                 lifecycle_report = run_locomo_lifecycle_suite(
-                    root=seeded_corpus_root,
+                    root=lifecycle_root,
                     samples=selected_samples,
                     qa_cases=selected_cases,
                     qa_session_mode=resolved_qa_session_mode,
@@ -3662,8 +3664,8 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     answer_mode=resolved_answer_mode,
                     generator_model=resolved_generator_model,
                     progress=progress,
-                    qa_only_seeded=True,
-                    write_qa_beads=False,
+                    qa_only_seeded=resolved_qa_only_seeded,
+                    write_qa_beads=not resolved_qa_only_seeded,
                 )
             # Defense in depth: reject a report that degraded mid-run even though
             # the embeddings preflight passed.
@@ -3773,8 +3775,9 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     "enrich_mode": resolved_enrich_mode,
                     "enrich_mode_engaged": str((lifecycle_report.get("lifecycle") or {}).get("enrich_mode") or ""),
                     "seed_record_id": str((seed_record or {}).get("seed_record_id") or (seed_record or {}).get("seed_job_id") or ""),
-                    "qa_only_seeded": True,
+                    "qa_only_seeded": bool(resolved_qa_only_seeded),
                     "seeded_corpus_root": seeded_corpus_root,
+                    "lifecycle_root": lifecycle_root,
                 },
                 "dataset": dict((dataset_meta.get("dataset") or {})),
                 "lifecycle": dict(lifecycle_report.get("lifecycle") or {}),

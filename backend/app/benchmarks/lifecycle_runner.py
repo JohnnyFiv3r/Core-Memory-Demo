@@ -157,7 +157,13 @@ def _assert_semantic_build_ok(semantic_build: dict[str, Any], *, manifest: dict[
             detail = err.get("detail")
             last_err = ""
             if isinstance(detail, dict):
-                last_err = str(detail.get("last_build_error") or detail.get("cause") or "")
+                last_err = str(
+                    detail.get("last_build_error")
+                    or detail.get("cause")
+                    or detail.get("exception_repr")
+                    or detail.get("exception_type")
+                    or ""
+                )
             reason = f"{code}: {last_err or err.get('message') or detail or 'no detail'}"
         else:
             reason = str(err or "semantic_build_failed")
@@ -1378,7 +1384,20 @@ def _run_lifecycle_conversation_impl(
     try:
         semantic_build = _build_semantic_index(root)
     except Exception as exc:
-        semantic_build = {"ok": False, "error": str(exc)}
+        # Preserve the exception class/repr; some embedded vector backends surface
+        # failures as a bare RuntimeError whose str() is just "runtimeerror",
+        # which is useless once persisted into the queued job row.
+        semantic_build = {
+            "ok": False,
+            "error": {
+                "code": "semantic_build_exception",
+                "message": str(exc) or exc.__class__.__name__,
+                "detail": {
+                    "exception_type": exc.__class__.__name__,
+                    "exception_repr": repr(exc),
+                },
+            },
+        }
 
     # Fail closed on a degraded semantic build (see _assert_semantic_build_ok).
     _assert_semantic_build_ok(semantic_build)

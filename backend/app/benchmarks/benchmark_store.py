@@ -400,21 +400,22 @@ def read_active_job(max_age_seconds: int = 35 * 60, *, kind: str | list[str] | t
     return out
 
 
-def read_latest_job_by_kind(kind: str, *, max_age_seconds: int = 24 * 60 * 60) -> dict[str, Any] | None:
+def read_latest_job_by_kind(kind: str | list[str] | tuple[str, ...] | set[str] | None, *, max_age_seconds: int = 24 * 60 * 60) -> dict[str, Any] | None:
     if not enabled():
         return None
     ensure_schema()
+    kinds = _kind_filter(kind)
     with psycopg.connect(_database_url(), row_factory=dict_row) as conn:
         row = conn.execute(
             """
             SELECT job_id, status, request, kwargs, progress, events, result, error, attempts, created_at, updated_at, started_at, finished_at
             FROM benchmarks.jobs
-            WHERE COALESCE(request->>'kind', 'benchmark') = %s
+            WHERE COALESCE(request->>'kind', 'benchmark') = ANY(%s)
               AND created_at > now() - (%s * interval '1 second')
             ORDER BY created_at DESC
             LIMIT 1
             """,
-            (str(kind or 'benchmark'), int(max_age_seconds)),
+            (kinds, int(max_age_seconds)),
         ).fetchone()
     if not row:
         return None
