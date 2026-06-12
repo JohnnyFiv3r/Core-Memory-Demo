@@ -135,10 +135,8 @@ class TestLocomoAnswer(unittest.TestCase):
         self.assertFalse(out["ok"])
         self.assertEqual("required_tool_phase_order_invalid", out["error"])
 
-
-if __name__ == "__main__":
-    unittest.main()
-
+    # NOTE: these recall_llm tests previously sat inside the
+    # `if __name__ == "__main__":` block below, so pytest never collected them.
     def test_recall_llm_mode_answers_from_recall_evidence_without_tools(self):
         class FakeRecallResult(_FakeAgentResult):
             output = '{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}'
@@ -158,6 +156,13 @@ if __name__ == "__main__":
         self.assertNotIn("tools", Agent.call_args.kwargs)
         prompt = agent.run.call_args.args[0]
         self.assertIn("Caroline went on 7 May 2023", prompt)
+        # LoCoMo answer-format rules tuned against the token-F1 scorer: golds
+        # use '7 May 2023' (ISO dates score 0.0) and a quarter of temporal golds
+        # are relative ('The week before 9 June 2023'), so the prompt must not
+        # force absolute-date resolution.
+        self.assertIn("never ISO", prompt)
+        self.assertIn("The week before 9 June 2023", prompt)
+        self.assertIn("Likely yes", prompt)
         self.assertEqual("7 May 2023", out["answer"])
         self.assertEqual(["D1:3"], out["used_dia_ids"])
         self.assertEqual("recall_evidence", out["answer_source"])
@@ -174,3 +179,7 @@ if __name__ == "__main__":
         Agent.assert_not_called()
         self.assertEqual("No information available", out["answer"])
         self.assertTrue(out["unsupported"])
+
+
+if __name__ == "__main__":
+    unittest.main()

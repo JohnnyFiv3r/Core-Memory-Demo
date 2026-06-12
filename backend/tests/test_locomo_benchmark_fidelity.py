@@ -49,7 +49,12 @@ class TestLocomoBenchmarkFidelity(unittest.TestCase):
         self.assertEqual(1, len(turns))
         self.assertEqual('other', turns[0].role)
         self.assertEqual('Caroline', turns[0].speaker)
-        self.assertEqual('I went to the support group on 7 May 2023.', turns[0].content)
+        # Session date is folded into the ingested content: the bead judge and
+        # the embedding index only ever see turn content, not turn metadata.
+        self.assertEqual(
+            'Session date: 7 May 2023\n\nI went to the support group on 7 May 2023.',
+            turns[0].content,
+        )
         self.assertNotEqual('[LoCoMo transcript replay]', turns[0].content)
         self.assertNotIn('crawler_updates', captured['metadata'])
         self.assertEqual('llm', captured['metadata']['bead_judge'])
