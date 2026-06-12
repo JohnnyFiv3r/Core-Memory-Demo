@@ -34,7 +34,9 @@ RETRIEVAL_EFFORT_ORDER = ("low", "medium", "high")
 # full RETRIEVAL_EFFORT_ORDER explicitly (diagnostic runs only).
 DEFAULT_RETRIEVAL_EFFORTS = ("high",)
 
-# LoCoMo category 1 = multi-hop (gold evidence spans 2+ turns). These questions
+# LoCoMo category 1 = multi-hop (gold evidence spans 2+ turns). The floor below
+# only applies when a caller pins an explicit k; the official default (k=None)
+# uses the engine's high-effort k=20, which already exceeds it. These questions
 # need a wider retrieval window to gather co-required evidence than single-fact
 # questions; the configured default k (tuned for single-hop) leaves multi-hop gold
 # stranded just past the cut. Give them a higher floor. Single-hop categories keep
@@ -614,6 +616,14 @@ def aggregate_lifecycle_effort_scores(cases: list[dict[str, Any]]) -> dict[str, 
         answer_scores = [float(row.get("answer_f1") or 0.0) for row in answered_rows]
         recall5 = [float((row.get("evidence_recall") or {}).get("recall@5") or 0.0) for row in ev_rows]
         hit_any = [1.0 if bool((row.get("evidence_recall") or {}).get("hit_any")) else 0.0 for row in ev_rows]
+        # Bottleneck split: answer F1 conditioned on whether retrieval surfaced
+        # any gold evidence. Low F1 with hit (gold was in context) means answer
+        # synthesis / noise is the problem; F1 tracking hit/miss closely means
+        # retrieval is. Conditioned rows need a generated answer AND non-vacuous
+        # gold evidence, so this only populates for the answering effort.
+        conditioned = [row for row in answered_rows if not (row.get("evidence_recall") or {}).get("vacuous", True)]
+        f1_hit = [float(row.get("answer_f1") or 0.0) for row in conditioned if (row.get("evidence_recall") or {}).get("hit_any")]
+        f1_miss = [float(row.get("answer_f1") or 0.0) for row in conditioned if not (row.get("evidence_recall") or {}).get("hit_any")]
         by_effort[effort] = {
             "qa_count": len(rows),
             "scored_qa_count": len(ev_rows),
@@ -621,6 +631,10 @@ def aggregate_lifecycle_effort_scores(cases: list[dict[str, Any]]) -> dict[str, 
             "answer_f1_mean": round(sum(answer_scores) / len(answer_scores), 4) if answer_scores else None,
             "evidence_recall@5": round(sum(recall5) / len(recall5), 4) if recall5 else 0.0,
             "hit_any": round(sum(hit_any) / len(hit_any), 4) if hit_any else 0.0,
+            "answer_f1_given_evidence_hit": round(sum(f1_hit) / len(f1_hit), 4) if f1_hit else None,
+            "answer_f1_given_evidence_miss": round(sum(f1_miss) / len(f1_miss), 4) if f1_miss else None,
+            "evidence_hit_answered_cases": len(f1_hit),
+            "evidence_miss_answered_cases": len(f1_miss),
             "latency_ms": {
                 "p50": _percentile(latencies, 0.50),
                 "p95": _percentile(latencies, 0.95),
@@ -1070,7 +1084,6 @@ def _qa_category_int(qa: BenchmarkQA) -> int:
 def _qa_recall_request(*, conversation: BenchmarkConversation, qa: BenchmarkQA, k: int | None) -> dict[str, Any]:
     req: dict[str, Any] = {
         "raw_query": qa.question,
-        "intent": str((qa.metadata or {}).get("intent") or "remember"),
         "constraints": {
             "benchmark_name": conversation.benchmark_name,
             "conversation_id": conversation.conversation_id,
@@ -1078,6 +1091,13 @@ def _qa_recall_request(*, conversation: BenchmarkConversation, qa: BenchmarkQA, 
             "recall_scope": "full_bead_corpus",
         },
     }
+    # Intent is deliberately omitted unless the QA case pins one: recall()
+    # auto-routes why/cause/when-shaped questions to causal/temporal handling
+    # (request.setdefault("intent", ...)), and a forced "remember" used to
+    # suppress that routing for every question.
+    intent = str((qa.metadata or {}).get("intent") or "").strip()
+    if intent:
+        req["intent"] = intent
     if k is not None:
         eff_k = max(1, int(k))
         # Widen the window for multi-hop questions (see MULTI_HOP_RETRIEVAL_K).

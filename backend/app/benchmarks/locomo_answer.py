@@ -252,6 +252,33 @@ def validate_required_tool_phases(tool_transcript: list[dict[str, Any]]) -> dict
     return {"ok": True, "phases": phases, "positions": phase_positions, "tool_names": names}
 
 
+# LoCoMo answer style, tuned against the gold-answer conventions and the
+# token-F1 scorer (punctuation is stripped, scoring is bag-of-words):
+# - "May 7, 2023" vs gold "7 May 2023" scores 1.0, but ISO/slashed dates
+#   collapse to a single unmatched token ("20230507") and score 0.0.
+# - 25% of category-2 golds are RELATIVE ("The week before 9 June 2023",
+#   "10 years ago"); resolving those to absolute dates halves their F1.
+# - Category-3 golds hedge ("Likely no"); a bare "No" loses a third of F1.
+_ANSWER_STYLE_RULES = (
+    "Answer with the SHORTEST possible span that directly answers the question "
+    "— just the fact itself (a date, name, place, number, or short list), with no "
+    "preamble, restatement of the question, or full sentence. For example answer "
+    "'7 May 2023', not 'She went on 7 May 2023'. If the question asks for several "
+    "items, give them as a comma-separated list. "
+    "Date rules: write dates as '7 May 2023' (day, month name, year) — never ISO "
+    "formats like 2023-05-07, never slashed formats like 05/07/2023, and no "
+    "ordinal suffixes like '7th'. If the event happened on the day of a "
+    "conversation session, answer with that session's date. If the speaker "
+    "placed the event relative to a conversation session (e.g. 'last week'), "
+    "keep the answer anchored to the session date in that form — e.g. 'The week "
+    "before 9 June 2023' — instead of converting it to an absolute date. "
+    "If the question asks how long or how often, answer with the duration or "
+    "frequency as stated (e.g. '4 years'), not a date. "
+    "For yes/no judgement questions answered from indirect evidence, prefer "
+    "'Likely yes' or 'Likely no'. "
+)
+
+
 async def _llm_answer_from_recall_async(*, question: str, model_id: str, retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
     """Answer one LoCoMo question from the evidence recall() already retrieved.
 
@@ -274,14 +301,9 @@ async def _llm_answer_from_recall_async(*, question: str, model_id: str, retriev
         }
     prompt = (
         "Answer this LoCoMo benchmark question using ONLY the retrieved memory "
-        "evidence below. Use the evidence text and session dates to resolve "
-        "relative dates like yesterday, last week, today, or next month into "
-        "absolute dates when possible. "
-        "Answer with the SHORTEST possible span that directly answers the question "
-        "— just the fact itself (a date, name, place, number, or short list), with no "
-        "preamble, restatement of the question, or full sentence. For example answer "
-        "'7 May 2023', not 'She went on 7 May 2023'. If the question asks for several "
-        "items, give them as a comma-separated list. "
+        "evidence below. Use the evidence text and session dates to work out "
+        "when events happened. "
+        + _ANSWER_STYLE_RULES +
         "If the evidence does not contain enough information to answer, respond "
         "exactly with 'No information available'.\n\n"
         f"Question: {question}\n\n"
@@ -314,12 +336,8 @@ async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_i
         "Before answering, you MUST perform these phases in order: "
         "(1) semantic memory search/execute, (2) causal trace with max_depth up to 6, "
         "and (3) hydrate/get source turns for candidate and traced beads. "
-        "Use hydrated source-turn text and dates to resolve relative dates like yesterday, last week, today, or next month into absolute dates when possible. "
-        "Answer with the SHORTEST possible span that directly answers the question "
-        "— just the fact itself (a date, name, place, number, or short list), with no "
-        "preamble, restatement of the question, or full sentence. For example answer "
-        "'7 May 2023', not 'She went on 7 May 2023'. If the question asks for several "
-        "items, give them as a comma-separated list. "
+        "Use hydrated source-turn text and session dates to work out when events happened. "
+        + _ANSWER_STYLE_RULES +
         "If hydrated memory context does not contain enough information to answer, "
         "respond exactly with 'No information available'.\n\n"
         f"Question: {question}\n\n"

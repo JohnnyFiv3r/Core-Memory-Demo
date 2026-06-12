@@ -786,6 +786,64 @@ class TestLifecycleAggregateVacuousExclusion(unittest.TestCase):
         self.assertIsNone(scores["accuracy_by_effort"]["low"])
         self.assertEqual(1.0, scores["accuracy_by_effort"]["high"])
 
+    def test_answer_f1_split_by_evidence_hit_isolates_bottleneck(self):
+        # The hit-conditional split answers "is retrieval or synthesis the
+        # bottleneck": F1 over cases where gold evidence WAS retrieved vs not.
+        from app.benchmarks.lifecycle_runner import aggregate_lifecycle_effort_scores
+
+        scores = aggregate_lifecycle_effort_scores([
+            # Gold retrieved, answered correctly.
+            {"efforts": {"high": {
+                "answer_f1": 1.0, "prediction": "7 May 2023", "excluded": False,
+                "evidence_recall": {"recall@5": 1.0, "hit_any": True, "vacuous": False},
+            }}},
+            # Gold retrieved, answer flubbed -> drags the hit-side mean down.
+            {"efforts": {"high": {
+                "answer_f1": 0.0, "prediction": "wrong", "excluded": False,
+                "evidence_recall": {"recall@5": 1.0, "hit_any": True, "vacuous": False},
+            }}},
+            # Gold missed entirely.
+            {"efforts": {"high": {
+                "answer_f1": 0.0, "prediction": "wrong", "excluded": False,
+                "evidence_recall": {"recall@5": 0.0, "hit_any": False, "vacuous": False},
+            }}},
+            # Vacuous (no gold annotation) must not enter either side.
+            {"efforts": {"high": {
+                "answer_f1": 1.0, "prediction": "x", "excluded": False,
+                "evidence_recall": {"recall@5": 1.0, "hit_any": True, "vacuous": True},
+            }}},
+        ])
+
+        high = scores["by_effort"]["high"]
+        self.assertEqual(0.5, high["answer_f1_given_evidence_hit"])
+        self.assertEqual(0.0, high["answer_f1_given_evidence_miss"])
+        self.assertEqual(2, high["evidence_hit_answered_cases"])
+        self.assertEqual(1, high["evidence_miss_answered_cases"])
+        # Retrieval-only efforts (no answers) report None, not 0.0.
+        self.assertIsNone(scores["by_effort"]["low"]["answer_f1_given_evidence_hit"])
+
+
+class TestQaRecallRequestIntent(unittest.TestCase):
+    def test_intent_omitted_so_engine_can_auto_route(self):
+        # recall() routes why/cause/when-shaped questions to causal/temporal
+        # handling via request.setdefault("intent", ...); a forced "remember"
+        # suppressed that for every question.
+        from app.benchmarks.lifecycle_runner import _qa_recall_request
+
+        conv = _conversation()
+        req = _qa_recall_request(conversation=conv, qa=conv.qa_cases[0], k=None)
+        self.assertNotIn("intent", req)
+        self.assertEqual(conv.qa_cases[0].question, req["raw_query"])
+
+    def test_explicit_qa_intent_is_respected(self):
+        from app.benchmarks.lifecycle_runner import _qa_recall_request
+
+        conv = _conversation()
+        qa = conv.qa_cases[0]
+        qa.metadata["intent"] = "causal"
+        req = _qa_recall_request(conversation=conv, qa=qa, k=None)
+        self.assertEqual("causal", req["intent"])
+
 
 if __name__ == "__main__":
     unittest.main()

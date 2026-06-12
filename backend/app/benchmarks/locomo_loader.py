@@ -21,6 +21,33 @@ class LocomoLoaderError(RuntimeError):
     pass
 
 
+def compose_locomo_turn_content(*, text: str, session_date_time: str = "", blip_caption: str = "") -> str:
+    """Compose the ingested content for one LoCoMo turn.
+
+    The native bead judge and the embedding index only ever see the turn
+    content — turn metadata never reaches either. So the two signals LoCoMo
+    stores outside the utterance text must be folded in here or they are
+    unretrievable:
+    - the session date (45%+ of category-2 temporal golds derive from it), and
+    - the image caption (45.3% of scored QA have gold evidence on a turn whose
+      fact lives in ``blip_caption``, mirroring the official harness's
+      "[shares a photo of ...]" rendering).
+    Speaker attribution is intentionally absent: the engine's turn summary
+    already prefixes ``speaker [role]:``.
+    """
+    parts: list[str] = []
+    date = str(session_date_time or "").strip()
+    if date:
+        parts.append(f"Session date: {date}")
+    body = str(text or "").strip()
+    if body:
+        parts.append(body)
+    caption = str(blip_caption or "").strip()
+    if caption:
+        parts.append(f"Image caption: {caption}")
+    return "\n\n".join(parts)
+
+
 @dataclass(frozen=True)
 class LocomoDatasetMeta:
     dataset_path: str
@@ -210,7 +237,11 @@ def locomo_samples_to_benchmark_conversations(samples: list[dict[str, Any]]) -> 
                     raise LocomoLoaderError(f"locomo_duplicate_turn_id:{turn_id}")
                 seen_turn_ids.add(turn_id)
                 speaker = str(turn.get("speaker") or "").strip()
-                content = str(turn.get("text") or "").strip()
+                content = compose_locomo_turn_content(
+                    text=str(turn.get("text") or ""),
+                    session_date_time=session_date_time,
+                    blip_caption=str(turn.get("blip_caption") or ""),
+                )
                 turns.append(
                     BenchmarkTurn(
                         turn_id=turn_id,

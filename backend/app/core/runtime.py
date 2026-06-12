@@ -62,7 +62,7 @@ except Exception:  # pragma: no cover - compatibility with older core-memory ver
 
 from app.benchmarks.fixture_smoke import load_fixture_smoke_cases
 from app.benchmarks import benchmark_store
-from app.benchmarks.locomo_loader import LocomoLoaderError
+from app.benchmarks.locomo_loader import LocomoLoaderError, compose_locomo_turn_content
 from app.benchmarks.lifecycle_runner import MULTI_HOP_CATEGORY, MULTI_HOP_RETRIEVAL_K, run_locomo_lifecycle_suite
 from app.benchmarks.locomo_runner import BenchmarkCancelledError, run_locomo_retrieval_suite
 from app.benchmarks.locomo_scoring import aggregate_case_scores
@@ -512,7 +512,14 @@ def _replay_locomo_row(row: dict[str, Any], *, root: str | None = None) -> dict[
             Turn(
                 speaker=speaker or "LoCoMo speaker",
                 role="other",
-                content=text,
+                # Fold session date + image caption into the content: the bead
+                # judge and the embedding index only see turn content, never
+                # turn metadata, so signals left in metadata are unretrievable.
+                content=compose_locomo_turn_content(
+                    text=text,
+                    session_date_time=str(row.get("session_date_time") or ""),
+                    blip_caption=str(row.get("blip_caption") or ""),
+                ),
                 metadata={
                     "locomo_sample_id": sample_id,
                     "locomo_session_index": session_index,

@@ -95,11 +95,12 @@ class TestAnswererDoesNotFailClosed(unittest.TestCase):
         self.assertFalse(_support_strength([{"text": "", "dia_ids": []}])["supported"])
 
     def test_prompt_requests_shortest_span(self):
-        import inspect
+        # The shortest-span instruction lives in the shared style rules used by
+        # both LLM answer modes (recall_llm and the agentic llm mode).
         from app.benchmarks import locomo_answer
 
-        src = inspect.getsource(locomo_answer._llm_answer_async)
-        self.assertIn("SHORTEST", src)
+        self.assertIn("SHORTEST", locomo_answer._ANSWER_STYLE_RULES)
+        self.assertIn("never ISO", locomo_answer._ANSWER_STYLE_RULES)
 
 
 class TestFrontendBenchmarkGraphWiring(unittest.TestCase):
