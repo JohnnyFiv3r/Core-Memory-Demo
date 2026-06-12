@@ -4805,7 +4805,10 @@ async function runBenchmark() {
   const locomoMaxTurnsRaw = Number(document.getElementById('locomo-max-turns')?.value || 200);
   const locomoMaxTurns = Number.isFinite(locomoMaxTurnsRaw) ? Math.max(1, Math.floor(locomoMaxTurnsRaw)) : 200;
   const answerModeRaw = document.getElementById('bench-answer-mode')?.value || 'llm';
-  const answerMode = subset === 'locomo_native_lifecycle' ? 'llm' : ((answerModeRaw === 'auto' || !answerModeRaw) ? '' : answerModeRaw);
+  // Official lifecycle QA answers from the evidence the scored recall() call
+  // returned (recall_llm); the agentic 'llm' mode re-retrieves on its own and is
+  // diagnostic-only.
+  const answerMode = subset === 'locomo_native_lifecycle' ? 'recall_llm' : ((answerModeRaw === 'auto' || !answerModeRaw) ? '' : answerModeRaw);
   const generatorModel = String(document.getElementById('bench-generator-model')?.value || '').trim();
   const prev = btn.textContent;
   btn.dataset.prevLabel = prev;

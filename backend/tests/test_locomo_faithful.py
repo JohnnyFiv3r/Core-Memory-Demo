@@ -87,6 +87,29 @@ class TestDiaBeadMap(unittest.TestCase):
             mapping = locomo_faithful.build_bead_to_dias(root, conv)
         self.assertEqual(["D1:3", "D1:4"], mapping["compacted"])
 
+    def test_seeded_corpus_id_shapes_map_to_dias(self):
+        # The corpus seed path (replay_locomo_corpus) writes beads under
+        # per-LoCoMo-session IDs (locomo:<sample>:session:<n>) with source turn
+        # ids that omit the loader's turn_index suffix (locomo:<sample>:<dia>).
+        # An exact-session/exact-turn-id match drops every seeded bead and
+        # silently zeroes evidence recall for seeded QA runs.
+        import tempfile
+
+        conv = _conversation()
+        conv.metadata["locomo_sample_id"] = "s1"
+        with tempfile.TemporaryDirectory() as td:
+            root = Path(td)
+            _write_index(root, {
+                "seeded-a": {"id": "seeded-a", "session_id": "locomo:s1:session:1", "source_turn_ids": ["locomo:s1:D1:3"]},
+                "seeded-b": {"id": "seeded-b", "session_id": "locomo:s1:session:2", "source_turn_ids": ["locomo:s1:D1:4"]},
+                # A different sample's seeded bead must stay excluded.
+                "foreign": {"id": "foreign", "session_id": "locomo:s2:session:1", "source_turn_ids": ["locomo:s2:D1:3"]},
+            })
+            mapping = locomo_faithful.build_bead_to_dias(root, conv)
+        self.assertEqual(["D1:3"], mapping["seeded-a"])
+        self.assertEqual(["D1:4"], mapping["seeded-b"])
+        self.assertNotIn("foreign", mapping)
+
 
 class TestRecallRecovery(unittest.TestCase):
     def test_bead_only_rows_recover_recall(self):

@@ -252,6 +252,62 @@ def validate_required_tool_phases(tool_transcript: list[dict[str, Any]]) -> dict
     return {"ok": True, "phases": phases, "positions": phase_positions, "tool_names": names}
 
 
+async def _llm_answer_from_recall_async(*, question: str, model_id: str, retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
+    """Answer one LoCoMo question from the evidence recall() already retrieved.
+
+    This is the official lifecycle answer path: retrieval is exactly the scored
+    high-effort recall() call, and the model only synthesizes an answer over that
+    evidence. No tools, no second retrieval pass — what gets scored for evidence
+    recall is what the answerer sees.
+    """
+    if Agent is None:
+        raise RuntimeError("pydantic_ai_unavailable")
+    context_block = _format_retrieved_context(retrieved_context, limit=20)
+    if not context_block:
+        return {
+            "answer": "No information available",
+            "used_dia_ids": [],
+            "confidence": "low",
+            "unsupported": True,
+            "agent_model": model_id,
+            "answer_source": "recall_evidence",
+        }
+    prompt = (
+        "Answer this LoCoMo benchmark question using ONLY the retrieved memory "
+        "evidence below. Use the evidence text and session dates to resolve "
+        "relative dates like yesterday, last week, today, or next month into "
+        "absolute dates when possible. "
+        "Answer with the SHORTEST possible span that directly answers the question "
+        "— just the fact itself (a date, name, place, number, or short list), with no "
+        "preamble, restatement of the question, or full sentence. For example answer "
+        "'7 May 2023', not 'She went on 7 May 2023'. If the question asks for several "
+        "items, give them as a comma-separated list. "
+        "If the evidence does not contain enough information to answer, respond "
+        "exactly with 'No information available'.\n\n"
+        f"Question: {question}\n\n"
+        f"Retrieved evidence:\n{context_block}\n\n"
+        "Return strict JSON with keys: answer, used_dia_ids, confidence, unsupported. "
+        "Only cite dia_ids that appear in the evidence above."
+    )
+    agent = Agent(
+        model_id,
+        system_prompt=(
+            "You are a conversational memory benchmark answerer. Answer strictly from "
+            "the provided retrieved evidence. Do not use unstated knowledge, prior "
+            "answers, or benchmark gold labels. Answer with the shortest exact span "
+            "(a date, name, place, number, or comma-separated list) — never a full "
+            "sentence or a restatement of the question. If the evidence is "
+            "insufficient, abstain with 'No information available'."
+        ),
+    )
+    result = await agent.run(prompt)
+    raw = str(getattr(result, "output", None) or getattr(result, "data", None) or result).strip()
+    out = _normalize_answer_payload(raw)
+    out["agent_model"] = model_id
+    out["answer_source"] = "recall_evidence"
+    return out
+
+
 async def _llm_answer_async(*, root: str, sample_id: str, question: str, model_id: str, retrieved_context: list[dict[str, Any]]) -> dict[str, Any]:
     context_prompt = (
         "Answer this LoCoMo benchmark question using Core Memory tools only. "
@@ -316,6 +372,22 @@ def generate_locomo_answer(*, mode: str, root: str | None = None, sample_id: str
         return _extractive_answer(retrieved_context, question=str(qa.get("question") or ""))
     if mode_name == "oracle_context":
         raise ValueError("oracle_context_answer_mode_disabled_for_scored_benchmarks")
+    if mode_name == "recall_llm":
+        model_id = str(generator_model or "").strip()
+        if not model_id:
+            raise RuntimeError("missing_generator_model")
+        out = asyncio.run(
+            _llm_answer_from_recall_async(
+                question=str(qa.get("question") or ""),
+                model_id=model_id,
+                retrieved_context=retrieved_context,
+            )
+        )
+        out["used_dia_ids"] = _reconcile_used_dia_ids(
+            used_dia_ids=list(out.get("used_dia_ids") or []),
+            retrieved_context=retrieved_context,
+        )
+        return out
     if mode_name == "llm":
         if Agent is None:
             raise RuntimeError("pydantic_ai_unavailable")

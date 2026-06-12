@@ -1934,10 +1934,10 @@ def benchmark_preflight(
     suite_name = str(suite or 'locomo_native_lifecycle').strip().lower() or 'locomo_native_lifecycle'
     semantic_mode_name = str(semantic_mode or 'required').strip().lower() or 'required'
     answer_mode_name = str(answer_mode or 'none').strip().lower() or 'none'
-    if answer_mode_name not in {'none', 'extractive', 'llm'}:
+    if answer_mode_name not in {'none', 'extractive', 'llm', 'recall_llm'}:
         answer_mode_name = 'none'
     generator_model_name = str(generator_model or '').strip()
-    if answer_mode_name == 'llm' and not generator_model_name:
+    if answer_mode_name in {'llm', 'recall_llm'} and not generator_model_name:
         generator_model_name = detect_model()
     explicit_embeddings_provider = str(embeddings_provider or '').strip() or None
     embeddings_provider = _resolve_benchmark_embeddings_provider(explicit_embeddings_provider)
@@ -1979,7 +1979,7 @@ def benchmark_preflight(
     answer_dependencies: list[dict[str, Any]] = []
     llm_answer_ready = True
     llm_answer_error: str | None = None
-    if answer_mode_name == 'llm':
+    if answer_mode_name in {'llm', 'recall_llm'}:
         answer_dependencies.append({'name': 'pydantic_ai', 'installed': importlib.util.find_spec('pydantic_ai') is not None, 'required_for': 'llm_answering'})
         if not generator_model_name:
             llm_answer_ready = False
@@ -1992,7 +1992,7 @@ def benchmark_preflight(
     overall_ok = bool(dataset_ok)
     if semantic_mode_name == 'required':
         overall_ok = overall_ok and semantic_required_ready
-    if answer_mode_name == 'llm':
+    if answer_mode_name in {'llm', 'recall_llm'}:
         overall_ok = overall_ok and llm_answer_ready and all(bool(row.get('installed')) for row in answer_dependencies)
 
     return {
@@ -2015,7 +2015,7 @@ def benchmark_preflight(
             'config_errors': semantic_config_errors,
         },
         'answering': {
-            'ready': llm_answer_ready if answer_mode_name == 'llm' else True,
+            'ready': llm_answer_ready if answer_mode_name in {'llm', 'recall_llm'} else True,
             'error': llm_answer_error,
             'dependencies': answer_dependencies,
         },
@@ -2075,17 +2075,22 @@ async def benchmark_run(request: Request):
                 continue
             if cat > 0 and cap > 0:
                 qa_per_category[str(cat)] = min(cap, max(1, int(settings.locomo_max_qa_cases)))
-    retrieval_k = int((body or {}).get('retrieval_k') or settings.locomo_default_retrieval_k)
-    retrieval_k = max(1, retrieval_k)
+    retrieval_k_raw = (body or {}).get('retrieval_k')
+    if suite == 'locomo_native_lifecycle':
+        # Full-effort lifecycle QA: only cap k when the caller explicitly asks;
+        # otherwise the engine's high-effort retrieval defaults apply.
+        retrieval_k = max(1, int(retrieval_k_raw)) if isinstance(retrieval_k_raw, int) and retrieval_k_raw > 0 else None
+    else:
+        retrieval_k = max(1, int(retrieval_k_raw or settings.locomo_default_retrieval_k))
     ingestion_mode = str((body or {}).get('ingestion_mode') or settings.locomo_ingest_mode_default).strip() or settings.locomo_ingest_mode_default
     answer_mode = str((body or {}).get('answer_mode') or '').strip().lower() or None
-    if answer_mode not in {None, 'none', 'extractive', 'llm'}:
+    if answer_mode not in {None, 'none', 'extractive', 'llm', 'recall_llm'}:
         answer_mode = 'none'
     generator_model = str((body or {}).get('generator_model') or '').strip() or None
-    if suite == 'locomo_native_lifecycle':
-        # Lifecycle QA should always answer from retrieved evidence. Leave the
-        # model unset for auto-detection unless explicitly supplied.
-        answer_mode = 'llm'
+    if suite == 'locomo_native_lifecycle' and answer_mode in {None, 'none'}:
+        # Lifecycle QA answers from the evidence the scored recall() retrieved.
+        # Leave the model unset for auto-detection unless explicitly supplied.
+        answer_mode = 'recall_llm'
     embeddings_provider = str((body or {}).get('embeddings_provider') or '').strip() or None
     evidence_recall_k = [int(x) for x in ((body or {}).get('evidence_recall_k') or [1, 3, 5, 8, 10]) if str(x).strip()]
     persist_case_artifacts = bool((body or {}).get('persist_case_artifacts', True))

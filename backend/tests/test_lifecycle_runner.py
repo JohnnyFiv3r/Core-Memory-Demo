@@ -194,7 +194,7 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual({"ok": True}, out["pre_flush_drain"])
         self.assertEqual({"ok": True}, out["post_flush_drain"])
 
-    def test_qa_efforts_run_low_medium_high_in_order(self):
+    def test_qa_efforts_default_to_single_high_effort_recall(self):
         order = []
 
         def fake_recall(request, *, effort, root, explain, include_raw):
@@ -209,21 +209,43 @@ class TestLifecycleRunner(unittest.TestCase):
                 recall_fn=fake_recall,
             )
 
+        self.assertEqual(["high"], order)
+        self.assertEqual(["high"], out["retrieval_order"])
+        self.assertEqual({"high"}, set(out["efforts"].keys()))
+        self.assertEqual("full_bead_corpus", out["efforts"]["high"]["request"]["constraints"]["recall_scope"])
+
+    def test_qa_efforts_run_explicit_low_medium_high_in_order(self):
+        order = []
+
+        def fake_recall(request, *, effort, root, explain, include_raw):
+            order.append(effort)
+            return {"planning": {"selected_effort": effort}, "request": request, "root": root}
+
+        with tempfile.TemporaryDirectory() as td:
+            out = run_qa_efforts(
+                root=td,
+                conversation=_conversation(),
+                qa=_conversation().qa_cases[0],
+                recall_fn=fake_recall,
+                retrieval_efforts=RETRIEVAL_EFFORT_ORDER,
+            )
+
         self.assertEqual(list(RETRIEVAL_EFFORT_ORDER), order)
         self.assertEqual(list(RETRIEVAL_EFFORT_ORDER), out["retrieval_order"])
         self.assertEqual(set(RETRIEVAL_EFFORT_ORDER), set(out["efforts"].keys()))
         self.assertEqual("full_bead_corpus", out["efforts"]["low"]["request"]["constraints"]["recall_scope"])
 
-    def test_qa_efforts_reject_wrong_order(self):
+    def test_qa_efforts_reject_wrong_order_and_missing_high(self):
         with tempfile.TemporaryDirectory() as td:
-            with self.assertRaisesRegex(BenchmarkLifecycleError, "retrieval effort order"):
-                run_qa_efforts(
-                    root=td,
-                    conversation=_conversation(),
-                    qa=_conversation().qa_cases[0],
-                    recall_fn=lambda *args, **kwargs: {},
-                    retrieval_efforts=("high",),
-                )
+            for bad in (("high", "low"), ("medium", "low", "high"), ("low",), ()):
+                with self.assertRaisesRegex(BenchmarkLifecycleError, "retrieval efforts"):
+                    run_qa_efforts(
+                        root=td,
+                        conversation=_conversation(),
+                        qa=_conversation().qa_cases[0],
+                        recall_fn=lambda *args, **kwargs: {},
+                        retrieval_efforts=bad,
+                    )
 
     def test_qa_efforts_score_each_effort(self):
         conv = _conversation()
@@ -269,7 +291,7 @@ class TestLifecycleRunner(unittest.TestCase):
             "app.benchmarks.lifecycle_runner.generate_locomo_answer",
             return_value={"answer": "Alice likes pizza", "used_dia_ids": ["D1:1"], "confidence": "high", "unsupported": False},
         ) as answerer:
-            out = run_qa_efforts(root=td, conversation=conv, qa=qa, recall_fn=fake_recall, answer_mode="llm", generator_model="test:model")
+            out = run_qa_efforts(root=td, conversation=conv, qa=qa, recall_fn=fake_recall, retrieval_efforts=RETRIEVAL_EFFORT_ORDER, answer_mode="llm", generator_model="test:model")
 
         self.assertEqual(1, answerer.call_count)
         self.assertEqual(1.0, out["efforts"]["high"]["answer_f1"])
@@ -307,8 +329,8 @@ class TestLifecycleRunner(unittest.TestCase):
         with tempfile.TemporaryDirectory() as td:
             out = run_qa_efforts(root=td, conversation=conv, qa=qa, recall_fn=fake_recall)
 
-        self.assertEqual(1.0, out["efforts"]["low"]["evidence_recall"]["recall@5"])
-        self.assertEqual(["D1:3"], out["efforts"]["low"]["retrieved"][0]["dia_ids"])
+        self.assertEqual(1.0, out["efforts"]["high"]["evidence_recall"]["recall@5"])
+        self.assertEqual(["D1:3"], out["efforts"]["high"]["retrieved"][0]["dia_ids"])
 
     def test_qa_efforts_hydrates_full_bead_and_turn_transcript_for_answer_generation(self):
         conv = _conversation()
@@ -431,7 +453,7 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual("locomo_native_lifecycle", out["dataset_mode"])
         self.assertTrue(out["lifecycle"]["lifecycle_faithful"])
         self.assertEqual(2, out["lifecycle"]["capture_hook_calls"])
-        self.assertEqual(["low", "medium", "high"], out["cases"][0]["retrieval_order"])
+        self.assertEqual(["high"], out["cases"][0]["retrieval_order"])
         self.assertTrue(out["cases"][0]["qa_bead_written"])
         self.assertIn("after_qa:no_associations_produced", out["warnings"])
         self.assertEqual("bench:locomo:conv-1:qa", out["qa_session_id"])
@@ -442,8 +464,6 @@ class TestLifecycleRunner(unittest.TestCase):
                 ("async", "drain"),
                 ("flush", "bench-preqa:locomo:conv-1"),
                 ("async", "drain"),
-                ("recall", "low"),
-                ("recall", "medium"),
                 ("recall", "high"),
                 ("BENCHMARK_QA", "qa:locomo:conv-1:q0001"),
             ],
@@ -656,7 +676,7 @@ class TestLifecycleRunner(unittest.TestCase):
         self.assertEqual("locomo:conv-1:q0001", out["cases"][0]["qa_id"])
         self.assertIn("by_effort", out["scores"])
         self.assertEqual(
-            [("recall", "low", "locomo:conv-1:q0001"), ("recall", "medium", "locomo:conv-1:q0001"), ("recall", "high", "locomo:conv-1:q0001")],
+            [("recall", "high", "locomo:conv-1:q0001")],
             events,
         )
         self.assertIn((0, 1, "locomo:conv-1:q0001", "retrieving", {"status": "retrieving", "phase": "lifecycle_qa", "conversation_id": "locomo:conv-1"}), progress_events)

@@ -16,7 +16,7 @@ class TestSemanticProjectionUpgrade(unittest.TestCase):
         # PR #186 branch pin: adaptive causal trace depth is exposed through
         # canonical retrieval, public memory trace, and the PydanticAI trace tool;
         # it builds on the prior #181-#185 LoCoMo/Qdrant/retrieval fixes.
-        self.assertIn("5f7c15f6be692c9af7c7d0af82741e012a53c5df", requirements)
+        self.assertIn("b88e93e9c1b49a8f6abbc3442175b0f1d43696fa", requirements)
         self.assertIn("core-memory[qdrant,kuzu,mcp]", requirements)
         self.assertIn("qdrant-client[fastembed]>=1.9", requirements)
         self.assertIn("psycopg[binary]==3.3.2", requirements)
