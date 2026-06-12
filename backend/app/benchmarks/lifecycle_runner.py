@@ -28,6 +28,12 @@ logger = logging.getLogger(__name__)
 
 RETRIEVAL_EFFORT_ORDER = ("low", "medium", "high")
 
+# Official lifecycle QA runs exactly one full-effort recall() per question — the
+# benchmark spec is: seed turns, compact once, then answer every question from a
+# single high-effort recall. Multi-effort sweeps remain available by passing the
+# full RETRIEVAL_EFFORT_ORDER explicitly (diagnostic runs only).
+DEFAULT_RETRIEVAL_EFFORTS = ("high",)
+
 # LoCoMo category 1 = multi-hop (gold evidence spans 2+ turns). These questions
 # need a wider retrieval window to gather co-required evidence than single-fact
 # questions; the configured default k (tuned for single-hop) leaves multi-hop gold
@@ -563,15 +569,18 @@ def _effort_retrieved_ids(case: dict[str, Any], effort: str) -> tuple[str, ...]:
 
 
 def _retrieval_varies_by_effort(cases: list[dict[str, Any]]) -> bool:
-    """True if any QA's retrieved bead set differs across low/medium/high.
+    """True if any QA's retrieved bead set differs across the efforts it ran.
 
-    Today Core Memory's recall() returns the same candidates regardless of the
-    effort tier (only the demo-side answer generation differs), so the three
-    efforts are redundant retrieval work. Surfacing this lets us flag the no-op
-    instead of silently paying ~3x retrieval latency. See run_qa_efforts.
+    Only meaningful for diagnostic multi-effort runs; single-effort official runs
+    trivially report False. Surfacing this lets us flag redundant retrieval work
+    instead of silently paying ~Nx retrieval latency. See run_qa_efforts.
     """
     for case in cases:
-        sets = {effort: _effort_retrieved_ids(case, effort) for effort in RETRIEVAL_EFFORT_ORDER}
+        sets = {
+            effort: _effort_retrieved_ids(case, effort)
+            for effort in RETRIEVAL_EFFORT_ORDER
+            if effort in (case.get("efforts") or {})
+        }
         if len({s for s in sets.values()}) > 1:
             return True
     return False
@@ -961,8 +970,8 @@ def run_pre_qa_flush(
     *,
     root: str | Path,
     conversation: BenchmarkConversation,
-    token_budget: int = 1200,
-    max_beads: int = 12,
+    token_budget: int = 128_000,
+    max_beads: int = 200,
     process_flush_fn: ProcessFlush | None = None,
     run_async_jobs_fn: RunAsyncJobs | None = None,
     drain_async: bool = True,
@@ -976,6 +985,12 @@ def run_pre_qa_flush(
     crawler/association/semantic work has drained once, ``process_flush`` has
     constructed the rolling window, post-flush work has drained, and graph sync
     has succeeded.
+
+    The flush budget mirrors the seed path (replay_locomo_corpus /
+    ingest_locomo_samples_through_core_memory: 128k tokens, 200 beads): this is
+    the single end-of-seed compaction, not a mid-conversation context squeeze, so
+    a starved budget here would silently compact the corpus the QA phase is
+    about to retrieve from.
     """
 
     process_flush_fn = process_flush_fn or _default_process_flush()
@@ -1078,17 +1093,26 @@ def run_qa_efforts(
     conversation: BenchmarkConversation,
     qa: BenchmarkQA,
     recall_fn: RecallFunc | None = None,
-    retrieval_efforts: tuple[str, ...] = RETRIEVAL_EFFORT_ORDER,
+    retrieval_efforts: tuple[str, ...] = DEFAULT_RETRIEVAL_EFFORTS,
     k: int | None = None,
     answer_mode: str = "none",
     generator_model: str | None = None,
     bead_to_dias: dict[str, list[str]] | None = None,
 ) -> dict[str, Any]:
-    """Run every configured retrieval effort for one QA case in order."""
+    """Run the configured retrieval effort(s) for one QA case in order.
+
+    Official runs execute exactly one high-effort recall per question; passing
+    additional efforts is allowed only as an ordered subset of
+    RETRIEVAL_EFFORT_ORDER that includes "high" (the scored/answered effort).
+    """
 
     efforts = tuple(str(x).strip().lower() for x in retrieval_efforts if str(x).strip())
-    if efforts != RETRIEVAL_EFFORT_ORDER:
-        raise BenchmarkLifecycleError(f"retrieval effort order must be {RETRIEVAL_EFFORT_ORDER}, got {efforts}")
+    allowed_in_order = tuple(e for e in RETRIEVAL_EFFORT_ORDER if e in efforts)
+    if not efforts or efforts != allowed_in_order or "high" not in efforts:
+        raise BenchmarkLifecycleError(
+            f"retrieval efforts must be an ordered subset of {RETRIEVAL_EFFORT_ORDER} "
+            f"including 'high', got {efforts}"
+        )
     recall_fn = recall_fn or _default_recall()
     req = _qa_recall_request(conversation=conversation, qa=qa, k=k)
     results: dict[str, Any] = {}
@@ -1205,7 +1229,7 @@ def write_qa_turn(
             "benchmark_phase": "qa",
             "conversation_id": conversation.conversation_id,
             "qa_id": qa.qa_id,
-            "retrieval_efforts": list(RETRIEVAL_EFFORT_ORDER),
+            "retrieval_efforts": list((qa_result or {}).get("retrieval_order") or DEFAULT_RETRIEVAL_EFFORTS),
             "selected_answer_effort": "high",
             # Match the replay path: in judge mode this QA lifecycle bead (no agent
             # crawler_updates supplied) is judge-authored per-request (#182), not
@@ -1333,6 +1357,7 @@ def _run_lifecycle_conversation_impl(
     recall_fn: RecallFunc | None = None,
     write_qa_beads: bool = True,
     retrieval_k: int | None = None,
+    retrieval_efforts: tuple[str, ...] = DEFAULT_RETRIEVAL_EFFORTS,
     answer_mode: str = "none",
     generator_model: str | None = None,
     progress: Any | None = None,
@@ -1475,7 +1500,7 @@ def _run_lifecycle_conversation_impl(
             if qa_session_mode_name == "isolated" and bool(semantic_build.get("ok")):
                 qa_semantic_build = _build_semantic_index(qa_root)
                 _assert_semantic_build_ok(qa_semantic_build)
-            qa_result = run_qa_efforts(root=qa_root, conversation=conversation, qa=qa, recall_fn=recall_fn, k=retrieval_k, answer_mode=answer_mode, generator_model=generator_model, bead_to_dias=bead_to_dias)
+            qa_result = run_qa_efforts(root=qa_root, conversation=conversation, qa=qa, recall_fn=recall_fn, retrieval_efforts=retrieval_efforts, k=retrieval_k, answer_mode=answer_mode, generator_model=generator_model, bead_to_dias=bead_to_dias)
             if write_qa_beads:
                 qa_result.update(write_qa_turn(root=qa_root, conversation=conversation, qa=qa, qa_result=qa_result, qa_session_id=qa_session_id_for_case, process_turn_finalized_fn=process_turn_finalized_fn))
             else:
@@ -1512,11 +1537,11 @@ def _run_lifecycle_conversation_impl(
         conversation_id=conversation.conversation_id,
     )
 
-    # Diagnostic (not fatal): the three retrieval efforts returned identical
-    # candidate sets, so low/medium are redundant retrieval work. Surface it so the
-    # ~3x latency cost is visible instead of silent. The fix is engine-side (recall
+    # Diagnostic (not fatal): a multi-effort run returned identical candidate
+    # sets, so the extra efforts are redundant retrieval work. Surface it so the
+    # ~Nx latency cost is visible instead of silent. The fix is engine-side (recall
     # must vary candidates by effort) or demo-side (collapse the efforts).
-    if not bool(scores.get("retrieval_varies_by_effort", True)):
+    if len(retrieval_efforts) > 1 and not bool(scores.get("retrieval_varies_by_effort", True)):
         extra_warnings.append("after_qa:retrieval_identical_across_efforts")
         logger.warning(
             "benchmark retrieval efforts are a no-op: low/medium/high returned identical "
@@ -1565,7 +1590,7 @@ def _run_lifecycle_conversation_impl(
             "qa_session_mode": qa_session_mode_name,
             "qa_cases": len(conversation.qa_cases),
             "dia_bead_map_size": len(bead_to_dias),
-            "retrieval_efforts_per_qa": list(RETRIEVAL_EFFORT_ORDER),
+            "retrieval_efforts_per_qa": list(retrieval_efforts),
         },
         "shortcut_guards": flags.to_dict(),
         "warnings": warnings,
@@ -1687,6 +1712,7 @@ def run_locomo_lifecycle_suite(
     recall_fn: RecallFunc | None = None,
     write_qa_beads: bool = True,
     retrieval_k: int | None = None,
+    retrieval_efforts: tuple[str, ...] = DEFAULT_RETRIEVAL_EFFORTS,
     answer_mode: str = "none",
     generator_model: str | None = None,
     progress: Any | None = None,
@@ -1732,6 +1758,7 @@ def run_locomo_lifecycle_suite(
             recall_fn=recall_fn,
             write_qa_beads=write_qa_beads,
             retrieval_k=retrieval_k,
+            retrieval_efforts=retrieval_efforts,
             answer_mode=answer_mode,
             generator_model=generator_model,
             progress=progress,
@@ -1777,7 +1804,7 @@ def run_locomo_lifecycle_suite(
             "pre_qa_flush_ran": all(bool((r.get("lifecycle") or {}).get("pre_qa_flush_ran")) for r in results) if results else False,
             "qa_session_mode": qa_session_mode,
             "qa_cases": completed_qa,
-            "retrieval_efforts_per_qa": list(RETRIEVAL_EFFORT_ORDER),
+            "retrieval_efforts_per_qa": list(retrieval_efforts),
         },
         "shortcut_guards": flags.to_dict(),
         "warnings": warnings,

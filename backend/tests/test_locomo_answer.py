@@ -138,3 +138,39 @@ class TestLocomoAnswer(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+    def test_recall_llm_mode_answers_from_recall_evidence_without_tools(self):
+        class FakeRecallResult(_FakeAgentResult):
+            output = '{"answer":"7 May 2023","used_dia_ids":["D1:3"],"confidence":"high","unsupported":false}'
+
+        with patch("app.benchmarks.locomo_answer.Agent") as Agent:
+            agent = Agent.return_value
+            agent.run = AsyncMock(return_value=FakeRecallResult())
+            out = generate_locomo_answer(
+                mode="recall_llm",
+                qa={"question": "When did Caroline go?"},
+                retrieved_context=[{"text": "Caroline went on 7 May 2023", "dia_ids": ["D1:3"], "score": 0.9}],
+                generator_model="openai:gpt-4o-mini",
+            )
+        Agent.assert_called_once()
+        # No second retrieval pass: the answerer gets no memory tools, only the
+        # evidence the scored recall() already returned (inlined in the prompt).
+        self.assertNotIn("tools", Agent.call_args.kwargs)
+        prompt = agent.run.call_args.args[0]
+        self.assertIn("Caroline went on 7 May 2023", prompt)
+        self.assertEqual("7 May 2023", out["answer"])
+        self.assertEqual(["D1:3"], out["used_dia_ids"])
+        self.assertEqual("recall_evidence", out["answer_source"])
+        self.assertNotIn("tool_phase_validation", out)
+
+    def test_recall_llm_mode_abstains_on_empty_context_without_llm_call(self):
+        with patch("app.benchmarks.locomo_answer.Agent") as Agent:
+            out = generate_locomo_answer(
+                mode="recall_llm",
+                qa={"question": "When?"},
+                retrieved_context=[],
+                generator_model="openai:gpt-4o-mini",
+            )
+        Agent.assert_not_called()
+        self.assertEqual("No information available", out["answer"])
+        self.assertTrue(out["unsupported"])

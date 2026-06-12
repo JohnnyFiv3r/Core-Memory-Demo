@@ -224,7 +224,7 @@ class TestBenchmarkCompareToggle(unittest.IsolatedAsyncioTestCase):
         self.assertEqual('clean', bench['root_mode'])
         self.assertEqual('shared', bench['qa_session_mode'])
         self.assertFalse(bench['qa_only_seeded'])
-        self.assertEqual('llm', bench['answer_mode'])
+        self.assertEqual('recall_llm', bench['answer_mode'])
 
     def test_benchmark_request_for_store_uses_runtime_backends(self):
         if demo_routes is None:

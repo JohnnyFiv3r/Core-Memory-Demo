@@ -3632,11 +3632,16 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             # Fail closed before doing any work: a required-semantic LoCoMo run
             # must use real embeddings, never the hash/lexical fallback.
             _assert_benchmark_semantic_ready(benchmark_embeddings_provider, semantic_mode_name)
-            resolved_answer_mode = str(answer_mode or "llm").strip().lower() or "llm"
-            if resolved_answer_mode not in {"llm", "extractive", "none"}:
-                resolved_answer_mode = "llm"
+            # Official lifecycle QA answers from the evidence the scored
+            # high-effort recall() returned (recall_llm). The agentic tool-loop
+            # answerer ("llm") re-retrieves on its own, so its F1 measures a
+            # different retrieval process than the one being scored; keep it
+            # available only as an explicit diagnostic mode.
+            resolved_answer_mode = str(answer_mode or "recall_llm").strip().lower() or "recall_llm"
+            if resolved_answer_mode not in {"recall_llm", "llm", "extractive", "none"}:
+                resolved_answer_mode = "recall_llm"
             resolved_generator_model = str(generator_model or "").strip()
-            if resolved_answer_mode == "llm" and not resolved_generator_model:
+            if resolved_answer_mode in {"recall_llm", "llm"} and not resolved_generator_model:
                 resolved_generator_model = detect_model()
             # Official LoCoMo always uses Core Memory's native LLM bead-field
             # judge during replay. Ignore the legacy deterministic toggle.
@@ -3654,18 +3659,26 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
             resolved_qa_session_mode = "shared" if resolved_qa_only_seeded else str(qa_session_mode or "shared").strip().lower() or "shared"
             if resolved_qa_session_mode not in {"shared", "isolated"}:
                 resolved_qa_session_mode = "shared"
+            # Full-effort recall: when no k is explicitly requested, let the
+            # engine's high-effort default (k=20 + hop expansion + hydration)
+            # apply instead of throttling every QA to the demo's single-hop k.
+            lifecycle_retrieval_k = int(retrieval_k) if retrieval_k else None
             with benchmark_claim_mode(), semantic_mode(semantic_mode_name, build_on_read=True, embeddings_provider=benchmark_embeddings_provider), benchmark_enrich_mode(resolved_enrich_mode):
                 lifecycle_report = run_locomo_lifecycle_suite(
                     root=lifecycle_root,
                     samples=selected_samples,
                     qa_cases=selected_cases,
                     qa_session_mode=resolved_qa_session_mode,
-                    retrieval_k=int(retrieval_k or settings.locomo_default_retrieval_k),
+                    retrieval_k=lifecycle_retrieval_k,
                     answer_mode=resolved_answer_mode,
                     generator_model=resolved_generator_model,
                     progress=progress,
                     qa_only_seeded=resolved_qa_only_seeded,
-                    write_qa_beads=not resolved_qa_only_seeded,
+                    # The QA phase is read-only by spec: seed turns, compact once,
+                    # then only recall. Writing per-QA beads back into the shared
+                    # corpus mid-run lets later questions retrieve earlier Q/A
+                    # beads as high-similarity distractors.
+                    write_qa_beads=False,
                 )
             # Defense in depth: reject a report that degraded mid-run even though
             # the embeddings preflight passed.
@@ -3734,7 +3747,7 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                 "semantic_mode": semantic_mode_name,
                 "answer_mode": resolved_answer_mode,
                 "generator_model": resolved_generator_model,
-                "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
+                "retrieval_k": lifecycle_retrieval_k,
                 "root_mode": root_mode,
                 "warnings": warnings,
                 "dataset_path": str((dataset_meta.get("dataset") or {}).get("dataset_path") or ""),
@@ -3753,15 +3766,20 @@ def run_benchmark(*, semantic_mode_name: str, root_mode: str, preload_from_demo:
                     "sample_ids": list(sample_ids or []),
                     "category_filter": list(category_filter or []),
                     "qa_per_category": {str(k): int(v) for k, v in dict(qa_per_category or {}).items()},
-                    "retrieval_k": int(retrieval_k or settings.locomo_default_retrieval_k),
+                    # None means "engine high-effort default" (no demo-side k cap).
+                    "retrieval_k": lifecycle_retrieval_k,
                     # Multi-hop (LoCoMo cat MULTI_HOP_CATEGORY) QAs are measured at a
-                    # higher k floor than the configured retrieval_k (see
+                    # higher k floor than an explicitly configured retrieval_k (see
                     # _qa_recall_request). Record the effective per-category k so a
                     # mixed-category run isn't mislabeled as uniformly retrieval_k —
                     # cat-1 cases were actually evaluated at retrieval_k_multi_hop.
-                    "retrieval_k_multi_hop": max(int(retrieval_k or settings.locomo_default_retrieval_k), int(MULTI_HOP_RETRIEVAL_K)),
+                    "retrieval_k_multi_hop": (
+                        max(int(lifecycle_retrieval_k), int(MULTI_HOP_RETRIEVAL_K))
+                        if lifecycle_retrieval_k
+                        else None
+                    ),
                     "multi_hop_category": int(MULTI_HOP_CATEGORY),
-                    "retrieval_efforts": ["low", "medium", "high"],
+                    "retrieval_efforts": list((lifecycle_report.get("lifecycle") or {}).get("retrieval_efforts_per_qa") or ["high"]),
                     "recall_scope": "full_bead_corpus",
                     "qa_session_mode": resolved_qa_session_mode,
                     "dataset_mode": "locomo_native_lifecycle",

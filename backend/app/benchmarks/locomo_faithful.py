@@ -147,6 +147,16 @@ def _read_bead_index(root: str | Path) -> dict[str, Any]:
         return {}
 
 
+def _conversation_sample_id(conversation: BenchmarkConversation) -> str:
+    sample_id = str((conversation.metadata or {}).get("locomo_sample_id") or "").strip()
+    if sample_id:
+        return sample_id
+    conversation_id = str(conversation.conversation_id or "").strip()
+    if conversation_id.startswith("locomo:"):
+        return conversation_id.split(":", 1)[1]
+    return ""
+
+
 def build_bead_to_dias(root: str | Path, conversation: BenchmarkConversation) -> dict[str, list[str]]:
     """Map every replay bead to the dia_ids it covers, read from the index.
 
@@ -154,22 +164,38 @@ def build_bead_to_dias(root: str | Path, conversation: BenchmarkConversation) ->
     space. Each bead's source_turn_ids are resolved back to dia_ids via the
     conversation's own turn metadata. Built after compaction, so a compacted
     bead that absorbs several turns maps to all their dia_ids.
+
+    Two seed paths write LoCoMo beads with different ID shapes and the map must
+    score both:
+    - lifecycle replay: session ``bench:locomo:<sample>:replay``, source turn
+      ids ``locomo:<sample>:<dia>:<turn_index>`` (the conversation's own turn_ids)
+    - corpus seeding (replay_locomo_corpus): session
+      ``locomo:<sample>:session:<n>``, source turn ids ``locomo:<sample>:<dia>``
+    An exact-session filter therefore drops every seeded bead and silently zeroes
+    evidence recall; scope by sample instead.
     """
+    sample_id = _conversation_sample_id(conversation)
     turn_to_dia: dict[str, str] = {}
     for turn in conversation.turns:
         dia = str((turn.metadata or {}).get("locomo_dia_id") or (turn.metadata or {}).get("dia_id") or "").strip()
         if dia:
             turn_to_dia[str(turn.turn_id)] = dia
             turn_to_dia[dia] = dia
+            if sample_id:
+                turn_to_dia[f"locomo:{sample_id}:{dia}"] = dia
 
     session_id = str(conversation.session_id or "")
+    # Trailing colon so sample "conv-1" cannot claim "conv-10" sessions.
+    allowed_session_prefixes = tuple(
+        prefix for prefix in {session_id, f"locomo:{sample_id}:" if sample_id else ""} if prefix
+    )
     beads = (_read_bead_index(root).get("beads") or {})
     bead_to_dias: dict[str, list[str]] = {}
     for bead in beads.values():
         if not isinstance(bead, dict):
             continue
         bead_session = str(bead.get("session_id") or "")
-        if session_id and bead_session and bead_session != session_id:
+        if allowed_session_prefixes and bead_session and not bead_session.startswith(allowed_session_prefixes):
             continue
         bead_id = str(bead.get("id") or "")
         if not bead_id:
