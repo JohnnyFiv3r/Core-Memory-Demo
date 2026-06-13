@@ -44,6 +44,17 @@ class TestFormatSafeTransform(unittest.TestCase):
         self.assertIn("user", twice)
 
 
+class TestRenderPathDetection(unittest.TestCase):
+    def test_detects_format_call_site(self):
+        self.assertTrue(bjf.render_uses_str_format("x = _prompt_template().format(user_query=q)"))
+
+    def test_rejects_replace_call_site(self):
+        self.assertFalse(bjf.render_uses_str_format("x = _prompt_template().replace('{user_query}', q)"))
+
+    def test_empty_source_is_false(self):
+        self.assertFalse(bjf.render_uses_str_format(""))
+
+
 class TestInstall(unittest.TestCase):
     def setUp(self):
         self._env = patch.dict("os.environ", {}, clear=False)
@@ -69,6 +80,35 @@ class TestInstall(unittest.TestCase):
         self.assertFalse(bjf.template_is_format_broken(installed))
         rendered = installed.format(user_query="", assistant_final="hi")
         self.assertIn('"type": "decision|goal"', rendered)
+
+    def test_skips_when_judge_switched_to_str_replace(self):
+        # Codex P2: if Core Memory fixes the upstream bug by switching the call
+        # sites to str.replace() (leaving single JSON braces), the template still
+        # "looks broken" to str.format() but the native path works and our
+        # doubled-brace override would corrupt the prompt. Must NOT apply.
+        replace_src = (
+            "def _llm_judge_openai(...):\n"
+            "    prompt = _prompt_template().replace('{user_query}', uq).replace('{assistant_final}', af)\n"
+        )
+        with patch("core_memory.policy.bead_judge._PROMPT", BROKEN), patch(
+            "inspect.getsource", return_value=replace_src
+        ):
+            res = bjf.install_bead_judge_prompt_format_fix()
+        self.assertFalse(res["applied"])
+        self.assertEqual("judge_render_not_str_format", res["reason"])
+        self.assertNotIn("CORE_MEMORY_BEAD_FIELD_PROMPT", os.environ)
+
+    def test_applies_when_render_still_uses_str_format(self):
+        format_src = (
+            "def _llm_judge_openai(...):\n"
+            "    text = _prompt_template().format(user_query=uq, assistant_final=af)\n"
+        )
+        with patch("core_memory.policy.bead_judge._PROMPT", BROKEN), patch(
+            "inspect.getsource", return_value=format_src
+        ):
+            res = bjf.install_bead_judge_prompt_format_fix()
+        self.assertTrue(res["applied"])
+        self.assertFalse(bjf.template_is_format_broken(os.environ["CORE_MEMORY_BEAD_FIELD_PROMPT"]))
 
     def test_noop_when_template_already_safe(self):
         with patch("core_memory.policy.bead_judge._PROMPT", ALREADY_SAFE):

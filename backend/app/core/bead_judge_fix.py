@@ -52,6 +52,29 @@ def template_is_format_broken(template: str) -> bool:
         return True
 
 
+def render_uses_str_format(source: str) -> bool:
+    """True if the judge builds its prompt via ``_prompt_template().format(...)``.
+
+    The doubled-brace override only round-trips under ``str.format`` (which
+    collapses ``{{``/``}}`` back to single braces). If Core Memory ever fixes the
+    upstream bug by switching the call sites to ``str.replace`` while leaving the
+    JSON example braces single, ``template_is_format_broken`` would still report
+    True, but installing the doubled-brace override would then inject literal
+    ``{{``/``}}`` into the prompt. So gate the workaround on the active render path.
+    """
+    return "_prompt_template().format(" in str(source or "")
+
+
+def _judge_render_uses_str_format(module: Any) -> bool:
+    try:
+        import inspect
+
+        source = inspect.getsource(module)
+    except Exception:
+        return False
+    return render_uses_str_format(source)
+
+
 def install_bead_judge_prompt_format_fix() -> dict[str, Any]:
     """Install a format-safe bead-judge prompt iff the installed default is broken.
 
@@ -71,6 +94,12 @@ def install_bead_judge_prompt_format_fix() -> dict[str, Any]:
         return {"applied": False, "reason": "no_default_prompt"}
     if not template_is_format_broken(template):
         return {"applied": False, "reason": "prompt_already_format_safe"}
+    # Only safe to apply when the judge still renders via str.format(); if the
+    # call sites switched to str.replace(), the doubled-brace override would feed
+    # literal {{/}} to the model. The native str.replace path handles single
+    # braces fine, so do nothing in that case.
+    if not _judge_render_uses_str_format(_bj):
+        return {"applied": False, "reason": "judge_render_not_str_format"}
     safe = make_format_safe(template)
     if template_is_format_broken(safe):  # defensive: never install a still-broken prompt
         return {"applied": False, "reason": "format_safe_transform_failed"}
