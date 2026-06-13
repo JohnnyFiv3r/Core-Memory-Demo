@@ -1,8 +1,15 @@
+import io
+import json
 import sys
 import unittest
 import urllib.error
 from pathlib import Path
 from unittest.mock import patch
+
+
+def _http_error(code: int, body: dict) -> urllib.error.HTTPError:
+    fp = io.BytesIO(json.dumps(body).encode("utf-8"))
+    return urllib.error.HTTPError("https://api.openai.com/v1/embeddings", code, "err", {}, fp)
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -129,6 +136,46 @@ class TestEmbeddingPreflight(unittest.TestCase):
         self.assertTrue(audit["CORE_MEMORY_EMBEDDINGS_API_KEY"]["used"])
         self.assertFalse(audit["OPENAI_API_KEY"]["used"])
         self.assertTrue(audit["OPENAI_API_KEY"]["present"])
+
+    def test_restricted_project_key_401_is_named_as_permissions_not_bad_key(self):
+        # A fresh sk-proj-… key that authenticates but lacks model scope returns
+        # HTTP 401 with code=insufficient_permissions. The preflight must call
+        # this out as a permissions problem, not send the user chasing the key value.
+        import os
+        os.environ["CORE_MEMORY_EMBEDDINGS_PROVIDER"] = "openai"
+        os.environ["OPENAI_API_KEY"] = "sk-proj-fresh-but-restricted-1234567890"
+
+        def _scoped_401(**_):
+            raise _http_error(401, {"error": {
+                "message": "You have insufficient permissions for this operation. Missing scopes: model.request",
+                "type": "invalid_request_error",
+                "code": "insufficient_permissions",
+            }})
+
+        out = ep.preflight_embedding_backend(probe=_scoped_401)
+        self.assertFalse(out["ok"])
+        self.assertTrue(out["fatal"])
+        self.assertEqual("http_401", out["error"])
+        self.assertEqual("insufficient_permissions", out["api_error"]["code"])
+        self.assertIn("permissions problem", out["hint"])
+        self.assertIn("Model capabilities", out["hint"])
+        self.assertIn("Missing scopes: model.request", out["hint"])
+
+    def test_invalid_key_401_body_is_surfaced(self):
+        import os
+        os.environ["CORE_MEMORY_EMBEDDINGS_PROVIDER"] = "openai"
+        os.environ["OPENAI_API_KEY"] = "sk-proj-typo-key-0000000000"
+
+        def _bad_key(**_):
+            raise _http_error(401, {"error": {
+                "message": "Incorrect API key provided: sk-proj-***.",
+                "type": "invalid_request_error",
+                "code": "invalid_api_key",
+            }})
+
+        out = ep.preflight_embedding_backend(probe=_bad_key)
+        self.assertIn("invalid, revoked", out["hint"])
+        self.assertIn("Incorrect API key provided", out["hint"])
 
     def test_custom_base_url_override_is_flagged(self):
         import os

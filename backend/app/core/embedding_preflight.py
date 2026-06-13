@@ -78,6 +78,29 @@ def embedding_key_env_audit() -> list[dict[str, Any]]:
     return rows
 
 
+def _read_api_error(exc: urllib.error.HTTPError) -> dict[str, str]:
+    """Pull OpenAI's structured error out of an HTTPError body.
+
+    OpenAI returns the real reason in the response JSON, e.g.
+    ``{"error": {"code": "insufficient_permissions", "message": "... Missing
+    scopes: model.request"}}`` with HTTP 401. Without reading it, a
+    scope-restricted project key is indistinguishable from a plain bad key.
+    """
+    try:
+        raw = exc.read().decode("utf-8", "replace")
+    except Exception:
+        return {}
+    try:
+        err = (json.loads(raw) or {}).get("error") or {}
+    except Exception:
+        return {"message": raw.strip()[:300]}
+    return {
+        "message": str(err.get("message") or "").strip(),
+        "code": str(err.get("code") or "").strip(),
+        "type": str(err.get("type") or "").strip(),
+    }
+
+
 def _probe_openai_embeddings(*, base_url: str, model: str, key: str, timeout: float) -> dict[str, Any]:
     data = json.dumps({"model": model, "input": "preflight"}).encode("utf-8")
     headers = {"Content-Type": "application/json", "Authorization": f"Bearer {key}"}
@@ -154,7 +177,17 @@ def preflight_embedding_backend(
         result = runner(base_url=base_url, model=model, key=key, timeout=timeout)
     except urllib.error.HTTPError as exc:
         code = int(getattr(exc, "code", 0) or 0)
-        if code == 401:
+        api_err = _read_api_error(exc)
+        api_code = (api_err.get("code") or "").lower()
+        api_msg = api_err.get("message") or ""
+        # OpenAI returns 401 for a scope-restricted project key (sk-proj-…), not
+        # just for an invalid one. The body disambiguates: surface it verbatim.
+        if "insufficient_permissions" in api_code or "missing scopes" in api_msg.lower() or "model.request" in api_msg.lower():
+            hints.insert(0, "This is a permissions problem, NOT a bad key: the key authenticates but its project "
+                            "role lacks model/embeddings access (missing scope model.request). It is almost "
+                            "certainly a Restricted project key (sk-proj-…). In the OpenAI dashboard, give this key "
+                            "'Model capabilities' write access (or use an unrestricted/all-permissions key).")
+        elif "invalid_api_key" in api_code or code == 401:
             hints.insert(0, "OpenAI returned 401 Unauthorized: the key is invalid, revoked, or for the wrong "
                             "project/org. Verify the exact value on the benchmark-worker service.")
         elif code == 403:
@@ -162,9 +195,12 @@ def preflight_embedding_backend(
                             "is disabled for its project.")
         elif code == 404:
             hints.insert(0, f"404 from {base_url}/embeddings: base_url does not serve an OpenAI-style embeddings endpoint.")
+        if api_msg:
+            hints.append(f"OpenAI said: {api_msg}")
         return {"ok": False, "fatal": code in _FATAL_HTTP, "error": f"http_{code or 'error'}",
                 "key_source": key_var, "key": _mask_key(key), "provider": provider,
-                "base_url": base_url, "model": model, "key_audit": audit, "hint": " ".join(hints).strip()}
+                "base_url": base_url, "model": model, "key_audit": audit,
+                "api_error": api_err, "hint": " ".join(hints).strip()}
     except Exception as exc:  # noqa: BLE001 - transient/network: advise but don't block the run
         return {"ok": False, "fatal": False, "error": f"probe_failed:{type(exc).__name__}:{exc}",
                 "key_source": key_var, "key": _mask_key(key), "provider": provider,
