@@ -147,6 +147,14 @@ os.environ.setdefault("CORE_MEMORY_PREVIEW_ASSOC_ALLOW_SHARED_TAG", "1")
 os.environ.setdefault("CORE_MEMORY_SEMANTIC_BUILD_ON_READ", "0")
 os.environ.setdefault("CORE_MEMORY_DEMO_CHAT_SEMANTIC_MODE", "required")
 
+# Repair Core Memory's bead-field judge prompt if its template breaks str.format()
+# (literal JSON braces). Without this the LLM judge silently no-ops and every bead
+# degrades to deterministic crawler output with no claims. Self-disabling once the
+# pinned Core Memory escapes its prompt braces. See bead_judge_fix for details.
+from app.core.bead_judge_fix import install_bead_judge_prompt_format_fix as _install_bead_judge_prompt_format_fix
+
+_install_bead_judge_prompt_format_fix()
+
 STORY_PACK_DIR = Path(__file__).resolve().parents[3] / "demo" / "story-pack"
 LOCOMO_DIR = Path(__file__).resolve().parents[4] / "locomo"
 LOCOMO_DATA_PATH = LOCOMO_DIR / "data" / "locomo10.json"
