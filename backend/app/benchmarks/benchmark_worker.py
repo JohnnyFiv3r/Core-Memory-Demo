@@ -11,8 +11,13 @@ configure_shared_semantic_backend_env()
 
 from app.benchmarks import benchmark_store
 from app.core.config import settings
+from app.core.embedding_preflight import format_preflight_failure, preflight_embedding_backend
 from app.core.runtime import replay_locomo_corpus, run_benchmark
 from app.ingest.transcript import run_transcript_ingest_job
+
+# Job kinds that re-embed a corpus in-process and therefore need a working
+# external embeddings backend before they spend ~90s seeding.
+_SEMANTIC_BUILD_KINDS = {'locomo_seed', 'locomo_full', 'benchmark'}
 
 
 def _make_progress_callbacks(job_id: str) -> dict[str, Any]:
@@ -158,6 +163,22 @@ def run_once() -> int:
     kwargs = dict(job.get('kwargs') or {})
     kind = str(request.get('kind') or 'benchmark').strip() or 'benchmark'
     print(f'benchmark_worker: running {job_id} kind={kind}')
+
+    # Fail fast on a broken embeddings backend instead of seeding the whole
+    # corpus first and dying at the required-semantic gate. Only deterministic
+    # credential/endpoint failures (missing key, 401/403/404) abort here; a
+    # transient probe failure is logged and the run proceeds.
+    if kind in _SEMANTIC_BUILD_KINDS:
+        preflight = preflight_embedding_backend()
+        if not bool(preflight.get('ok')):
+            detail = format_preflight_failure(preflight)
+            if bool(preflight.get('fatal')):
+                benchmark_store.update_job_progress(job_id, status='running', stage='preflight', message=detail)
+                benchmark_store.finish_job(job_id, error=detail)
+                print(f'benchmark_worker: {detail}', file=sys.stderr)
+                return 1
+            print(f'benchmark_worker: embedding preflight warning (continuing): {detail}', file=sys.stderr)
+
     cb = _make_progress_callbacks(job_id)
     try:
         if kind == 'transcript_ingest':
