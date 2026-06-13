@@ -78,6 +78,36 @@ def embedding_key_env_audit() -> list[dict[str, Any]]:
     return rows
 
 
+def resolve_embedding_target() -> dict[str, str]:
+    """Authoritative (provider, base_url, model, key) the real embedding path uses.
+
+    Defers to core_memory.provider_config.resolve_embedding_config so a
+    provider's own default base URL (OpenRouter, Ollama, vLLM, …) is honoured
+    instead of assuming OpenAI — otherwise a valid non-OpenAI openai-compatible
+    setup would be probed against api.openai.com and falsely 401. Falls back to
+    env-only resolution if core_memory is unavailable.
+    """
+    provider = (_env("CORE_MEMORY_EMBEDDINGS_PROVIDER") or _env("CORE_MEMORY_EMBEDDING_PROVIDER")).lower()
+    base_url = ""
+    model = ""
+    try:
+        from core_memory.provider_config import resolve_embedding_config
+
+        cfg = resolve_embedding_config()
+        provider = str(getattr(cfg, "provider", "") or provider).lower()
+        base_url = str(getattr(cfg, "base_url", "") or "").rstrip("/")
+        model = str(getattr(cfg, "model", "") or getattr(cfg, "embedding_model", "") or "")
+    except Exception:
+        pass
+    key_var, key = resolve_embedding_key()
+    # Last-resort defaults mirror core_memory's own _provider_vectors fallbacks.
+    if not base_url:
+        base_url = "https://api.openai.com/v1"
+    if not model:
+        model = "text-embedding-3-large"
+    return {"provider": provider, "base_url": base_url, "model": model, "key_source": key_var, "key": key}
+
+
 def _read_api_error(exc: urllib.error.HTTPError) -> dict[str, str]:
     """Pull OpenAI's structured error out of an HTTPError body.
 
@@ -138,9 +168,10 @@ def preflight_embedding_backend(
                     "hint": "Embeddings provider is gemini/google but no GEMINI_API_KEY/GOOGLE_API_KEY is set on this service."}
         return {"ok": True, "fatal": False, "skipped": True, "reason": "gemini key present (not live-probed)"}
 
-    key_var, key = resolve_embedding_key()
-    model = (_env("CORE_MEMORY_EMBEDDINGS_MODEL") or _env("CORE_MEMORY_EMBEDDING_MODEL") or "text-embedding-3-large")
-    base_url = (_env("CORE_MEMORY_EMBEDDINGS_BASE_URL") or _env("CORE_MEMORY_EMBEDDING_BASE_URL") or "https://api.openai.com/v1").rstrip("/")
+    target = resolve_embedding_target()
+    key_var, key = target["key_source"], target["key"]
+    model = target["model"]
+    base_url = target["base_url"]
     on_openai = "openai.com" in base_url
     audit = embedding_key_env_audit()
 
@@ -161,13 +192,13 @@ def preflight_embedding_backend(
     if key_var in {"CORE_MEMORY_EMBEDDINGS_API_KEY", "CORE_MEMORY_EMBEDDING_API_KEY"} and _env("OPENAI_API_KEY"):
         hints.append(f"{key_var} is set and takes precedence over OPENAI_API_KEY — the OpenAI key you rotated is "
                      f"being IGNORED. Clear {key_var} on the worker (or put the fresh key there instead).")
+    # Only a clear key/endpoint mismatch is flagged — a non-OpenAI base_url is
+    # legitimate for non-OpenAI openai-compatible providers (OpenRouter, Ollama,
+    # vLLM), whose default endpoint comes from the resolver above.
     if key.startswith("sk-or-") and on_openai:
         hints.append("Key looks like an OpenRouter key (sk-or-…) but base_url is api.openai.com, which has no "
                      "/embeddings for it — this 401s every time. Set a real OpenAI key in OPENAI_API_KEY, or "
                      "unset OPENROUTER_API_KEY on the worker so it stops shadowing OPENAI_API_KEY.")
-    if not on_openai:
-        hints.append(f"base_url is {base_url} (a custom/override endpoint, not api.openai.com): an OpenAI key sent "
-                     f"there will 401. Check CORE_MEMORY_EMBEDDINGS_BASE_URL on the worker.")
     raw = os.environ.get(key_var) or ""
     if raw != raw.strip() or (raw.strip()[:1] in {'"', "'"}):
         hints.append(f"{key_var} has surrounding whitespace or quotes in the dashboard value; remove them.")
@@ -180,9 +211,15 @@ def preflight_embedding_backend(
         api_err = _read_api_error(exc)
         api_code = (api_err.get("code") or "").lower()
         api_msg = api_err.get("message") or ""
-        # OpenAI returns 401 for a scope-restricted project key (sk-proj-…), not
-        # just for an invalid one. The body disambiguates: surface it verbatim.
-        if "insufficient_permissions" in api_code or "missing scopes" in api_msg.lower() or "model.request" in api_msg.lower():
+        # OpenAI returns 401 for several distinct reasons; the body disambiguates.
+        # Order matters: most specific first.
+        if "ip_not_authorized" in api_code or "ip is not authorized" in api_msg.lower():
+            hints.insert(0, "OpenAI rejected this by SOURCE IP (ip_not_authorized): the key has an 'Allowed IPs' "
+                            "restriction that does not include this service's egress IP. Add the deployment's "
+                            "outbound IP(s) to the key's allowlist in the OpenAI dashboard, or use a separate key "
+                            "without an IP restriction for the deployment. On Render, a service's static outbound "
+                            "IPs are listed under its Connect tab.")
+        elif "insufficient_permissions" in api_code or "missing scopes" in api_msg.lower() or "model.request" in api_msg.lower():
             hints.insert(0, "This is a permissions problem, NOT a bad key: the key authenticates but its project "
                             "role lacks model/embeddings access (missing scope model.request). It is almost "
                             "certainly a Restricted project key (sk-proj-…). In the OpenAI dashboard, give this key "

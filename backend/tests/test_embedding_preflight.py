@@ -177,17 +177,49 @@ class TestEmbeddingPreflight(unittest.TestCase):
         self.assertIn("invalid, revoked", out["hint"])
         self.assertIn("Incorrect API key provided", out["hint"])
 
-    def test_custom_base_url_override_is_flagged(self):
+    def test_ip_allowlist_401_is_named_with_egress_fix(self):
+        # The real-world cause here: the key is IP-restricted and the deployment's
+        # egress IP isn't allowlisted. OpenAI returns 401 code=ip_not_authorized.
         import os
         os.environ["CORE_MEMORY_EMBEDDINGS_PROVIDER"] = "openai"
-        os.environ["OPENAI_API_KEY"] = "sk-proj-valid-looking-key-1234567890"
-        os.environ["CORE_MEMORY_EMBEDDINGS_BASE_URL"] = "https://proxy.internal/v1"
+        os.environ["OPENAI_API_KEY"] = "sk-proj-valid-but-ip-locked-1234567890"
 
-        def _401(**_):
-            raise urllib.error.HTTPError("u", 401, "Unauthorized", {}, None)
+        def _ip_401(**_):
+            raise _http_error(401, {"error": {
+                "message": "Your IP is not authorized to make this request.",
+                "type": "invalid_request_error",
+                "code": "ip_not_authorized",
+            }})
 
-        out = ep.preflight_embedding_backend(probe=_401)
-        self.assertIn("custom/override endpoint", out["hint"])
+        out = ep.preflight_embedding_backend(probe=_ip_401)
+        self.assertFalse(out["ok"])
+        self.assertTrue(out["fatal"])
+        self.assertEqual("ip_not_authorized", out["api_error"]["code"])
+        self.assertIn("SOURCE IP", out["hint"])
+        self.assertIn("Allowed IPs", out["hint"])
+        self.assertIn("outbound IP", out["hint"])
+
+    def test_non_openai_provider_uses_resolver_base_url_not_openai(self):
+        # Codex P2: an openai-compatible provider with its own default endpoint
+        # must be probed at THAT endpoint, not hard-coded api.openai.com.
+        import os
+        os.environ["CORE_MEMORY_EMBEDDINGS_PROVIDER"] = "openrouter"
+        os.environ["OPENROUTER_API_KEY"] = "sk-or-v1-routerkey-1234567890"
+        target = ep.resolve_embedding_target()
+        self.assertNotIn("openai.com", target["base_url"])
+        self.assertIn("openrouter.ai", target["base_url"])
+
+        seen = {}
+
+        def _probe(*, base_url, model, key, timeout):
+            seen["base_url"] = base_url
+            return {"ok": True, "dim": 8}
+
+        out = ep.preflight_embedding_backend(probe=_probe)
+        self.assertTrue(out["ok"])
+        self.assertIn("openrouter.ai", seen["base_url"])
+        # The sk-or->openai mismatch hint must NOT fire for a legit OpenRouter setup.
+        self.assertNotIn("OpenRouter key", str(out.get("hint") or ""))
 
     def test_report_renders_audit_and_used_marker(self):
         import os
